@@ -15,7 +15,7 @@ Successfully ran the official C2C/Rosetta pretrained fuser pipeline on RunPod.
 
 - MMLU-Redux
 - Evaluation mode: generate
-- Smoke test setting: sample_interval = 100
+- Smoke test setting: sample_interval = 10000
 
 ## Current smoke result
 
