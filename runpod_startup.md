@@ -1,66 +1,153 @@
-# RunPod Startup Notes
+# RunPod Startup Guide
 
-This note records what to do after starting, rebuilding, or migrating a RunPod instance.
+This document explains how to start a RunPod instance, connect it from VS Code, and initialize the C2C environment.
 
-## 1. Open RunPod Web Terminal first
+## 1. Start the RunPod instance
 
-After starting the pod, open:
+Start or resume the RunPod pod from the RunPod dashboard.
+
+Use a pod with `/workspace` data migration enabled, so existing files can be reused after rebuilding:
+
+```text
+/workspace/C2C
+/workspace/EchoInYourWords
+/workspace/.cache
+```
+
+After the pod starts, open:
+
+```text
+RunPod Dashboard → Pods → target pod → Connect
+```
+
+Check the current SSH connection information:
+
+```text
+Host/IP
+Port
+User
+```
+
+The user is usually:
+
+```text
+root
+```
+
+## 2. Update local SSH config
+
+On the local machine, edit the SSH config file.
+
+Windows example:
+
+```text
+C:\Users\<LOCAL_USER>\.ssh\config
+```
+
+Add or update:
+
+```sshconfig
+Host runpod-vscode
+    HostName <RUNPOD_IP>
+    User root
+    Port <RUNPOD_PORT>
+    IdentityFile <PATH_TO_PRIVATE_KEY>
+    IdentitiesOnly yes
+```
+
+Windows example:
+
+```sshconfig
+Host runpod-vscode
+    HostName 195.26.xxx.xxx
+    User root
+    Port 28190
+    IdentityFile C:/Users/<LOCAL_USER>/.ssh/id_ed25519
+    IdentitiesOnly yes
+```
+
+## 3. Restore SSH public key on RunPod
+
+After rebuilding or migrating a pod, SSH key login may not work immediately.
+
+Open the RunPod Web Terminal first:
 
 ```text
 RunPod Dashboard → Pods → target pod → Connect → Web Terminal
 ```
 
-Use the Web Terminal first because SSH key login may not work immediately after rebuilding or migrating the pod.
-
-## 2. Restore SSH public key
-
-Run the following commands in the RunPod Web Terminal:
+Run this in the Web Terminal:
 
 ```bash
 mkdir -p /root/.ssh
 chmod 700 /root/.ssh
 
 cat > /root/.ssh/authorized_keys <<'EOF'
-###your key###
+<YOUR_PUBLIC_SSH_KEY>
 EOF
 
 chmod 600 /root/.ssh/authorized_keys
 ```
 
-Then test SSH from local PowerShell:
+Example public key format:
 
-```powershell
+```text
+ssh-ed25519 AAAA... user@example.com
+```
+
+Then test SSH from the local machine:
+
+```bash
 ssh runpod-vscode
 ```
 
-If the pod IP or port changed, update the local SSH config first:
+If it logs into the pod without asking for a password, SSH is ready.
+
+## 4. Connect from VS Code
+
+Open VS Code locally.
+
+Use:
 
 ```text
-C:\Users\jiaya\.ssh\config
+Remote-SSH: Connect to Host...
 ```
 
-Example:
+Select:
 
-```sshconfig
-Host runpod-vscode
-    HostName <NEW_RUNPOD_IP>
-    User root
-    Port <NEW_RUNPOD_PORT>
-    IdentityFile C:/Users/jiaya/.ssh/id_ed25519
-    IdentitiesOnly yes
+```text
+runpod-vscode
 ```
 
-## 3. Restore Python/C2C environment
+After connecting, open:
 
-After SSH works, run:
+```text
+/workspace
+```
+
+For C2C work:
+
+```text
+/workspace/C2C
+```
+
+For this project repo:
+
+```text
+/workspace/EchoInYourWords
+```
+
+## 5. Initialize the C2C environment
+
+After connecting to the pod, run:
 
 ```bash
 bash /workspace/setup_c2c_env.sh
 ```
 
-This script installs the C2C package, restores missing Python dependencies, checks the Hugging Face checkpoint, and updates C2C config paths.
+This script installs the C2C package, restores missing Python dependencies, checks the Hugging Face checkpoint, and updates local C2C config checkpoint paths.
 
-## 4. Verify C2C still works
+## 6. Verify C2C works
 
 Run:
 
@@ -69,53 +156,27 @@ cd /workspace/C2C
 python test_c2c_inference.py
 ```
 
-Expected output should contain something like:
+Expected output should include:
 
 ```text
 C2C output text: Hello! How can I assist you today?
 ```
 
-If this works, the environment is ready.
+If this works, the C2C environment is ready.
 
-## 5. Useful checks
+## 7. Normal startup flow
 
-Check workspace files:
-
-```bash
-ls -la /workspace
-ls -la /workspace/C2C
-ls -la /workspace/EchoInYourWords
-```
-
-Check C2C checkpoint:
-
-```bash
-ls /workspace/.cache/huggingface/hub/models--nics-efc--C2C_Fuser/snapshots/*/qwen3_0.6b+qwen2.5_0.5b_Fuser/final
-```
-
-Check installed Python packages:
-
-```bash
-python - <<'PY'
-mods = ["torch", "transformers", "datasets", "accelerate", "jsonlines", "huggingface_hub"]
-for m in mods:
-    try:
-        mod = __import__(m)
-        print(m, "OK", getattr(mod, "__version__", ""))
-    except Exception as e:
-        print(m, "MISSING", e)
-PY
-```
-
-## 6. Normal startup order
-
-Use this order after every RunPod rebuild:
+Use this order after starting or rebuilding RunPod:
 
 ```text
-1. Open Web Terminal
-2. Restore SSH public key
-3. SSH from local machine
-4. Run /workspace/setup_c2c_env.sh
-5. Run python test_c2c_inference.py
-6. Continue experiments
+1. Start RunPod pod
+2. Check current IP and port
+3. Update local SSH config
+4. Open RunPod Web Terminal
+5. Restore /root/.ssh/authorized_keys
+6. SSH from local machine
+7. Connect with VS Code Remote-SSH
+8. Run /workspace/setup_c2c_env.sh
+9. Verify with python test_c2c_inference.py
+10. Continue experiments
 ```
