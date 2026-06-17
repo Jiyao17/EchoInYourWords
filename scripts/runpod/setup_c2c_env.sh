@@ -1,16 +1,6 @@
 #!/usr/bin/env bash
 set -e
 
-echo "=== 0. Restore SSH public key ==="
-mkdir -p /root/.ssh
-chmod 700 /root/.ssh
-
-cat > /root/.ssh/authorized_keys <<'EOF'
-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHwo1IoYQlpV5BzjTvjycJ/tCxbbn57lfoX98yndwXEp Yaoyi.Jia@colorado.edu
-EOF
-
-chmod 600 /root/.ssh/authorized_keys
-
 echo "=== 1. Check workspace ==="
 ls -la /workspace
 
