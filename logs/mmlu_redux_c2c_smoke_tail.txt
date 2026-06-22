@@ -1,200 +1,0 @@
-The correct answer is<|im_end|>
-<|im_start|>assistant
-<think>
-
-</think>
-
-
-
-[Generated output]:
-The correct answer is A. Online consumer goods purchases.
-================ End Example IO ================
-
-Evaluating public_relations (generate): 100%|██████████| 1/1 [00:00<00:00,  3.32it/s]Evaluating public_relations (generate): 100%|██████████| 1/1 [00:00<00:00,  3.31it/s]
-public_relations accuracy: 0.00% (evaluated on 1 samples, skipped 0)
-Generating test split:   0%|          | 0/100 [00:00<?, ? examples/s]Generating test split: 100%|██████████| 100/100 [00:00<00:00, 4115.98 examples/s]
-Evaluating security_studies (generate):   0%|          | 0/1 [00:00<?, ?it/s]
-================ Example IO (security_studies) ================
-[Input with chat template]:
-<|im_start|>user
-Accurately answer the following question:
-
-Given current patterns of industrial development, what are the future prospects for energy security?
-
-Choices:
-A. Whilst energy consumption is correlated to levels of industrialisation, developed states of the North continue to increase their demands for energy. This is balanced by a lesser demand from states in the South; due to their lack of industrialisation their demands on energy are forecast to remain low.
-B. Energy demand in the industrialised states has peaked in recent years and data indicates that consumption levels in the North have become constant and are not likely to increase.
-C. Whilst forecasts predict that energy consumption in the industrialised states of the North will continue to increase, the major increase in demand will come from the developing states of the South, posing major challenges to global energy security.
-D. Although demand from developing states is set to increase the global consumption of dwindling energy resources, technological advancements in alternative energy sources, coupled with comprehensive understanding of current resource levels and access, will secure energy supply in the foreseeable future.
-
-
-Instructions:
-- Carefully read the question and all options.
-- Select the single most correct answer.
-- Respond ONLY in the following format: "The correct answer is A/B/C/D".
-- Do not include any explanations, additional text, or punctuation besides the answer.
-
-The correct answer is<|im_end|>
-<|im_start|>assistant
-<think>
-
-</think>
-
-
-
-[Generated output]:
-The correct answer is D.
-================ End Example IO ================
-
-Evaluating security_studies (generate): 100%|██████████| 1/1 [00:00<00:00,  4.61it/s]Evaluating security_studies (generate): 100%|██████████| 1/1 [00:00<00:00,  4.61it/s]
-security_studies accuracy: 0.00% (evaluated on 1 samples, skipped 0)
-Generating test split:   0%|          | 0/100 [00:00<?, ? examples/s]Generating test split: 100%|██████████| 100/100 [00:00<00:00, 11437.97 examples/s]
-Evaluating sociology (generate):   0%|          | 0/1 [00:00<?, ?it/s]
-================ Example IO (sociology) ================
-[Input with chat template]:
-<|im_start|>user
-Accurately answer the following question:
-
-Patterns of drug use in Britain reveal that:
-
-Choices:
-A. it has increased and is no longer confined to a hedonistic youth subculture
-B. the most commonly used recreational drug is Ecstasy
-C. teenage girls are more likely to experiment with hard drugs than teenage boys
-D. despite a series of moral panics, the use of illegal drugs is very rare
-
-
-Instructions:
-- Carefully read the question and all options.
-- Select the single most correct answer.
-- Respond ONLY in the following format: "The correct answer is A/B/C/D".
-- Do not include any explanations, additional text, or punctuation besides the answer.
-
-The correct answer is<|im_end|>
-<|im_start|>assistant
-<think>
-
-</think>
-
-
-
-[Generated output]:
-D. despite a series of moral panics, the use of illegal drugs is very rare
-================ End Example IO ================
-
-Evaluating sociology (generate): 100%|██████████| 1/1 [00:00<00:00,  2.36it/s]Evaluating sociology (generate): 100%|██████████| 1/1 [00:00<00:00,  2.36it/s]
-sociology accuracy: 0.00% (evaluated on 1 samples, skipped 0)
-Generating test split:   0%|          | 0/100 [00:00<?, ? examples/s]Generating test split: 100%|██████████| 100/100 [00:00<00:00, 4745.87 examples/s]
-Evaluating us_foreign_policy (generate):   0%|          | 0/1 [00:00<?, ?it/s]
-================ Example IO (us_foreign_policy) ================
-[Input with chat template]:
-<|im_start|>user
-Accurately answer the following question:
-
-How many states in the international system are likely to have nuclear weapons right now?
-
-Choices:
-A. Fewer than 7
-B. Between 8 and 15
-C. Between 16 and 25
-D. More than 25
-
-
-Instructions:
-- Carefully read the question and all options.
-- Select the single most correct answer.
-- Respond ONLY in the following format: "The correct answer is A/B/C/D".
-- Do not include any explanations, additional text, or punctuation besides the answer.
-
-The correct answer is<|im_end|>
-<|im_start|>assistant
-<think>
-
-</think>
-
-
-
-[Generated output]:
-The correct answer is B. Between 8 and 15.
-================ End Example IO ================
-
-Evaluating us_foreign_policy (generate): 100%|██████████| 1/1 [00:00<00:00,  2.86it/s]Evaluating us_foreign_policy (generate): 100%|██████████| 1/1 [00:00<00:00,  2.86it/s]
-us_foreign_policy accuracy: 100.00% (evaluated on 1 samples, skipped 0)
-Generating test split:   0%|          | 0/100 [00:00<?, ? examples/s]Generating test split: 100%|██████████| 100/100 [00:00<00:00, 14960.96 examples/s]
-Evaluating virology (generate):   0%|          | 0/1 [00:00<?, ?it/s]
-================ Example IO (virology) ================
-[Input with chat template]:
-<|im_start|>user
-Accurately answer the following question:
-
-The characteristic of injecting drug users in Asia is/are:
-
-Choices:
-A. Strong family support
-B. Low failure rate for rehabilitation centers
-C. Remaining a member of the community
-D. Both a and c
-
-
-Instructions:
-- Carefully read the question and all options.
-- Select the single most correct answer.
-- Respond ONLY in the following format: "The correct answer is A/B/C/D".
-- Do not include any explanations, additional text, or punctuation besides the answer.
-
-The correct answer is<|im_end|>
-<|im_start|>assistant
-<think>
-
-</think>
-
-
-
-[Generated output]:
-D. Both a and c
-================ End Example IO ================
-
-Evaluating virology (generate): 100%|██████████| 1/1 [00:00<00:00,  4.69it/s]Evaluating virology (generate): 100%|██████████| 1/1 [00:00<00:00,  4.69it/s]
-virology accuracy: 0.00% (evaluated on 1 samples, skipped 0)
-Generating test split:   0%|          | 0/100 [00:00<?, ? examples/s]Generating test split: 100%|██████████| 100/100 [00:00<00:00, 13793.42 examples/s]
-Evaluating world_religions (generate):   0%|          | 0/1 [00:00<?, ?it/s]
-================ Example IO (world_religions) ================
-[Input with chat template]:
-<|im_start|>user
-Accurately answer the following question:
-
-When was the current Dalai Lama born?
-
-Choices:
-A. 1935
-B. 2000
-C. 1965
-D. 1975
-
-
-Instructions:
-- Carefully read the question and all options.
-- Select the single most correct answer.
-- Respond ONLY in the following format: "The correct answer is A/B/C/D".
-- Do not include any explanations, additional text, or punctuation besides the answer.
-
-The correct answer is<|im_end|>
-<|im_start|>assistant
-<think>
-
-</think>
-
-
-
-[Generated output]:
-The correct answer is A.
-================ End Example IO ================
-
-Evaluating world_religions (generate): 100%|██████████| 1/1 [00:00<00:00,  4.77it/s]Evaluating world_religions (generate): 100%|██████████| 1/1 [00:00<00:00,  4.76it/s]
-world_religions accuracy: 100.00% (evaluated on 1 samples, skipped 0)
-Summary saved to local/reproduction_results/mmlu_redux_c2c_smoke/Rosetta_mmlu-redux_generate_20260616_041947_summary.json
-Detailed length statistics saved to local/reproduction_results/mmlu_redux_c2c_smoke/Rosetta_mmlu-redux_generate_20260616_041947_length.json
-CoT outputs saved to local/reproduction_results/mmlu_redux_c2c_smoke/Rosetta_mmlu-redux_generate_20260616_041947_cot.csv
-
-Evaluation complete!
-Overall accuracy: 36.36%
