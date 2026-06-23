@@ -216,3 +216,20 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Project-specific
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Secrets — never commit
+APIKey.txt
+*.key
+
+# Claude Code local settings
+.claude/
+
+# Data: HF cache.
+/data/*
+
+# Run outputs.
+/results/*
