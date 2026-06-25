@@ -1,33 +1,41 @@
 # Project Structure
 
-This project studies **communication between language models** — how one model
-(the *Sharer*) can pass information to another (the *Receiver*) so the Receiver
-answers better than it could alone. It compares several communication methods
-(text-to-text, cache-to-cache, latent cache flow, and a new receiver-anchored
-method) under a single, standardized experiment/output contract.
+This project studies **flexible communication between language models** for
+multi-agent collaboration — how one model (the *Sharer*) can pass information to
+another (the *Receiver*) so the Receiver answers better than it could alone, when
+the two agents hold **different context** and may differ in **model size /
+architecture / tokenizer**. It compares three methods under a single,
+standardized experiment/output contract:
 
-The first implemented method is **Text-to-Text (T2T)**: the Sharer reads its
-information and writes a short natural-language message; the Receiver reads its
-own information plus that message and produces the answer. T2T is the easiest
-baseline to debug and establishes the end-to-end pipeline (load models → load
-task → run Sharer → run Receiver → score → save) that later methods reuse.
+- **T2T (text-to-text)** — natural-language message baseline (*implemented*).
+- **LCF-X (cross-context Latent Cache Flow)** — position-free latent cache
+  communication; the existing-paper precedent for different-context agents.
+- **New method (receiver-anchored, `methods/eiyw/`)** — our contribution.
 
-## Two communication settings
+**Scope decision:** shared-context, token-position-aligned cache-transfer methods
+(**C2C** and the original shared-context **LCF**) are **out of scope**. They
+assume both agents encode the *same* prompt and fuse at aligned positions, which
+is exactly the rigidity (same context, alignable tokenization) we want to avoid.
+See [prompt/BASELINES_SUMMARY.md](prompt/BASELINES_SUMMARY.md) for the rationale.
 
-- **Shared-context**: Sharer and Receiver see the *same* information. The
-  message acts as background / distilled reasoning. (Used by C2C and
-  shared-context LCF.)
-- **Cross-context** (more general): Sharer and Receiver see *different* evidence.
-  The Receiver genuinely needs the Sharer's information to answer. This is the
-  LCF-X agent-communication setting, and the current focus.
+The first implemented method is **T2T**: the Sharer reads its information and
+writes a short natural-language message; the Receiver reads its own information
+plus that message and produces the answer. T2T establishes the end-to-end
+pipeline (load models → load task → run Sharer → run Receiver → score → save)
+that LCF-X and the new method reuse.
 
-The first dataset is **partitioned HotpotQA-bridge** (the LCF-X cross-context
-benchmark): each bridge question has 10 paragraphs (2 supporting + 8
-distractors), split into two disjoint 5-paragraph partitions, each holding one
-supporting paragraph and four distractors. The Sharer gets one partition, the
-Receiver the other — so neither side can answer alone. See
-[prompt/BASELINES_SUMMARY.md](prompt/BASELINES_SUMMARY.md) for the full
-paper-to-setting mapping.
+## Communication setting: cross-context
+
+All three methods target the **cross-context** setting — Sharer and Receiver see
+*different* evidence, so the Receiver genuinely needs the Sharer's information to
+answer. This is the realistic multi-agent collaboration case and the LCF-X
+benchmark setting.
+
+The first dataset is **partitioned HotpotQA-bridge**: each bridge question has 10
+paragraphs (2 supporting + 8 distractors), split into two disjoint 5-paragraph
+partitions, each holding one supporting paragraph and four distractors. The
+Sharer gets one partition, the Receiver the other — so neither side can answer
+alone.
 
 ## Directory layout
 
@@ -38,10 +46,13 @@ EchoInYourWords/
 ├── prompt/                   # PLANNING DOCS (design notes, not code)
 │   ├── PROJECT_PLAN.md
 │   ├── T2T_IMPLEMENTATION_PLAN.md
-│   ├── BASELINES_SUMMARY.md      # how each paper handles context / datasets
+│   ├── LCF_X_IMPLEMENTATION_PLAN.md # cross-context latent cache communication
+│   ├── BASELINES_SUMMARY.md      # context settings + why C2C/LCF are out of scope
 │   └── IMPLEMENTATION_INSIGHTS.md# framework / repo-shape decisions
 ├── methods/                  # METHOD IMPLEMENTATIONS (one package per method)
-│   └── t2t/                      # text-to-text baseline (implemented)
+│   ├── t2t/                      # text-to-text baseline (implemented)
+│   ├── lcfx/                     # cross-context Latent Cache Flow (planned)
+│   └── eiyw/                     # new receiver-anchored method (planned)
 ├── scripts/                  # RUNNABLE ENTRYPOINTS + cache config
 │   ├── README.md                 # how to run each test/experiment (commands)
 │   ├── _hf_cache.py              # points HF_HOME at data/hf_cache
@@ -113,8 +124,8 @@ and reused for fair comparison:
 }
 ```
 
-`choices` is empty for free-form tasks (HotpotQA). In shared-context tasks the
-two contexts may be identical; in cross-context they differ.
+`choices` is empty for free-form tasks (HotpotQA). In the cross-context setting
+the Sharer and Receiver contexts differ (disjoint evidence partitions).
 
 ### Output contract — one directory per run
 
@@ -124,12 +135,12 @@ Every run writes four files into its `--output-dir` (under `results/`):
 |------|----------|
 | `predictions.jsonl` | one record per example (prompts, message, output, prediction, answer, `is_correct`, `scores`, `latency`, `token_counts`, `metadata`). |
 | `metrics.json` | aggregate accuracy, free-form `scores` (EM/F1), and `token_counts` totals/averages. |
-| `latency.json` | per-stage and total latency totals/averages. |
+| `latency.json` | per-stage and total latency totals/averages, using a uniform cross-method contract: `sharer_ms`, `fuser_ms` (translation/fusion — `0.0` for text-to-text, `>0` for cache/latent methods), `receiver_ms`, `total_ms`. |
 | `run_metadata.json` | method, models, dataset, budgets, scoring mode, timestamp. |
 
 Comparison/analysis depends only on these files, never on internal method
-classes — so T2T, the receiver baselines, and future methods (C2C, LCF, LCF-X,
-receiver-anchored) are compared apples-to-apples.
+classes — so T2T, the receiver baselines, and the latent methods (LCF-X and the
+new receiver-anchored method) are compared apples-to-apples.
 
 ## Environment
 

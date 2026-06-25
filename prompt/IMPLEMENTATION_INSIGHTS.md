@@ -2,17 +2,17 @@
 
 ## Main Decision
 
-Do not force C2C, LCF, LCF-X, text-to-text, and the new receiver-anchored method into one deep shared implementation framework.
+Do not force text-to-text, LCF-X, and the new receiver-anchored method into one deep shared implementation framework.
 
 Instead, keep method implementations mostly independent and compare them through a thin shared experiment layer.
 
 This is likely the cleanest path because each method has different internal assumptions:
 
-- C2C: source-token-aligned KV-cache projection.
-- LCF: shared-context cache compression through a latent bottleneck.
-- LCF-X: cross-context communication through pooled, position-free Sharer cache summaries.
 - Text-to-text: natural-language message generation and re-ingestion.
+- LCF-X: cross-context communication through pooled, position-free Sharer cache summaries.
 - New method: Sharer context translated into vectors or pseudo-tokens attached to Receiver-side input tokens or latent slots.
+
+(Shared-context, token-position-aligned methods — C2C and the original LCF — are out of scope; see [BASELINES_SUMMARY.md](BASELINES_SUMMARY.md).)
 
 Trying to hide all of these behind one model wrapper too early would create brittle abstractions and make faithful baseline reproduction harder.
 
@@ -54,11 +54,9 @@ Use a method-module layout with a thin shared experiment layer:
 
 ```text
 methods/
-  text_to_text/
-  c2c/
-  lcf/
+  t2t/
   lcfx/
-  receiver_anchored/
+  eiyw/                # new receiver-anchored method
 
 data/
   tasks/
@@ -102,7 +100,10 @@ Outputs:
 
 - `predictions.jsonl`: one record per example;
 - `metrics.json`: aggregate scores;
-- `latency.json`: timing measurements;
+- `latency.json`: timing measurements, using a uniform per-stage contract so
+  methods stay comparable — `sharer_ms`, `fuser_ms` (translation/fusion stage,
+  `0.0` for methods like text-to-text that do not fuse, `>0` for cache/latent
+  methods), `receiver_ms`, and `total_ms`;
 - `run_metadata.json`: method, models, dataset, checkpoint, seed, versions, and command metadata.
 
 The comparison scripts should depend on these outputs, not on internal method classes.
@@ -112,41 +113,39 @@ The comparison scripts should depend on these outputs, not on internal method cl
 Example workflow:
 
 ```bash
-python scripts/run_method.py --method c2c --task shared_context --config experiments/configs/c2c.yaml
-python scripts/run_method.py --method lcf --task shared_context --config experiments/configs/lcf.yaml
-python scripts/run_method.py --method receiver_anchored --task shared_context --config experiments/configs/ours.yaml
+python scripts/run_text_to_text.py --task cross_context --config experiments/configs/t2t.yaml
+python scripts/run_lcfx.py        --task cross_context --config experiments/configs/lcfx.yaml
+python scripts/run_eiyw.py        --task cross_context --config experiments/configs/ours.yaml
 
 python scripts/compare_results.py \
-  --runs results/c2c_run results/lcf_run results/ours_run
+  --runs results/t2t_run results/lcfx_run results/ours_run
 ```
 
 The important point is not the exact command syntax. The important point is that each method can run differently internally, while comparison happens over standardized result files.
 
-## Role Of C2C/Rosetta Code
+## Why Not A C2C-Style Framework
 
-The C2C/Rosetta codebase is useful as:
+C2C-style codebases are naturally built around **aligned input sections** (same
+prompt, source-token-aligned projection). We deliberately avoid adopting that as
+the project framework:
 
-- a reference implementation for C2C;
-- a possible source of dataset adapters and evaluation patterns;
-- a practical starting point for shared-context cache-transfer baselines.
+- LCF-X is position-free and cross-context — it does not align Sharer/Receiver tokens.
+- The new method's Receiver-side anchoring should not be forced into a C2C-style
+  source-token-aligned projector interface.
 
-However, it should not become the required framework for all methods.
-
-Reasons:
-
-- C2C/Rosetta is naturally built around aligned input sections.
-- LCF-X and the new method may need different input structures.
-- The new method's Receiver-side anchoring should not be forced into a C2C-style source-token-aligned projector interface.
-
-Use C2C/Rosetta where it helps reproduce C2C faithfully. Wrap its outputs into the shared result schema for comparison.
+C2C and shared-context LCF are out of scope as implementations (see
+[BASELINES_SUMMARY.md](BASELINES_SUMMARY.md)); we keep only their conceptual
+contrast as motivation for a more flexible design.
 
 ## Role Of OpenHermes
 
-OpenHermes is a training dataset, not the framework.
+OpenHermes is a candidate training dataset, not the framework.
 
-It is useful for training shared-context adapter/fuser baselines because both C2C and LCF use general instruction/chat data in that style.
+General instruction/chat data in that style is useful for training the
+fuser/adapter modules (LCF-X and the new method) with frozen base models.
 
-It should be treated as one dataset option inside the training pipeline, not as the organizing principle of the whole project.
+It should be treated as one dataset option inside the training pipeline, not as
+the organizing principle of the whole project.
 
 ## Design Principle
 
@@ -157,5 +156,5 @@ This keeps the project:
 - faithful to each baseline;
 - easier to debug;
 - flexible for the new method;
-- easier to compare across shared-context and cross-context settings;
+- easier to compare across the cross-context methods;
 - less likely to accumulate premature abstraction debt.

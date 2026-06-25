@@ -87,7 +87,8 @@ In shared-context mode:
 
 - Sharer and Receiver receive the same task information.
 - The Sharer message acts as background, explanation, hint, or distilled reasoning.
-- This mode is useful for comparing text communication against shared-context latent/cache methods.
+- The schema/runner support this mode generically, but the project's evaluation
+  focus is the cross-context setting (see PROJECT_PLAN.md / BASELINES_SUMMARY.md).
 
 Basic flow:
 
@@ -188,6 +189,7 @@ Each `predictions.jsonl` row should include:
   "is_correct": true,
   "latency": {
     "sharer_ms": 0.0,
+    "fuser_ms": 0.0,
     "receiver_ms": 0.0,
     "total_ms": 0.0
   },
@@ -202,6 +204,12 @@ Each `predictions.jsonl` row should include:
 ```
 
 The exact fields can evolve, but the first version should preserve enough information to compare methods and debug examples.
+
+The `latency` block uses a uniform cross-method contract — `sharer_ms`,
+`fuser_ms`, `receiver_ms`, `total_ms`. Text-to-text has no translation/fusion
+stage, so `fuser_ms` is always `0.0`; cache/latent methods (LCF, LCF-X, the
+receiver-anchored method) report the real time spent translating/fusing before
+the Receiver answers, so end-to-end latency stays comparable across methods.
 
 ## Prompt Templates
 

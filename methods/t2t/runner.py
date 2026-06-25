@@ -150,6 +150,9 @@ def run_t2t_example(
         scores=scores,
         latency={
             "sharer_ms": sharer_ms,
+            # No translation/fusion stage in text-to-text; kept for a uniform
+            # cross-method latency contract (cache/latent methods report >0).
+            "fuser_ms": 0.0,
             "receiver_ms": receiver_ms,
             "total_ms": sharer_ms + receiver_ms,
         },
@@ -222,6 +225,7 @@ def run_receiver_only_example(
         scores=scores,
         latency={
             "sharer_ms": 0.0,
+            "fuser_ms": 0.0,
             "receiver_ms": receiver_ms,
             "total_ms": receiver_ms,
         },

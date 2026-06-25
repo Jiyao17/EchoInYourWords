@@ -5,36 +5,39 @@
 - Goal: build a research codebase for agent-to-agent communication without text, where a Sharer model's internal context is translated into Receiver-native latent/cache representations.
 - Core idea: let the Receiver use information from the Sharer without requiring the Sharer to generate natural-language messages.
 - Main novelty: translate the Sharer's context into vectors/tokens attached to the Receiver's own input, rather than transferring source-token-aligned cache vectors.
-- Scope: compare against text-based communication and existing latent/cache communication baselines in both shared-context and cross-context settings.
+- Scope: compare against text-based communication (T2T) and the existing cross-context latent/cache baseline (LCF-X) in the cross-context setting, with flexibility across different context and different model size/architecture.
 
-## Research Tracks
+## Research Focus: cross-context, flexible communication
 
-- Shared-context communication:
-  - Sharer and Receiver process the same prompt or question.
-  - This track tests whether latent/cache transfer improves the Receiver's answer quality, efficiency, or robustness when both agents have access to the same information.
-  - Relevant baselines include text-to-text communication, C2C-style cache transfer, and LCF-style compressed latent/cache transfer.
-- Cross-context communication:
-  - Sharer and Receiver process different context, evidence, memory, or subtask information while working toward the same final objective.
-  - This track is closer to realistic multi-agent collaboration, where one agent has information the other does not.
-  - Relevant baselines include text-to-text communication and LCF-X-style position-free latent/cache communication.
+The project targets **cross-context** communication only:
 
-## Baseline Families
+- Sharer and Receiver process different context, evidence, memory, or subtask
+  information while working toward the same final objective.
+- This is the realistic multi-agent collaboration case, where one agent has
+  information the other does not.
+- The methods must be **flexible**: tolerant of **different context** and of
+  **different model size / architecture / tokenizer** between the two agents.
 
-- Text-to-text:
-  - Sharer reads its available context and sends a concise natural-language message to the Receiver.
-  - This is the main human-readable communication baseline.
-- C2C-style cache transfer:
-  - Sharer and Receiver process aligned or corresponding inputs.
-  - The Sharer's KV cache is projected into the Receiver's cache space.
-  - This is a shared-context cache-transfer baseline.
-- LCF-style latent/cache transfer:
-  - Sharer cache information is compressed before transfer.
-  - This is a shared-context compressed-cache baseline.
-- LCF-X-style cross-context transfer:
-  - Sharer information is pooled or summarized into a position-free latent representation.
-  - This is a cross-context latent communication baseline.
+**Out of scope:** shared-context, token-position-aligned cache transfer (C2C and
+the original shared-context LCF). They require both agents to encode the same
+prompt and fuse at aligned positions, which is precisely the rigidity this
+project avoids. See [BASELINES_SUMMARY.md](BASELINES_SUMMARY.md).
+
+## Methods (three only)
+
+- Text-to-text (baseline, implemented):
+  - Sharer reads its context and sends a concise natural-language message.
+  - The main human-readable communication baseline.
+- LCF-X-style cross-context latent transfer (baseline):
+  - Sharer cache is pooled/summarized into a fixed-size, position-free
+    representation the Receiver conditions on — no token-position alignment.
+  - The existing-paper precedent for different-context communication.
+- New receiver-anchored method (our contribution):
+  - Sharer context translated into vectors / pseudo-tokens anchored to the
+    Receiver's own input (see New Method).
 - Diagnostic references:
-  - Receiver-only, Sharer-only, full-context, and oracle-style references can be used where helpful, but they are not the central contribution.
+  - Receiver-only (question-only / half-context / full-context) references
+    bracket the methods, but are not the central contribution.
 
 ## New Method
 
@@ -51,9 +54,8 @@
   - do not commit this plan to a specific injection mechanism yet;
   - later method notes can decide whether the attached representations are implemented as cache residuals, soft tokens, adapter states, or another Receiver-native interface.
 - Keep the method flexible enough to support:
-  - shared-context communication;
-  - cross-context communication;
-  - different Sharer/Receiver model pairs;
+  - cross-context communication (different evidence per agent);
+  - different Sharer/Receiver model pairs (size / architecture / tokenizer);
   - future multi-sharer extensions.
 
 ## Implementation Areas
@@ -62,7 +64,7 @@
   - datasets, models, checkpoints, and generated results should have reproducible local storage rules;
   - downloads should use existence checks, pinned revisions where possible, and offline reuse.
 - Dataset processing:
-  - shared-context and cross-context datasets should be represented by clean task abstractions;
+  - cross-context datasets should be represented by clean task abstractions;
   - dataset-specific formatting and answer scoring should live behind stable interfaces.
 - Model-pair support:
   - model-pair metadata should capture tokenizer, architecture, cache shape, and compatibility information;
@@ -71,7 +73,7 @@
   - train only communication/adaptation modules unless an experiment explicitly requires otherwise;
   - keep frozen-model training as the default assumption.
 - Inference:
-  - support Receiver-only, text-to-text, existing latent/cache baselines, and the new method through a common evaluation interface.
+  - support Receiver-only, text-to-text, the LCF-X cross-context baseline, and the new method through a common evaluation interface.
 - Evaluation:
   - report quality, latency, trainable parameters, adapter size, and per-example outputs;
   - keep paired per-question results so methods can be compared directly.
@@ -86,19 +88,17 @@
   - task-specific answer scoring.
 - Smoke tests:
   - tiny-subset training and evaluation before full experiments;
-  - at least one shared-context and one cross-context end-to-end run.
+  - at least one cross-context end-to-end run.
 - Reproduction checks:
   - text-to-text baseline runs through the common evaluator;
-  - C2C/LCF-style shared-context baselines run where applicable;
-  - LCF-X-style cross-context baseline runs where applicable.
+  - LCF-X cross-context baseline runs through the common evaluator.
 - Acceptance checks:
-  - the new method can be compared fairly against the relevant baseline families;
-  - results are reported separately for shared-context and cross-context settings;
+  - the new method can be compared fairly against T2T and LCF-X;
   - quality and latency are both included in the final comparison.
 
 ## Future Planning Documents
 
-- Baseline details: exact C2C, LCF, LCF-X, and text-to-text configurations.
+- Baseline details: exact T2T and LCF-X configurations.
 - Dataset details: selected datasets, preprocessing, splits, prompts, and scoring.
 - Model-pair details: chosen Sharer/Receiver pairs and compatibility metadata.
 - Method details: architecture, injection mechanism, training objective, and ablations.

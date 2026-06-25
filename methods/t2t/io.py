@@ -51,6 +51,7 @@ def summarize_latency(results: Sequence[T2TResult]) -> dict[str, Any]:
 
     totals = {
         "sharer_ms": 0.0,
+        "fuser_ms": 0.0,
         "receiver_ms": 0.0,
         "total_ms": 0.0,
     }
