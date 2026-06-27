@@ -67,7 +67,12 @@ def main() -> None:
     )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--fuser-checkpoint", type=Path, default=None)
-    parser.add_argument("--bottleneck-dim", type=int, default=64)
+    parser.add_argument(
+        "--bottleneck-dim",
+        type=int,
+        default=128,
+        help="Latent dim; must match the trained --fuser-checkpoint (paper: 128)",
+    )
     parser.add_argument("--num-spans", type=int, default=1, help="Sharer pooling spans")
     parser.add_argument(
         "--no-fusion", action="store_true", help="Run the Receiver alone (no fusion)"
@@ -125,6 +130,7 @@ def main() -> None:
             print(f"Loaded fuser checkpoint: {args.fuser_checkpoint}")
         else:
             print("No checkpoint: using ZERO-INIT fuser (== receiver-only baseline)")
+        fuser.eval()  # deterministic gating (plain sigmoid, no Gumbel noise)
         print(f"Fuser trainable params: {fuser.trainable_parameters()}")
 
     results = []

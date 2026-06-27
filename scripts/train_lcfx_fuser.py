@@ -37,21 +37,34 @@ def main() -> None:
     parser.add_argument("--train-data", type=Path, required=True, help="Instruction JSONL")
     parser.add_argument("--sharer-model", default="Qwen/Qwen2.5-0.5B-Instruct")
     parser.add_argument("--receiver-model", default=None)
-    parser.add_argument("--bottleneck-dim", type=int, default=64)
-    parser.add_argument("--num-spans", type=int, default=1)
+    # Defaults follow the LCF-X paper. On a smaller GPU, lower --batch-size and
+    # raise --grad-accum to keep the effective batch (B*A) at 256 (see README).
+    parser.add_argument("--bottleneck-dim", type=int, default=128, help="Latent dim (paper: 128)")
+    parser.add_argument("--num-spans", type=int, default=4, help="Sharer pooling spans")
     parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--max-steps", type=int, default=None)
+    parser.add_argument("--batch-size", type=int, default=16, help="Per-step micro-batch (paper: 16)")
+    parser.add_argument("--grad-accum", type=int, default=16, help="Micro-batches per optimizer step (paper: 16 -> eff. batch 256)")
+    parser.add_argument("--warmup", type=int, default=200, help="Linear LR warmup steps (paper: 200)")
+    parser.add_argument("--max-steps", type=int, default=None, help="Cap on optimizer steps")
+    parser.add_argument(
+        "--max-train-examples",
+        type=int,
+        default=None,
+        help="Use only the first N training examples (partial run)",
+    )
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--log-every", type=int, default=10)
     parser.add_argument("--eval-every", type=int, default=None)
+    parser.add_argument("--eval-max-examples", type=int, default=None)
+    parser.add_argument("--save-every", type=int, default=50)
     parser.add_argument(
         "--eval-data", type=Path, default=None, help="Held-out JSONL (else use --val-frac)"
     )
     parser.add_argument(
         "--val-frac",
         type=float,
-        default=0.1,
-        help="Fraction of --train-data held out for eval when --eval-data is unset",
+        default=0.028,
+        help="Dev holdout fraction of --train-data when --eval-data is unset (paper: 2.8%%)",
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
@@ -86,6 +99,8 @@ def main() -> None:
         eval_rows, train_rows = rows[:n_val], rows[n_val:]
     else:
         train_rows, eval_rows = rows, None
+    if args.max_train_examples is not None:
+        train_rows = train_rows[: args.max_train_examples]
     print(
         f"Loaded {len(train_rows)} train"
         + (f" / {len(eval_rows)} eval" if eval_rows else " (no eval split)")
@@ -109,9 +124,14 @@ def main() -> None:
         num_spans=args.num_spans,
         lr=args.lr,
         epochs=args.epochs,
+        batch_size=args.batch_size,
+        grad_accum=args.grad_accum,
+        warmup_steps=args.warmup,
         max_steps=args.max_steps,
         log_every=args.log_every,
         eval_every=args.eval_every,
+        eval_max_examples=args.eval_max_examples,
+        save_every=args.save_every,
         seed=args.seed,
         checkpoint_path=str(args.checkpoint_out),
     )

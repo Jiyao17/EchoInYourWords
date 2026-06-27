@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .cache import add_residual_inplace, pool_summary
+from .cache import add_residual_inplace, extract_kv
 
 
 @dataclass(frozen=True)
@@ -93,25 +93,32 @@ class LCFXPair:
 
     def _encode_chat(self, tok: Any, text: str) -> Any:
         if getattr(tok, "chat_template", None):
-            enc = tok.apply_chat_template(
-                [{"role": "user", "content": text}],
+            messages = [{"role": "user", "content": text}]
+            kwargs = dict(
                 tokenize=True,
                 add_generation_prompt=True,
                 return_tensors="pt",
                 return_dict=True,
             )
+            # Disable "thinking" so the Receiver emits a short answer directly.
+            # Qwen3 defaults to thinking-on, which fills the token budget with
+            # <think> traces and never reaches the answer; non-thinking
+            # tokenizers (e.g. Qwen2.5) reject the kwarg, so fall back.
+            try:
+                enc = tok.apply_chat_template(messages, enable_thinking=False, **kwargs)
+            except TypeError:
+                enc = tok.apply_chat_template(messages, **kwargs)
             return enc["input_ids"].to(self.device)
         return self._encode_plain(tok, text)
 
     # -- sharer side --------------------------------------------------------
-    def sharer_summary(
-        self, text: str, num_spans: int = 1
-    ) -> tuple[list[tuple[Any, Any]], int]:
-        """Encode Sharer text and span-pool its cache into resampler tokens.
+    def sharer_summary(self, text: str) -> tuple[list[tuple[Any, Any]], int]:
+        """Encode Sharer text and return its raw per-layer KV cache.
 
         Returns ``(summary, input_tokens)`` where ``summary`` is per layer
-        ``(K, V)`` of shape ``[B, H_s, P, D_s]`` (the fuser's attention resampler
-        turns these into a Receiver-shaped residual).
+        ``(K, V)`` of shape ``[B, H_s, N_S, D_s]``. The fuser's 2-stage
+        learned-attention pooling (``LCFXFuser.align``) turns these into a
+        Receiver-shaped residual.
         """
 
         import torch
@@ -119,7 +126,7 @@ class LCFXPair:
         ids = self._encode_plain(self.sharer_tok, text)
         with torch.no_grad():
             out = self.sharer(input_ids=ids, use_cache=True)
-        return pool_summary(out.past_key_values, num_spans=num_spans), int(ids.shape[1])
+        return extract_kv(out.past_key_values), int(ids.shape[1])
 
     # -- receiver side ------------------------------------------------------
     def decode_receiver(

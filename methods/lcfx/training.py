@@ -54,10 +54,8 @@ def example_loss(
     if not example.answer:
         return None
 
-    summary, _ = pair.sharer_summary(
-        build_sharer_encode_text(example), num_spans=num_spans
-    )
-    aligned = fuser.align(summary)
+    summary, _ = pair.sharer_summary(build_sharer_encode_text(example))
+    aligned = fuser.align(summary, num_spans=num_spans)
 
     prompt_ids = pair._encode_chat(pair.receiver_tok, build_receiver_prompt(example))
     answer_ids = pair.receiver_tok(
@@ -84,29 +82,150 @@ def example_loss(
     )
 
 
+def _pad(seqs: list, pad_id: int, side: str) -> tuple:
+    """Pad a list of 1-D token tensors to a batch; returns (ids, attention_mask)."""
+
+    import torch
+
+    length = max(int(s.numel()) for s in seqs)
+    device = seqs[0].device
+    ids = torch.full((len(seqs), length), pad_id, dtype=torch.long, device=device)
+    mask = torch.zeros((len(seqs), length), dtype=torch.long, device=device)
+    for i, seq in enumerate(seqs):
+        n = int(seq.numel())
+        if side == "left":
+            ids[i, length - n :] = seq
+            mask[i, length - n :] = 1
+        else:
+            ids[i, :n] = seq
+            mask[i, :n] = 1
+    return ids, mask
+
+
+def batched_example_loss(
+    pair: LCFXPair,
+    fuser: LCFXFuser,
+    examples: list,
+    num_spans: int,
+    *,
+    reduction: str = "mean",
+) -> "Any | None":
+    """Teacher-forced loss for a batch of examples (the same fusion as the single path).
+
+    Sharer prompts are right-padded (pooled over real tokens only); Receiver
+    prompts are left-padded so the last real token shares a column; answers are
+    right-padded and masked out of the loss. ``reduction='none'`` returns a
+    per-example loss vector ``[B]`` (used for the batched==unbatched check).
+    """
+
+    import torch
+    from torch.nn import functional as F
+
+    exs = [_as_example(e) for e in examples]
+    rows = []
+    for ex in exs:
+        if not ex.answer:
+            continue
+        prompt = pair._encode_chat(pair.receiver_tok, build_receiver_prompt(ex))[0]
+        answer = pair.receiver_tok(
+            ex.answer, add_special_tokens=False, return_tensors="pt"
+        )["input_ids"][0].to(pair.device)
+        sharer = pair.sharer_tok(
+            build_sharer_encode_text(ex), return_tensors="pt"
+        )["input_ids"][0].to(pair.device)
+        if prompt.numel() >= 2 and answer.numel() >= 1:
+            rows.append((prompt, answer, sharer))
+    if not rows:
+        return None
+
+    prompts, answers, sharers = zip(*rows)
+    r_pad = pair.receiver_tok.pad_token_id
+    s_pad = pair.sharer_tok.pad_token_id
+
+    # Sharer: batched forward; the fuser's 2-stage learned pooling reduces over
+    # each example's real tokens (via lengths) -> aligned Receiver-shaped summary.
+    sharer_ids, sharer_mask = _pad(list(sharers), s_pad, "right")
+    with torch.no_grad():
+        sharer_cache = pair.sharer(
+            input_ids=sharer_ids, attention_mask=sharer_mask, use_cache=True
+        ).past_key_values
+    aligned = fuser.align(
+        extract_kv(sharer_cache), lengths=sharer_mask.sum(dim=1), num_spans=num_spans
+    )
+
+    # Receiver: left-pad prompts so prompt[:, -1] is the last real token for all.
+    # With left-padding the real tokens must get positions 0,1,2,... (not shifted
+    # by the pad offset), so pass explicit position_ids from the mask.
+    prompt_ids, prompt_mask = _pad(list(prompts), r_pad, "left")
+    prefix_mask = prompt_mask[:, :-1]
+    prefix_pos = (prefix_mask.cumsum(dim=-1) - 1).clamp(min=0)
+    with torch.no_grad():
+        cache = pair.receiver(
+            input_ids=prompt_ids[:, :-1],
+            attention_mask=prefix_mask,
+            position_ids=prefix_pos,
+            use_cache=True,
+        ).past_key_values
+    residual = fuser.project(aligned, extract_kv(cache))
+    add_residual_inplace(cache, residual)
+
+    # Teacher-forced answer forward: [p_last, a_0, ...] over the fused cache.
+    answer_ids, answer_mask = _pad(list(answers), r_pad, "right")
+    decode_input = torch.cat([prompt_ids[:, -1:], answer_ids], dim=1)
+    full_mask = torch.cat([prompt_mask, answer_mask], dim=1)  # past(P-1)+new(1+A) = P+A
+    position_ids = (full_mask.cumsum(dim=-1) - 1).clamp(min=0)[:, -decode_input.shape[1] :]
+    logits = pair.receiver(
+        input_ids=decode_input,
+        attention_mask=full_mask,
+        position_ids=position_ids,
+        past_key_values=cache,
+        use_cache=True,
+    ).logits[:, : answer_ids.shape[1], :]
+
+    targets = answer_ids.masked_fill(answer_mask == 0, -100)
+    token_ce = F.cross_entropy(
+        logits.reshape(-1, logits.shape[-1]).float(),
+        targets.reshape(-1),
+        ignore_index=-100,
+        reduction="none",
+    ).reshape(targets.shape)
+    per_example = token_ce.sum(dim=1) / answer_mask.sum(dim=1).clamp(min=1)
+    return per_example if reduction == "none" else per_example.mean()
+
+
+def _chunks(items: list, size: int):
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
+
+
 def evaluate(
     pair: LCFXPair,
     fuser: LCFXFuser,
     eval_data: list[Any],
     *,
     num_spans: int = 1,
+    batch_size: int = 16,
     max_examples: int | None = None,
 ) -> float:
-    """Mean teacher-forced loss over an eval set (lower is better)."""
+    """Mean per-example teacher-forced loss over an eval set (lower is better)."""
 
     import torch
+
+    items = list(eval_data)
+    if max_examples is not None:
+        items = items[:max_examples]
 
     was_training = fuser.training
     fuser.eval()
     total, count = 0.0, 0
     with torch.no_grad():
-        for i, raw in enumerate(eval_data):
-            if max_examples is not None and i >= max_examples:
-                break
-            loss = example_loss(pair, fuser, _as_example(raw), num_spans)
-            if loss is not None:
-                total += float(loss.item())
-                count += 1
+        for chunk in _chunks(items, batch_size):
+            per_example = batched_example_loss(
+                pair, fuser, chunk, num_spans, reduction="none"
+            )
+            if per_example is not None:
+                total += float(per_example.sum().item())
+                count += int(per_example.numel())
     if was_training:
         fuser.train()
     return total / count if count else float("nan")
@@ -130,18 +249,33 @@ def train_fuser(
     num_spans: int = 1,
     lr: float = 1e-4,
     epochs: int = 1,
+    batch_size: int = 16,
+    grad_accum: int = 1,
+    warmup_steps: int = 0,
     max_steps: int | None = None,
     grad_clip: float = 1.0,
     log_every: int = 10,
     eval_every: int | None = None,
+    eval_max_examples: int | None = None,
+    save_every: int | None = 50,
     shuffle: bool = True,
     seed: int = 0,
     checkpoint_path: str | None = None,
 ) -> LCFXFuser:
     """Train only the fuser with frozen Sharer/Receiver. Returns the trained fuser.
 
-    With ``eval_data``, the best checkpoint (lowest eval loss) is saved to
-    ``checkpoint_path``; otherwise the final fuser is saved there.
+    Optimization (matches the LCF-X paper's recipe):
+    - **AdamW**, ``lr`` with a linear ``warmup_steps`` schedule.
+    - **Gradient accumulation**: ``grad_accum`` micro-batches (one example each)
+      per optimizer step, so the *effective* batch size is ``grad_accum``. All of
+      ``log_every`` / ``eval_every`` / ``save_every`` / ``max_steps`` count
+      **optimizer steps**, not micro-batches.
+
+    Checkpointing:
+    - With ``eval_data``, the best fuser (lowest eval loss) is saved to
+      ``checkpoint_path``; otherwise the final fuser is saved there.
+    - Every ``save_every`` optimizer steps a crash-safety snapshot is written to
+      ``<checkpoint_path>.latest``.
     """
 
     import torch
@@ -157,17 +291,27 @@ def train_fuser(
     if not train_list:
         raise ValueError("train_data is empty")
 
-    optimizer = torch.optim.Adam(
+    grad_accum = max(1, int(grad_accum))
+    warmup = max(0, int(warmup_steps))
+    optimizer = torch.optim.AdamW(
         [p for p in fuser.parameters() if p.requires_grad], lr=lr
     )
+
+    def _lr_scale(step: int) -> float:
+        return (step + 1) / warmup if warmup and step < warmup else 1.0
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, _lr_scale)
 
     print(
         f"Training fuser: {len(train_list)} train"
         + (f" / {len(eval_list)} eval" if eval_list else "")
         + f" | {fuser.trainable_parameters()} params | epochs={epochs} lr={lr}"
+        f" | batch={batch_size} x grad_accum={grad_accum}"
+        f" (effective batch {batch_size * grad_accum}) warmup={warmup}"
     )
 
-    global_step = 0
+    opt_step = 0
+    micro = 0
     best_eval = float("inf")
     saved_best = False
     running, running_count = 0.0, 0
@@ -177,7 +321,14 @@ def train_fuser(
         nonlocal best_eval, saved_best
         if not eval_list:
             return
-        eval_loss = evaluate(pair, fuser, eval_list, num_spans=num_spans)
+        eval_loss = evaluate(
+            pair,
+            fuser,
+            eval_list,
+            num_spans=num_spans,
+            batch_size=batch_size,
+            max_examples=eval_max_examples,
+        )
         marker = ""
         if eval_loss < best_eval:
             best_eval = eval_loss
@@ -185,35 +336,46 @@ def train_fuser(
                 _save(fuser, checkpoint_path)
                 saved_best = True
                 marker = "  (new best -> saved)"
-        print(f"  [eval] step {global_step} | eval_loss {eval_loss:.4f}{marker}", flush=True)
+        print(f"  [eval] opt_step {opt_step} | eval_loss {eval_loss:.4f}{marker}", flush=True)
 
+    optimizer.zero_grad()
     for epoch in range(max(1, epochs)):
         order = list(range(len(train_list)))
         if shuffle:
             rng.shuffle(order)
-        for idx in order:
-            loss = example_loss(pair, fuser, _as_example(train_list[idx]), num_spans)
+        for chunk in _chunks(order, batch_size):
+            batch = [train_list[i] for i in chunk]
+            loss = batched_example_loss(pair, fuser, batch, num_spans, reduction="mean")
             if loss is None:
                 continue
-            optimizer.zero_grad()
-            loss.backward()
+            (loss / grad_accum).backward()
+            micro += 1
+            running += float(loss.item())
+            running_count += 1
+            if micro % grad_accum != 0:
+                continue
+
+            # One optimizer step == one effective batch of `grad_accum` examples.
             if grad_clip:
                 torch.nn.utils.clip_grad_norm_(fuser.parameters(), grad_clip)
             optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad()
+            opt_step += 1
 
-            global_step += 1
-            running += float(loss.item())
-            running_count += 1
-            if log_every and global_step % log_every == 0:
+            if log_every and opt_step % log_every == 0:
                 print(
-                    f"epoch {epoch + 1}/{epochs} step {global_step} "
-                    f"| train_loss {running / running_count:.4f}",
+                    f"epoch {epoch + 1}/{epochs} opt_step {opt_step} "
+                    f"| train_loss {running / running_count:.4f} "
+                    f"| lr {scheduler.get_last_lr()[0]:.2e}",
                     flush=True,
                 )
                 running, running_count = 0.0, 0
-            if eval_every and global_step % eval_every == 0:
+            if eval_every and opt_step % eval_every == 0:
                 _maybe_eval_and_save()
-            if max_steps is not None and global_step >= max_steps:
+            if checkpoint_path and save_every and opt_step % save_every == 0:
+                _save(fuser, checkpoint_path + ".latest")
+            if max_steps is not None and opt_step >= max_steps:
                 stop = True
                 break
         # End-of-epoch validation.

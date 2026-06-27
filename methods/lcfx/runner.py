@@ -89,13 +89,13 @@ def run_lcfx_example(
     receiver_prompt = build_receiver_prompt(example)
 
     start = perf_counter()
-    summary, sharer_tokens = pair.sharer_summary(sharer_text, num_spans=num_spans)
+    summary, sharer_tokens = pair.sharer_summary(sharer_text)
     sharer_ms = (perf_counter() - start) * 1000.0
 
     # Align the Sharer summary to Receiver shape up front; the joint projection
     # (which needs the Receiver cache) runs inside decode via this callback.
     start = perf_counter()
-    aligned = fuser.align(summary)
+    aligned = fuser.align(summary, num_spans=num_spans)
     align_ms = (perf_counter() - start) * 1000.0
     project_ms: list[float] = []
 
@@ -119,12 +119,11 @@ def run_lcfx_example(
     is_correct, scores = _score_prediction(prediction, example.answer, score_fn)
 
     n_layers = len(summary)
-    n_spans = summary[0][0].shape[2] if summary else 0
     return LCFXResult(
         id=example.id,
         method="lcf_x",
         sharer_prompt=sharer_text,
-        sharer_message=f"[latent cache summary: {n_layers} layers x {n_spans} spans]",
+        sharer_message=f"[latent cache summary: {n_layers} layers x {num_spans} spans]",
         receiver_prompt=receiver_prompt,
         receiver_output=output,
         prediction=prediction,
@@ -139,7 +138,7 @@ def run_lcfx_example(
         },
         token_counts={
             "sharer_input": sharer_tokens,
-            "sharer_output": n_layers * n_spans,  # latent summary slots, not text tokens
+            "sharer_output": n_layers * num_spans,  # latent summary slots, not text tokens
             "receiver_input": recv_in,
             "receiver_output": recv_out,
         },

@@ -181,6 +181,35 @@ gold answer, with the Sharer summary fused into the Receiver's prompt cache).
 > train and eval is fine for a smoke test but leaks for real numbers — prepare a
 > separate train split (or instruction data) for reportable results.
 
+**Partial runs and batch control.** Two independent ways to shrink a run:
+
+| Flag | Effect |
+|------|--------|
+| `--max-train-examples N` | Train on only the first `N` examples (smaller dataset). |
+| `--max-steps N` | Stop after `N` optimizer steps (regardless of dataset size). |
+| `--batch-size B` | Per-step micro-batch (memory-bound; ~4–8 for Qwen3-0.6B on 24 GB). |
+| `--grad-accum A` | Micro-batches per optimizer step. **Effective batch = `B × A`.** |
+
+```bash
+# Partial run, direct script: 2k examples, effective batch 32, short warmup
+HF_HUB_OFFLINE=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+.venv/bin/python scripts/train_lcfx_fuser.py \
+  --train-data data/tasks/hotpotqa_bridge_train.jsonl \
+  --eval-data  data/tasks/hotpotqa_bridge_val.jsonl \
+  --sharer-model Qwen/Qwen3-0.6B --receiver-model Qwen/Qwen3-0.6B \
+  --bottleneck-dim 128 --num-spans 4 \
+  --max-train-examples 2000 --batch-size 8 --grad-accum 4 --warmup 50 \
+  --eval-max-examples 200 --eval-every 20 --save-every 20 \
+  --checkpoint-out data/checkpoints/lcfx/fuser_partial.pt
+```
+
+Or via the Makefile (same knobs as overrides):
+
+```bash
+make lcfx-train MAX_TRAIN=2000 BATCH_SIZE=8 GRAD_ACCUM=4   # fewer samples
+make lcfx-train MAX_STEPS=50   BATCH_SIZE=8 GRAD_ACCUM=4   # fewer optimizer steps
+```
+
 ---
 
 ## Reading the results
