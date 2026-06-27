@@ -25,10 +25,11 @@ hold genuinely different evidence.
 
 ### Decisions for this deliverable
 
-1. **Scaffold/MVP first.** Build the cache extract → pool → project → fuse →
-   generate pipeline end-to-end with an **untrained (zero-init) fuser**,
-   validated on a smoke task. The training loop is the next step (interface
-   defined now, body deferred).
+1. **Scaffold first, then training.** The cache extract → pool → align → project
+   → fuse → generate pipeline was validated end-to-end with an **untrained
+   (zero-init) fuser** (== Receiver-only). The **fuser training loop is now
+   implemented** (`methods.lcfx.training.train_fuser`): frozen base models,
+   gradients flow only into the fuser.
 2. **Reuse existing cross-context infra.** Target **partitioned HotpotQA-bridge**
    (already built by [scripts/prepare_hotpotqa_bridge.py](../scripts/prepare_hotpotqa_bridge.py)),
    free-form **EM/F1** scoring ([methods/t2t/scoring.py](../methods/t2t/scoring.py)),
@@ -52,37 +53,51 @@ full-context upper bound.
 Per-Receiver-layer flow. **Bold** = the LCF-X-specific step.
 
 1. **Extract** the Sharer's KV cache from a forward pass over the Sharer's context.
-2. **Pool (position-free):** collapse the Sharer's `N_S` token positions into a
-   fixed-size summary — divide the context into `P` spans, pool within each span,
-   then across spans → `K*, V* ∈ ℝ^(B×H_s×1×D_s)` (still in the Sharer's
-   head dims). **Broadcast** the summary across the Receiver's `N_R` positions so
-   every Receiver position has a Sharer counterpart to fuse with.
-3. **Project (joint KV bottleneck):** concatenate the (broadcast) Sharer KV with
-   the Receiver KV and flatten; down-project to bottleneck dim `d ∈ {64,128,256,512}`,
-   a small MLP, split the latent into `[z_K, z_V]`, compute per-head gates from
-   the full latent, and up-project to Receiver-cache shape. One shared pipeline
-   for K and V (keys/values are projections of the same hidden state).
-4. **Fuse:** gated residual add into the Receiver cache (`K' = K + α_K·ΔK`, etc.).
-5. **Generate:** the Receiver answers from its own context + fused cache; score
+2. **Span pre-reduction (pooling, cheap/parameter-free):** mean-pool the Sharer's
+   `N_S` positions into `P` span means per layer → `K, V ∈ ℝ^(B×H_s×P×D_s)`
+   (still in the Sharer's head dims). This just produces the token set for the
+   resampler.
+3. **Align (attention resampler) — bring the Sharer to Receiver shape:**
+   Receiver-sized learnable queries (one per Receiver layer) attend over the
+   `L_s · P` Sharer tokens (joint `[K; V]`) and emit a Receiver-shaped,
+   position-free summary `ℝ^(B×H_r×1×D_r)` per Receiver layer. One learned
+   attention converts every cross-model axis: **sequence** (`P → 1`), **heads**
+   (`H_s → H_r`), **head_dim** (`D_s → D_r`, via the value projection), and
+   **layers** (`L_s → L_r`, via per-Receiver-layer queries).
+4. **Project (joint KV bottleneck, the LCF projector) — same-shape, Receiver-aware:**
+   the projector assumes the Sharer and Receiver caches share shape, which step 3
+   guarantees. Broadcast the aligned summary across the Receiver's `N_R` positions
+   and **concatenate it with the Receiver's own cache** at each position
+   (`[aK; aV; rK; rV]` — the paper's `4·H·D` Concat & Flatten), down-project to
+   `d ∈ {64,128,256,512}`, a small MLP, per-(layer, head) tanh gate, up-project to
+   Receiver shape. The residual is therefore **position-dependent and
+   Receiver-aware**, not a pure Sharer broadcast.
+5. **Fuse:** gated residual add into the Receiver cache (`K' = K + α_K·ΔK`, etc.).
+6. **Generate:** the Receiver answers from its own context + fused cache; score
    free-form with EM/F1.
 
-### Cross-model handling (the paper's gap, our choice)
+### Cross-model handling — align converts every axis; the projector fuses same-shape caches
 
-The paper does **not** specify how it reconciles different head counts, head
-dims, or layer counts — it lets the learned linear absorb the mismatch. We make
-this explicit so different model sizes work:
+The LCF projector assumes the Sharer and Receiver caches share shape. So the
+**align** resampler does all cross-model conversion *first*, and only then does the
+projector fuse the two same-shaped caches. The LCF-X pool is a *learned attention*
+whose query count is already a free hyperparameter; we extend that one mechanism
+so its queries are sized to the **Receiver**:
 
-- **Feature dim:** `W_down` takes the **concatenation** `[sharer_flat ⊕ receiver_flat]`
-  (input width `d_s + d_r`, not a shared width); `W_up` outputs Receiver shape.
-  So matched per-head dims are **not** required.
-- **Layer count:** an explicit Sharer→Receiver **layer map** (e.g. proportional
-  index, configurable) handles differing depths (24 vs 28, etc.).
-- `check_pair_compatible(...)` **records** dims/heads/layers to size the projector,
-  rather than requiring equality.
+- **Sequence (`N`):** Sharer tokens → 1 summary slot (broadcast to `N_R`).
+- **Heads / head-dim (`H, D`):** the value projection maps `2·H_s·D_s → 2·H_r·D_r`,
+  so the resampler output is already in Receiver head geometry.
+- **Layers (`L`):** one learnable query per Receiver layer attends over tokens
+  from all Sharer layers (`L_s → L_r`).
+- The **projector** then concatenates the aligned Sharer cache with the Receiver
+  cache (now identical shape) and emits a Receiver-aware residual.
+- `check_pair_compatible(...)` **records** dims/heads/layers (used to size the
+  resampler); it never *requires* equality, so different model sizes work.
 
-> Note: pooling matches the **sequence/position** axis (via broadcast); the
-> projector matches the **feature** axis. These are independent — that is what
-> makes LCF-X tolerant of different context *and* different model size.
+> Honest caveat: the paper's pool keeps `H, D` (its Sharer and Receiver are both
+> Qwen3-0.6B, so they match) and leaves any mismatch to the downstream projector.
+> Sizing the resampler's queries/outputs to the Receiver is **our** principled
+> generalization — the same attention method, now also remapping `H/D/L`.
 
 ## Relationship to LCF (why no separate flag/mode)
 
@@ -101,12 +116,12 @@ touch torch (deferred imports).
 |------|----------------|
 | `schema.py` | `LCFXExample` — cross-context example (`id, question, choices, answer, sharer_context, receiver_context, metadata`). Mirrors `T2TExample`. |
 | `prompts.py` | Build the Sharer encode prompt (its context) and the Receiver answer prompt (its context + fused summary); reuse T2T answer formatting. |
-| `cache.py` | `extract_kv_cache`, `pool_summary` (spans→1 slot, position-free), `broadcast_to`, `inject_kv_cache` (gated residual). Normalizes legacy tuple / `DynamicCache`. |
-| `fuser.py` | `LCFXFuser(nn.Module)` — joint KV bottleneck (`W_down` on concatenated sharer⊕receiver, MLP, latent split, per-head gates, `W_up` to receiver shape), `zero_init` for the equality check, explicit layer map. Only trainable params. |
-| `model.py` | `load_lcfx_pair(...)` (frozen Sharer + Receiver, deferred torch), `encode`, `generate_with_cache`, `check_pair_compatible`. |
-| `runner.py` | `run_lcfx_example` (extract→pool→project→fuse→generate) and `run_receiver_only_example` (no fusion, for the equality check); `LCFXResult` (`method="lcf_x"`). |
-| `io.py` | Mirror of T2T `io.py` for `LCFXResult`; same four output files; uniform latency contract `sharer_ms` (encode+pool), `fuser_ms` (project+fuse), `receiver_ms` (generate), `total_ms`. |
-| `training.py` | **Interface now, body next step.** `train_fuser(...)`: frozen base models, optimize only the fuser, teacher-forced next-token loss through the fused-cache path. Gradients must flow through the (frozen) Receiver into the fuser — do **not** wrap the Receiver forward in `no_grad`. |
+| `cache.py` | `extract_kv`, `pool_summary` (span pre-reduction `N_S→P` per layer, keeps Sharer `H_s,D_s`), `add_residual_inplace` (gated residual, broadcast over `N_R`). Targets transformers-5 `DynamicCache` (`.layers[i].keys/.values`). |
+| `fuser.py` | `LCFXFuser(nn.Module)` — `align` (attention resampler: Receiver-sized queries over the `L_s·P` Sharer tokens → Receiver-shaped summary, converting `N/H/D/L`) + `project` (joint KV bottleneck that concatenates the aligned Sharer **and** Receiver caches, same shape, → Receiver-aware residual). `zero_init` zeroes the projector's up-projection (gate also starts at 0) for the equality check. |
+| `model.py` | `load_lcfx_pair(...)` (frozen Sharer + Receiver, deferred torch), `sharer_summary` (encode + span pre-reduction), `decode_receiver` (greedy; computes the residual from the prefilled Receiver cache via a `residual_fn` callback, then injects), `check_pair_compatible`. |
+| `runner.py` | `run_lcfx_example` (encode→pool→align→project[with Receiver cache]→fuse→generate) and `run_receiver_only_example` (no fusion, for the equality check); `LCFXResult` (`method="lcf_x"`). |
+| `io.py` | Mirror of T2T `io.py` for `LCFXResult`; same four output files; uniform latency contract `sharer_ms` (encode+pool), `fuser_ms` (align+project), `receiver_ms` (generate), `total_ms`. |
+| `training.py` | **Implemented.** `train_fuser(...)`: frozen base models, optimize only the fuser, teacher-forced next-token CE on the gold answer with the residual fused into the Receiver prompt cache. Prompt prefill is `no_grad`; the answer forward is grad-enabled so gradients flow through the (frozen) Receiver into the fuser. |
 | `__init__.py` | Public exports. |
 
 Reuse from `methods/t2t/`: scoring (EM/F1), the example/JSONL pattern, the IO
@@ -118,8 +133,9 @@ aggregation/contract, and the receiver-baseline ladder semantics.
   `--dataset data/tasks/hotpotqa_bridge_cross.jsonl`, `--sharer-model`, `--receiver-model`,
   `--fuser-checkpoint` (zero-init when omitted), `--bottleneck-dim`, `--num-spans`,
   `--no-fusion` (Receiver-only check), `--output-dir`, `--device/--dtype`.
-- `scripts/train_lcfx_fuser.py` — training CLI (**next step**): wires `train_fuser`;
-  argument surface defined now, optimization deferred.
+- `scripts/train_lcfx_fuser.py` — training CLI: wires `train_fuser`
+  (`--train-data`, `--num-spans`, `--lr`, `--epochs`, `--max-steps`,
+  `--checkpoint-out`); writes a fuser checkpoint that `run_lcfx.py` loads.
 - Dataset prep already exists (`prepare_hotpotqa_bridge.py`); no new prep needed for MVP.
 
 ## Docs to update alongside the code
@@ -153,6 +169,7 @@ Commands:
 
 ## Out of scope (this deliverable)
 
-Fuser training-loop body (interface only; next step), shared-context LCF / C2C
+A proper train/eval split and larger-scale training runs (the loop is
+implemented; only smoke-trained so far), shared-context LCF / C2C
 (dropped), heterogeneous-tokenizer text alignment beyond what pooling needs, and
 batched/distributed training.

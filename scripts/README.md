@@ -22,7 +22,9 @@ The scripts:
 |--------|---------|
 | `prepare_hotpotqa_bridge.py` | Build the cross-context HotpotQA-bridge task file (LCF-X partitioning). |
 | `run_text_to_text.py` | Run the T2T Sharer→Receiver pipeline. |
+| `run_lcfx.py` | Run the LCF-X latent cache communication method (Sharer cache → pooled summary → fused into Receiver). |
 | `run_receiver_baseline.py` | Run no-Sharer reference baselines (question-only / half / full context). |
+| `train_lcfx_fuser.py` | Train the LCF-X fuser (frozen Sharer/Receiver; only the fuser learns). |
 | `_hf_cache.py` | Helper imported by the others; not run directly. |
 
 ---
@@ -116,6 +118,68 @@ Other flags mirror Test A (`--receiver-max-new-tokens` default `64`,
 Expected ordering of accuracy: `question_only` ≤ `half` ≤ `T2T` ≤ `full`. T2T's
 value is how much of the gap between *half* and *full* it recovers using only a
 short text message.
+
+### Test C — LCF-X latent cache communication
+
+The Sharer encodes its own partition; its KV cache is pooled into a fixed-size,
+position-free summary, fused into the Receiver's cache (via the bottleneck
+fuser), and the Receiver answers from its own partition + that latent summary —
+no text message, no token-position alignment.
+
+```bash
+.venv/bin/python scripts/run_lcfx.py \
+  --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
+  --sharer-model Qwen/Qwen2.5-0.5B-Instruct \
+  --receiver-model Qwen/Qwen2.5-0.5B-Instruct \
+  --num-spans 4 \
+  --output-dir results/lcfx_hotpotqa_zeroinit
+```
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--sharer-model` / `--receiver-model` | Qwen2.5-0.5B-Instruct | Frozen pair (may differ in size/arch). |
+| `--fuser-checkpoint` | (none) | Trained fuser weights. **Omit → zero-init fuser.** |
+| `--bottleneck-dim` | `64` | Joint KV bottleneck width. |
+| `--num-spans` | `1` | Sharer pooling spans (position-free summary granularity). |
+| `--no-fusion` | off | Run the Receiver alone (no fusion) for comparison. |
+| `--max-new-tokens` | `64` | Receiver answer budget. |
+
+**Plumbing-correctness check (MVP):** with no `--fuser-checkpoint` the fuser is
+**zero-initialized**, so LCF-X adds a zero residual and must reproduce the
+Receiver-only run **exactly**. Verify:
+
+```bash
+.venv/bin/python scripts/run_lcfx.py --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
+  --num-examples 10 --output-dir results/lcfx_zeroinit            # zero-init fuser
+.venv/bin/python scripts/run_lcfx.py --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
+  --num-examples 10 --no-fusion --output-dir results/lcfx_recvonly  # receiver alone
+# metrics.json (accuracy/EM/F1) and predictions.jsonl outputs must match.
+```
+
+A zero-init (untrained) fuser sits exactly at the `half`-context floor; training
+the fuser is what moves it toward `full`.
+
+### Test C (training) — train the LCF-X fuser
+
+Frozen Sharer/Receiver; only the fuser learns (teacher-forced next-token CE on the
+gold answer, with the Sharer summary fused into the Receiver's prompt cache).
+
+```bash
+.venv/bin/python scripts/train_lcfx_fuser.py \
+  --train-data data/tasks/hotpotqa_bridge_cross.jsonl \
+  --num-spans 4 --epochs 3 --lr 1e-3 \
+  --checkpoint-out data/checkpoints/lcfx/fuser.pt
+
+# then evaluate the trained fuser
+.venv/bin/python scripts/run_lcfx.py \
+  --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
+  --num-spans 4 --fuser-checkpoint data/checkpoints/lcfx/fuser.pt \
+  --output-dir results/lcfx_trained
+```
+
+> Note: `hotpotqa_bridge_cross.jsonl` is the validation file; using it for both
+> train and eval is fine for a smoke test but leaks for real numbers — prepare a
+> separate train split (or instruction data) for reportable results.
 
 ---
 
