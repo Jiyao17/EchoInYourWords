@@ -9,8 +9,11 @@ standardized experiment/output contract:
 
 - **T2T (text-to-text)** — natural-language message baseline (*implemented*).
 - **LCF-X (cross-context Latent Cache Flow)** — position-free latent cache
-  communication; the existing-paper precedent for different-context agents.
-- **New method (receiver-anchored, `methods/eiyw/`)** — our contribution.
+  communication; the existing-paper precedent for different-context agents
+  (*implemented*).
+- **EIYW (receiver-anchored, `methods/eiyw/`)** — our contribution: the Sharer
+  cache is translated into K soft pseudo-tokens, conditioned on the Receiver's
+  question, prepended to the Receiver's input (*implemented*).
 
 **Scope decision:** shared-context, token-position-aligned cache-transfer methods
 (**C2C** and the original shared-context **LCF**) are **out of scope**. They
@@ -51,13 +54,15 @@ EchoInYourWords/
 │   └── IMPLEMENTATION_INSIGHTS.md# framework / repo-shape decisions
 ├── methods/                  # METHOD IMPLEMENTATIONS (one package per method)
 │   ├── t2t/                      # text-to-text baseline (implemented)
-│   ├── lcfx/                     # cross-context Latent Cache Flow (planned)
-│   └── eiyw/                     # new receiver-anchored method (planned)
+│   ├── lcfx/                     # cross-context Latent Cache Flow (implemented)
+│   └── eiyw/                     # receiver-anchored soft-token method (implemented)
 ├── scripts/                  # RUNNABLE ENTRYPOINTS + cache config
 │   ├── README.md                 # how to run each test/experiment (commands)
 │   ├── _hf_cache.py              # points HF_HOME at data/hf_cache
 │   ├── prepare_hotpotqa_bridge.py# builds cross-context task JSONL
 │   ├── run_text_to_text.py       # runs the T2T Sharer→Receiver pipeline
+│   ├── run_lcfx.py / train_lcfx_fuser.py   # LCF-X eval / fuser training
+│   ├── run_eiyw.py / train_eiyw.py         # EIYW eval / translator training
 │   └── run_receiver_baseline.py  # runs no-Sharer reference baselines
 ├── data/
 │   ├── hf_cache/                 # HuggingFace cache (its native single-root layout)
@@ -141,6 +146,27 @@ Every run writes four files into its `--output-dir` (under `results/`):
 Comparison/analysis depends only on these files, never on internal method
 classes — so T2T, the receiver baselines, and the latent methods (LCF-X and the
 new receiver-anchored method) are compared apples-to-apples.
+
+## The LCF-X and EIYW packages (`methods/lcfx/`, `methods/eiyw/`)
+
+Both mirror the T2T package shape (core import-light; only `model.py` /
+`fuser.py` / `translator.py` touch torch, via deferred imports) and reuse T2T's
+`T2TExample`, scoring, and IO contract. They differ only in how the Sharer's
+information reaches the Receiver:
+
+- **LCF-X** (`fuser.py`, `cache.py`): pools the Sharer KV into one position-free
+  summary per layer and fuses it as a **gated KV residual broadcast to every
+  Receiver position**. Architecture/training detail:
+  [prompt/LCF_X_IMPLEMENTATION_PLAN.md](prompt/LCF_X_IMPLEMENTATION_PLAN.md).
+- **EIYW** (`translator.py`, `model.py`): translates the Sharer KV into **K soft
+  pseudo-tokens, conditioned on the Receiver's question (the anchor)**, and
+  **prepends them to the Receiver's input embeddings** (`inputs_embeds`).
+  Architecture/training detail:
+  [prompt/EIYW_IMPLEMENTATION_PLAN.md](prompt/EIYW_IMPLEMENTATION_PLAN.md).
+
+Both train only their adapter (fuser / translator) with frozen base models,
+write **model-stamped** checkpoints (hard-error on a pair mismatch unless
+`--allow-model-mismatch`), and support heterogeneous Sharer/Receiver pairs.
 
 ## Environment
 

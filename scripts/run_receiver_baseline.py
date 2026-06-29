@@ -30,6 +30,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 # Route HF caches under data/hf_cache (before transformers loads).
+from scripts._defaults import DEFAULT_RECEIVER  # noqa: E402
 from scripts._hf_cache import configure_hf_cache  # noqa: E402
 
 configure_hf_cache()
@@ -65,7 +66,7 @@ def main() -> None:
         default="half",
         help="How much evidence the Receiver sees (default: half)",
     )
-    parser.add_argument("--receiver-model", required=True)
+    parser.add_argument("--receiver-model", default=DEFAULT_RECEIVER)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--num-examples", type=int, default=None)
     parser.add_argument("--receiver-max-new-tokens", type=int, default=64)

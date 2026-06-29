@@ -80,8 +80,12 @@ def load_generator(
         device = "cuda" if torch.cuda.is_available() else "cpu"
     torch_device = torch.device(device)
 
+    # clean_up_tokenization_spaces is a WordPiece-era step that corrupts BPE output
+    # (strips spaces before punctuation); disable it for these BPE models.
     tokenizer = AutoTokenizer.from_pretrained(
-        model_name, trust_remote_code=trust_remote_code
+        model_name,
+        trust_remote_code=trust_remote_code,
+        clean_up_tokenization_spaces=False,
     )
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -94,6 +98,10 @@ def load_generator(
     )
     model.to(torch_device)
     model.eval()
+    # We always cap generation with max_new_tokens; drop the model's default
+    # max_length (often 131072) so transformers doesn't warn about both being set.
+    if getattr(model, "generation_config", None) is not None:
+        model.generation_config.max_length = None
 
     has_chat_template = use_chat_template and getattr(
         tokenizer, "chat_template", None

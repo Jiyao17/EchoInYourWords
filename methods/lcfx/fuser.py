@@ -134,9 +134,14 @@ class LCFXFuser(nn.Module):
         super().__init__()
         if bottleneck_dim % 2 != 0:
             raise ValueError("bottleneck_dim must be even (latent is split into z_K, z_V)")
+        # Sharer dims (kept so the fuser is self-describing for checkpointing).
+        self.sharer_layers = sharer_layers
+        self.sharer_kv_heads = sharer_kv_heads
+        self.sharer_head_dim = sharer_head_dim
         self.receiver_layers = receiver_layers
         self.receiver_kv_heads = receiver_kv_heads
         self.receiver_head_dim = receiver_head_dim
+        self.bottleneck_dim = bottleneck_dim
         self.attn_dim = bottleneck_dim
         receiver_feat = receiver_kv_heads * receiver_head_dim
         sharer_token_dim = 2 * sharer_kv_heads * sharer_head_dim
@@ -288,6 +293,38 @@ class LCFXFuser(nn.Module):
             receiver_kv_heads=receiver_spec.kv_heads,
             receiver_head_dim=receiver_spec.head_dim,
             bottleneck_dim=bottleneck_dim,
+            zero_init=zero_init,
+        )
+
+    def arch_config(self) -> dict:
+        """Self-describing architecture (the dims that determine every weight shape).
+
+        Persisted in the checkpoint so a trained fuser can be rebuilt and validated
+        against the Sharer/Receiver pair it was trained for.
+        """
+
+        return {
+            "sharer_layers": self.sharer_layers,
+            "sharer_kv_heads": self.sharer_kv_heads,
+            "sharer_head_dim": self.sharer_head_dim,
+            "receiver_layers": self.receiver_layers,
+            "receiver_kv_heads": self.receiver_kv_heads,
+            "receiver_head_dim": self.receiver_head_dim,
+            "bottleneck_dim": self.bottleneck_dim,
+        }
+
+    @classmethod
+    def from_arch_config(cls, cfg: dict, *, zero_init: bool = True) -> "LCFXFuser":
+        """Rebuild a fuser from an :meth:`arch_config` dict."""
+
+        return cls(
+            sharer_layers=cfg["sharer_layers"],
+            sharer_kv_heads=cfg["sharer_kv_heads"],
+            sharer_head_dim=cfg["sharer_head_dim"],
+            receiver_layers=cfg["receiver_layers"],
+            receiver_kv_heads=cfg["receiver_kv_heads"],
+            receiver_head_dim=cfg["receiver_head_dim"],
+            bottleneck_dim=cfg["bottleneck_dim"],
             zero_init=zero_init,
         )
 

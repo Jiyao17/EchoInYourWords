@@ -6,7 +6,7 @@ from .model import LCFXPair, ModelSpec, check_pair_compatible, load_lcfx_pair
 from .prompts import build_receiver_prompt, build_sharer_encode_text
 from .runner import LCFXResult, run_lcfx_example, run_receiver_only_example
 from .schema import LCFXExample
-from .training import evaluate, example_loss, train_fuser
+from .training import evaluate, example_loss, load_fuser, save_fuser, train_fuser
 
 __all__ = [
     "LCFXExample",
@@ -22,6 +22,8 @@ __all__ = [
     "run_receiver_only_example",
     "evaluate",
     "example_loss",
+    "load_fuser",
+    "save_fuser",
     "train_fuser",
     "write_run_outputs",
 ]

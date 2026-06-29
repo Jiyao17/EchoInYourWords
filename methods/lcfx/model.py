@@ -211,7 +211,13 @@ def load_lcfx_pair(
     resolved_dtype = _resolve_dtype(dtype, torch)
 
     def _load(name: str) -> tuple[Any, Any]:
-        tok = AutoTokenizer.from_pretrained(name, trust_remote_code=trust_remote_code)
+        # clean_up_tokenization_spaces is a WordPiece-era step that corrupts BPE
+        # output (strips spaces before punctuation); disable it for these BPE models.
+        tok = AutoTokenizer.from_pretrained(
+            name,
+            trust_remote_code=trust_remote_code,
+            clean_up_tokenization_spaces=False,
+        )
         if tok.pad_token_id is None:
             tok.pad_token = tok.eos_token
         model = AutoModelForCausalLM.from_pretrained(

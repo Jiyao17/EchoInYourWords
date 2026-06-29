@@ -23,8 +23,10 @@ The scripts:
 | `prepare_hotpotqa_bridge.py` | Build the cross-context HotpotQA-bridge task file (LCF-X partitioning). |
 | `run_text_to_text.py` | Run the T2T Sharer→Receiver pipeline. |
 | `run_lcfx.py` | Run the LCF-X latent cache communication method (Sharer cache → pooled summary → fused into Receiver). |
+| `run_eiyw.py` | Run EIYW, the receiver-anchored method (Sharer cache → K soft tokens conditioned on the Receiver's question → prepended to the Receiver input). |
 | `run_receiver_baseline.py` | Run no-Sharer reference baselines (question-only / half / full context). |
 | `train_lcfx_fuser.py` | Train the LCF-X fuser (frozen Sharer/Receiver; only the fuser learns). |
+| `train_eiyw.py` | Train the EIYW translator (frozen Sharer/Receiver; only the translator learns). |
 | `_hf_cache.py` | Helper imported by the others; not run directly. |
 
 ---
@@ -73,12 +75,14 @@ context + that message.
   --output-dir results/t2t_hotpotqa_bridge
 ```
 
-If `--receiver-model` is omitted it reuses the Sharer model (single-model setup).
+Sharer and Receiver are independent; either flag left unset defaults to
+`Qwen/Qwen3-0.6B` (see the [Models](../README.md#models-sharer--receiver) section
+for the full list).
 
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `--sharer-model` | (required) | Sharer model id/path. |
-| `--receiver-model` | = sharer | Receiver model id/path. |
+| `--sharer-model` | `Qwen/Qwen3-0.6B` | Sharer model id/path. |
+| `--receiver-model` | `Qwen/Qwen3-0.6B` | Receiver model id/path (independent of Sharer). |
 | `--sharer-max-new-tokens` | `128` | **Communication budget** — max tokens in the Sharer message. |
 | `--receiver-max-new-tokens` | `64` | Max tokens in the Receiver answer. |
 | `--num-examples` | all | Cap the number of examples. |
@@ -137,9 +141,10 @@ no text message, no token-position alignment.
 
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `--sharer-model` / `--receiver-model` | Qwen2.5-0.5B-Instruct | Frozen pair (may differ in size/arch). |
+| `--sharer-model` / `--receiver-model` | `Qwen/Qwen3-0.6B` each | Independent frozen pair (may differ in size/arch). |
 | `--fuser-checkpoint` | (none) | Trained fuser weights. **Omit → zero-init fuser.** |
-| `--bottleneck-dim` | `64` | Joint KV bottleneck width. |
+| `--allow-model-mismatch` | off | Load a checkpoint whose stamped Sharer/Receiver differ from the pair (otherwise a hard error). |
+| `--bottleneck-dim` | `128` | Joint KV bottleneck width (must match the checkpoint). |
 | `--num-spans` | `1` | Sharer pooling spans (position-free summary granularity). |
 | `--no-fusion` | off | Run the Receiver alone (no fusion) for comparison. |
 | `--max-new-tokens` | `64` | Receiver answer budget. |
@@ -209,6 +214,59 @@ Or via the Makefile (same knobs as overrides):
 make lcfx-train MAX_TRAIN=2000 BATCH_SIZE=8 GRAD_ACCUM=4   # fewer samples
 make lcfx-train MAX_STEPS=50   BATCH_SIZE=8 GRAD_ACCUM=4   # fewer optimizer steps
 ```
+
+### Test D — EIYW (our receiver-anchored method)
+
+The Sharer encodes its own partition; its KV cache is translated into **K soft
+pseudo-tokens, conditioned on the Receiver's question**, and **prepended to the
+Receiver's input embeddings**. The Receiver then answers from its own partition
+plus those soft tokens — no text message, and (unlike LCF-X) the Sharer's
+information is added at the Receiver's *input* rather than broadcast into its KV
+cache. See [../prompt/EIYW_IMPLEMENTATION_PLAN.md](../prompt/EIYW_IMPLEMENTATION_PLAN.md).
+
+```bash
+# Train the translator, then evaluate it.
+.venv/bin/python scripts/train_eiyw.py \
+  --train-data data/tasks/hotpotqa_bridge_train.jsonl \
+  --sharer-model Qwen/Qwen2.5-0.5B-Instruct --receiver-model Qwen/Qwen3-0.6B \
+  --num-soft-tokens 16 --num-spans 4 \
+  --checkpoint-out data/checkpoints/eiyw/translator.pt
+
+.venv/bin/python scripts/run_eiyw.py \
+  --dataset data/tasks/hotpotqa_bridge_val.jsonl \
+  --sharer-model Qwen/Qwen2.5-0.5B-Instruct --receiver-model Qwen/Qwen3-0.6B \
+  --num-soft-tokens 16 --translator-checkpoint data/checkpoints/eiyw/translator.pt \
+  --output-dir results/eiyw_trained
+```
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--sharer-model` / `--receiver-model` | `Qwen/Qwen3-0.6B` each | Independent frozen pair (may differ in size/arch). |
+| `--translator-checkpoint` | (none) | Trained translator weights. **Omit → gentle-init translator (plumbing only).** |
+| `--num-soft-tokens` | `16` | K soft tokens prepended to the Receiver input (must match the checkpoint). |
+| `--bottleneck-dim` | `128` | Translator latent width (must match the checkpoint). |
+| `--num-spans` | `4` | Sharer pooling spans. |
+| `--no-fusion` | off | Run the Receiver alone (no soft tokens) — the comparison floor / plumbing check. |
+| `--allow-model-mismatch` | off | Load a checkpoint whose stamped Sharer/Receiver differ (otherwise a hard error). |
+| `--max-new-tokens` | `64` | Receiver answer budget. |
+
+**Plumbing-correctness check.** EIYW has no zero-init==Receiver-only equality
+(zero-valued soft tokens are still extra positions, and exactly-zero embeddings
+are numerically degenerate — the init is therefore a *gentle* small-scale start).
+The floor check is `--no-fusion`, which runs the Receiver alone through the same
+`inputs_embeds` decode path:
+
+```bash
+.venv/bin/python scripts/run_eiyw.py --dataset data/tasks/hotpotqa_bridge_val.jsonl \
+  --num-examples 10 --no-fusion --output-dir results/eiyw_recvonly   # == half-context floor
+```
+
+Memory note: EIYW's prompt forward is **grad-enabled** (the soft tokens lead the
+sequence, so every prompt activation depends on them) — heavier than LCF-X, which
+can prefill the prompt under `no_grad`. Gradient checkpointing on the frozen
+Receiver is enabled automatically; lower `--batch-size` / raise `--grad-accum` as
+needed. The same `MAX_TRAIN` / `MAX_STEPS` / `BATCH_SIZE` / `GRAD_ACCUM` knobs
+work via `make eiyw-train`.
 
 ---
 

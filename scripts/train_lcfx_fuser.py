@@ -27,6 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from scripts._defaults import DEFAULT_RECEIVER, DEFAULT_SHARER  # noqa: E402
 from scripts._hf_cache import configure_hf_cache  # noqa: E402
 
 configure_hf_cache()
@@ -35,8 +36,10 @@ configure_hf_cache()
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--train-data", type=Path, required=True, help="Instruction JSONL")
-    parser.add_argument("--sharer-model", default="Qwen/Qwen2.5-0.5B-Instruct")
-    parser.add_argument("--receiver-model", default=None)
+    # Sharer and Receiver are always independent models; default to a symmetric
+    # Qwen pair when unspecified (the project assumes heterogeneous settings).
+    parser.add_argument("--sharer-model", default=DEFAULT_SHARER)
+    parser.add_argument("--receiver-model", default=DEFAULT_RECEIVER)
     # Defaults follow the LCF-X paper. On a smaller GPU, lower --batch-size and
     # raise --grad-accum to keep the effective batch (B*A) at 256 (see README).
     parser.add_argument("--bottleneck-dim", type=int, default=128, help="Latent dim (paper: 128)")
@@ -101,10 +104,12 @@ def main() -> None:
         train_rows, eval_rows = rows, None
     if args.max_train_examples is not None:
         train_rows = train_rows[: args.max_train_examples]
-    print(
-        f"Loaded {len(train_rows)} train"
-        + (f" / {len(eval_rows)} eval" if eval_rows else " (no eval split)")
-    )
+    # evaluate() only ever scores the first --eval-max-examples of the split, so
+    # drop the rest now (keeps the same examples; frees the unused dicts).
+    if eval_rows and args.eval_max_examples is not None:
+        eval_rows = eval_rows[: args.eval_max_examples]
+    eval_msg = f" / {len(eval_rows)} eval" if eval_rows else " (no eval split)"
+    print(f"Loaded {len(train_rows)} train" + eval_msg)
 
     pair = load_lcfx_pair(
         args.sharer_model, args.receiver_model, device=args.device, dtype=args.dtype

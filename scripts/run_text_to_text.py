@@ -25,6 +25,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 # Route HF caches under data/hf_cache (before transformers loads).
+from scripts._defaults import DEFAULT_RECEIVER, DEFAULT_SHARER  # noqa: E402
 from scripts._hf_cache import configure_hf_cache  # noqa: E402
 
 configure_hf_cache()
@@ -54,12 +55,10 @@ def load_examples(path: Path, limit: int | None) -> list[T2TExample]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path, required=True, help="Normalized JSONL")
-    parser.add_argument("--sharer-model", required=True)
-    parser.add_argument(
-        "--receiver-model",
-        default=None,
-        help="Defaults to the sharer model (single-model setup)",
-    )
+    # Sharer and Receiver are always independent models; default to a symmetric
+    # Qwen pair when unspecified (the project assumes heterogeneous settings).
+    parser.add_argument("--sharer-model", default=DEFAULT_SHARER)
+    parser.add_argument("--receiver-model", default=DEFAULT_RECEIVER)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--num-examples", type=int, default=None)
     parser.add_argument("--sharer-max-new-tokens", type=int, default=128)
@@ -78,7 +77,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    receiver_model = args.receiver_model or args.sharer_model
+    receiver_model = args.receiver_model
 
     examples = load_examples(args.dataset, args.num_examples)
     if not examples:

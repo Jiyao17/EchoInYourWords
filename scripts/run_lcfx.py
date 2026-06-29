@@ -29,6 +29,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 # Route HF caches under data/hf_cache (before transformers loads).
+from scripts._defaults import DEFAULT_RECEIVER, DEFAULT_SHARER  # noqa: E402
 from scripts._hf_cache import configure_hf_cache  # noqa: E402
 
 configure_hf_cache()
@@ -37,6 +38,7 @@ from methods.lcfx import (  # noqa: E402
     LCFXExample,
     LCFXFuser,
     check_pair_compatible,
+    load_fuser,
     load_lcfx_pair,
     run_lcfx_example,
     run_receiver_only_example,
@@ -61,10 +63,10 @@ def load_examples(path: Path, limit: int | None) -> list[LCFXExample]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path, required=True, help="Normalized JSONL")
-    parser.add_argument("--sharer-model", default="Qwen/Qwen2.5-0.5B-Instruct")
-    parser.add_argument(
-        "--receiver-model", default=None, help="Defaults to the sharer model"
-    )
+    # Sharer and Receiver are always independent models; default to a symmetric
+    # Qwen pair when unspecified (the project assumes heterogeneous settings).
+    parser.add_argument("--sharer-model", default=DEFAULT_SHARER)
+    parser.add_argument("--receiver-model", default=DEFAULT_RECEIVER)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--fuser-checkpoint", type=Path, default=None)
     parser.add_argument(
@@ -77,6 +79,11 @@ def main() -> None:
     parser.add_argument(
         "--no-fusion", action="store_true", help="Run the Receiver alone (no fusion)"
     )
+    parser.add_argument(
+        "--allow-model-mismatch",
+        action="store_true",
+        help="Load the fuser even if its stamped Sharer/Receiver differ from the pair",
+    )
     parser.add_argument("--num-examples", type=int, default=None)
     parser.add_argument("--max-new-tokens", type=int, default=64)
     parser.add_argument("--device", default=None)
@@ -88,7 +95,7 @@ def main() -> None:
     parser.add_argument("--print-every", type=int, default=10)
     args = parser.parse_args()
 
-    receiver_model = args.receiver_model or args.sharer_model
+    receiver_model = args.receiver_model
 
     examples = load_examples(args.dataset, args.num_examples)
     if not examples:
@@ -115,20 +122,22 @@ def main() -> None:
 
     fuser = None
     if not args.no_fusion:
-        zero_init = args.fuser_checkpoint is None
-        fuser = LCFXFuser.from_specs(
-            pair.sharer_spec,
-            pair.receiver_spec,
-            bottleneck_dim=args.bottleneck_dim,
-            zero_init=zero_init,
-        ).to(pair.device)
         if args.fuser_checkpoint is not None:
-            import torch
-
-            state = torch.load(args.fuser_checkpoint, map_location=pair.device)
-            fuser.load_state_dict(state)
+            fuser = load_fuser(
+                str(args.fuser_checkpoint),
+                pair,
+                device=pair.device,
+                allow_model_mismatch=args.allow_model_mismatch,
+                bottleneck_dim=args.bottleneck_dim,
+            ).to(pair.device)
             print(f"Loaded fuser checkpoint: {args.fuser_checkpoint}")
         else:
+            fuser = LCFXFuser.from_specs(
+                pair.sharer_spec,
+                pair.receiver_spec,
+                bottleneck_dim=args.bottleneck_dim,
+                zero_init=True,
+            ).to(pair.device)
             print("No checkpoint: using ZERO-INIT fuser (== receiver-only baseline)")
         fuser.eval()  # deterministic gating (plain sigmoid, no Gumbel noise)
         print(f"Fuser trainable params: {fuser.trainable_parameters()}")

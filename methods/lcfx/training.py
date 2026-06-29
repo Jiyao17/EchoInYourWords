@@ -231,13 +231,111 @@ def evaluate(
     return total / count if count else float("nan")
 
 
-def _save(fuser: LCFXFuser, path: str) -> None:
+CHECKPOINT_FORMAT = 2
+
+
+def _pair_arch(pair: LCFXPair) -> dict:
+    """Architecture the fuser must have for this Sharer/Receiver pair (sans bottleneck)."""
+
+    s, r = pair.sharer_spec, pair.receiver_spec
+    return {
+        "sharer_layers": s.layers,
+        "sharer_kv_heads": s.kv_heads,
+        "sharer_head_dim": s.head_dim,
+        "receiver_layers": r.layers,
+        "receiver_kv_heads": r.kv_heads,
+        "receiver_head_dim": r.head_dim,
+    }
+
+
+def save_fuser(
+    fuser: LCFXFuser, path: str, pair: LCFXPair, num_spans: int | None = None
+) -> None:
+    """Save the fuser stamped with the Sharer/Receiver it was trained for.
+
+    The payload is primitive-only (str/int + the tensor state_dict) so it loads
+    cleanly under ``torch.load(..., weights_only=True)``. ``load_fuser`` validates
+    the stamped model names + architecture against the pair used at eval time.
+    """
+
     import torch
 
     directory = os.path.dirname(path)
     if directory:
         os.makedirs(directory, exist_ok=True)
-    torch.save(fuser.state_dict(), path)
+    payload = {
+        "format": CHECKPOINT_FORMAT,
+        "state_dict": fuser.state_dict(),
+        "arch": fuser.arch_config(),
+        "sharer_model": pair.sharer_spec.name,
+        "receiver_model": pair.receiver_spec.name,
+        "num_spans": num_spans,
+    }
+    torch.save(payload, path)
+
+
+def load_fuser(
+    path: str,
+    pair: LCFXPair,
+    *,
+    device: Any = None,
+    allow_model_mismatch: bool = False,
+    bottleneck_dim: int = 128,
+) -> LCFXFuser:
+    """Load a trained fuser, validating it matches the Sharer/Receiver ``pair``.
+
+    New-format checkpoints (written by :func:`save_fuser`) carry the model names and
+    architecture. By default any mismatch against ``pair`` raises ``ValueError`` --
+    pass ``allow_model_mismatch=True`` to downgrade to a warning. Legacy bare
+    ``state_dict`` checkpoints are still accepted (rebuilt from the pair's specs).
+    """
+
+    import torch
+
+    ckpt = torch.load(path, map_location=device)
+
+    if not (isinstance(ckpt, dict) and "state_dict" in ckpt):
+        # Legacy: bare state_dict with no model identity. Rebuild from the pair.
+        print(
+            f"[load_fuser] {path}: legacy checkpoint (no model stamp) -- "
+            "cannot verify Sharer/Receiver; trusting the pair passed at eval time."
+        )
+        fuser = LCFXFuser.from_specs(
+            pair.sharer_spec, pair.receiver_spec, bottleneck_dim=bottleneck_dim, zero_init=False
+        )
+        fuser.load_state_dict(ckpt)
+        return fuser
+
+    expected_arch = {**_pair_arch(pair), "bottleneck_dim": bottleneck_dim}
+    mismatches: list[str] = []
+    if ckpt.get("sharer_model") != pair.sharer_spec.name:
+        mismatches.append(
+            f"sharer_model: checkpoint={ckpt.get('sharer_model')!r} != pair={pair.sharer_spec.name!r}"
+        )
+    if ckpt.get("receiver_model") != pair.receiver_spec.name:
+        mismatches.append(
+            f"receiver_model: checkpoint={ckpt.get('receiver_model')!r} != pair={pair.receiver_spec.name!r}"
+        )
+    ckpt_arch = ckpt.get("arch", {})
+    for key, want in expected_arch.items():
+        if ckpt_arch.get(key) != want:
+            mismatches.append(f"arch.{key}: checkpoint={ckpt_arch.get(key)} != pair={want}")
+
+    if mismatches:
+        detail = "\n  - ".join(mismatches)
+        message = (
+            f"Fuser checkpoint {path} was trained for a different setup:\n  - {detail}"
+        )
+        if not allow_model_mismatch:
+            raise ValueError(
+                message
+                + "\nPass --allow-model-mismatch (or allow_model_mismatch=True) to force loading."
+            )
+        print(f"[load_fuser] WARNING (forced): {message}")
+
+    fuser = LCFXFuser.from_arch_config(ckpt_arch, zero_init=False)
+    fuser.load_state_dict(ckpt["state_dict"])
+    return fuser
 
 
 def train_fuser(
@@ -333,7 +431,7 @@ def train_fuser(
         if eval_loss < best_eval:
             best_eval = eval_loss
             if checkpoint_path:
-                _save(fuser, checkpoint_path)
+                save_fuser(fuser, checkpoint_path, pair, num_spans)
                 saved_best = True
                 marker = "  (new best -> saved)"
         print(f"  [eval] opt_step {opt_step} | eval_loss {eval_loss:.4f}{marker}", flush=True)
@@ -374,7 +472,7 @@ def train_fuser(
             if eval_every and opt_step % eval_every == 0:
                 _maybe_eval_and_save()
             if checkpoint_path and save_every and opt_step % save_every == 0:
-                _save(fuser, checkpoint_path + ".latest")
+                save_fuser(fuser, checkpoint_path + ".latest", pair, num_spans)
             if max_steps is not None and opt_step >= max_steps:
                 stop = True
                 break
@@ -385,7 +483,7 @@ def train_fuser(
 
     # Persist: best already saved when eval was used; otherwise save the final fuser.
     if checkpoint_path and not saved_best:
-        _save(fuser, checkpoint_path)
+        save_fuser(fuser, checkpoint_path, pair, num_spans)
         print(f"Saved fuser checkpoint -> {checkpoint_path}")
     elif checkpoint_path:
         print(f"Best fuser checkpoint (eval_loss {best_eval:.4f}) -> {checkpoint_path}")
