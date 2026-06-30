@@ -8,7 +8,7 @@ and the other to the Receiver, so neither side can answer alone. The question is
 shared by both sides (the Sharer encodes it too); only the evidence is split.
 
 Only 2-hop questions are used (3-/4-hop have 3-4 supporting paragraphs, which do
-not split one-per-side). Output is normalized ``T2TExample`` rows (one JSON object
+not split one-per-side). Output is normalized `Example` rows (one JSON object
 per line), ready for every method/baseline.
 
     python scripts/prepare_musique.py --split train  --num-examples -1 --output data/tasks/musique_train.jsonl

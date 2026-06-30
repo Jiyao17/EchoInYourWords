@@ -20,7 +20,10 @@ from __future__ import annotations
 
 import os
 import random
+from pathlib import Path
 from typing import Any, Iterable
+
+from methods.common.progress import ProgressLogger
 
 from .cache import add_residual_inplace, extract_kv
 from .fuser import LCFXFuser
@@ -231,6 +234,66 @@ def evaluate(
     return total / count if count else float("nan")
 
 
+def evaluate_em_f1(
+    pair: LCFXPair,
+    fuser: LCFXFuser,
+    eval_data: list[Any],
+    *,
+    num_spans: int = 1,
+    max_new_tokens: int = 64,
+    max_examples: int | None = None,
+    brief_path: "str | Any | None" = None,
+) -> dict[str, float]:
+    """Generation-based EM/F1 over the eval set (the metric the paper reports).
+
+    Unlike :func:`evaluate` (teacher-forced loss only), this runs **real greedy
+    decoding** through the full fusion path, so it reflects EM/F1 — and surfaces
+    failures the loss hides (e.g. the model not stopping after the answer).
+    Returns ``{"em", "f1", "n"}``. Slower than the loss eval, so cap it with
+    ``max_examples``. With ``brief_path`` set, the per-example
+    answer/prediction/EM/F1 are written there as a TSV (a training-time snapshot,
+    same format as the inference ``predictions_brief.tsv``).
+    """
+
+    import torch
+
+    from methods.common.io import write_predictions_brief
+    from methods.common.scoring import score_free_form
+
+    from .runner import run_lcfx_example
+
+    items = [_as_example(e) for e in eval_data]
+    if max_examples is not None:
+        items = items[:max_examples]
+
+    was_training = fuser.training
+    fuser.eval()
+    results = []
+    em_sum = f1_sum = 0.0
+    n = 0
+    with torch.no_grad():
+        for ex in items:
+            if not ex.answer:
+                continue
+            result = run_lcfx_example(
+                ex, pair, fuser, num_spans=num_spans,
+                max_new_tokens=max_new_tokens, score_fn=score_free_form,
+            )
+            results.append(result)
+            em_sum += float(result.scores.get("em", 0.0))
+            f1_sum += float(result.scores.get("f1", 0.0))
+            n += 1
+    if brief_path is not None:
+        write_predictions_brief(results, brief_path)
+    if was_training:
+        fuser.train()
+    return {
+        "em": em_sum / n if n else float("nan"),
+        "f1": f1_sum / n if n else float("nan"),
+        "n": n,
+    }
+
+
 CHECKPOINT_FORMAT = 2
 
 
@@ -356,9 +419,11 @@ def train_fuser(
     eval_every: int | None = None,
     eval_max_examples: int | None = None,
     save_every: int | None = 50,
+    eval_em_examples: int = 0,
     shuffle: bool = True,
     seed: int = 0,
     checkpoint_path: str | None = None,
+    log_path: str | None = None,
 ) -> LCFXFuser:
     """Train only the fuser with frozen Sharer/Receiver. Returns the trained fuser.
 
@@ -374,6 +439,14 @@ def train_fuser(
       ``checkpoint_path``; otherwise the final fuser is saved there.
     - Every ``save_every`` optimizer steps a crash-safety snapshot is written to
       ``<checkpoint_path>.latest``.
+
+    Progress logging:
+    - The full run (train loss / lr per logged step, eval loss, EM/F1, best
+      markers) is persisted to ``log_path`` as JSONL — defaults to
+      ``training_log.jsonl`` beside ``checkpoint_path`` — so it survives the
+      session. ``eval_em_examples > 0`` adds a generation-based EM/F1 to each eval
+      (the metric the paper reports; the teacher-forced loss alone hides issues
+      like the model not stopping).
     """
 
     import torch
@@ -383,6 +456,28 @@ def train_fuser(
     fuser.train()
     torch.manual_seed(seed)
     rng = random.Random(seed)
+
+    if log_path is None and checkpoint_path:
+        log_path = str(Path(checkpoint_path).with_name("training_log.jsonl"))
+    logger = ProgressLogger(
+        log_path,
+        config={
+            "method": "lcf_x",
+            "sharer_model": pair.sharer_spec.name,
+            "receiver_model": pair.receiver_spec.name,
+            "trainable_params": fuser.trainable_parameters(),
+            "epochs": epochs,
+            "lr": lr,
+            "batch_size": batch_size,
+            "grad_accum": grad_accum,
+            "effective_batch": batch_size * grad_accum,
+            "warmup": max(0, int(warmup_steps)),
+            "num_spans": num_spans,
+            "bottleneck_dim": fuser.bottleneck_dim,
+            "eval_em_examples": eval_em_examples,
+            "checkpoint_path": checkpoint_path,
+        },
+    )
 
     train_list = list(train_data)
     eval_list = list(eval_data) if eval_data is not None else None
@@ -427,14 +522,33 @@ def train_fuser(
             batch_size=batch_size,
             max_examples=eval_max_examples,
         )
+        em = f1 = None
+        if eval_em_examples > 0:
+            brief_path = (
+                str(Path(checkpoint_path).with_name("eval_predictions_brief.tsv"))
+                if checkpoint_path else None
+            )
+            scores = evaluate_em_f1(
+                pair, fuser, eval_list, num_spans=num_spans,
+                max_examples=eval_em_examples, brief_path=brief_path,
+            )
+            em, f1 = scores["em"], scores["f1"]
+        is_best = eval_loss < best_eval
         marker = ""
-        if eval_loss < best_eval:
+        if is_best:
             best_eval = eval_loss
             if checkpoint_path:
                 save_fuser(fuser, checkpoint_path, pair, num_spans)
                 saved_best = True
                 marker = "  (new best -> saved)"
-        print(f"  [eval] opt_step {opt_step} | eval_loss {eval_loss:.4f}{marker}", flush=True)
+        em_str = f" | em {em:.4f} f1 {f1:.4f}" if em is not None else ""
+        print(
+            f"  [eval] opt_step {opt_step} | eval_loss {eval_loss:.4f}{em_str}{marker}",
+            flush=True,
+        )
+        logger.log(
+            "eval", opt_step=opt_step, eval_loss=eval_loss, em=em, f1=f1, best=is_best
+        )
 
     optimizer.zero_grad()
     for epoch in range(max(1, epochs)):
@@ -462,11 +576,17 @@ def train_fuser(
             opt_step += 1
 
             if log_every and opt_step % log_every == 0:
+                train_loss = running / running_count
+                cur_lr = scheduler.get_last_lr()[0]
                 print(
                     f"epoch {epoch + 1}/{epochs} opt_step {opt_step} "
-                    f"| train_loss {running / running_count:.4f} "
-                    f"| lr {scheduler.get_last_lr()[0]:.2e}",
+                    f"| train_loss {train_loss:.4f} "
+                    f"| lr {cur_lr:.2e}",
                     flush=True,
+                )
+                logger.log(
+                    "train", epoch=epoch + 1, opt_step=opt_step,
+                    train_loss=train_loss, lr=cur_lr,
                 )
                 running, running_count = 0.0, 0
             if eval_every and opt_step % eval_every == 0:
@@ -487,6 +607,14 @@ def train_fuser(
         print(f"Saved fuser checkpoint -> {checkpoint_path}")
     elif checkpoint_path:
         print(f"Best fuser checkpoint (eval_loss {best_eval:.4f}) -> {checkpoint_path}")
+
+    logger.log(
+        "end", opt_step=opt_step,
+        best_eval=(best_eval if eval_list else None),
+    )
+    if log_path:
+        print(f"Training log -> {log_path}")
+    logger.close()
 
     fuser.eval()
     return fuser

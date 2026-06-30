@@ -65,6 +65,18 @@ def main() -> None:
     parser.add_argument("--eval-max-examples", type=int, default=None)
     parser.add_argument("--save-every", type=int, default=50)
     parser.add_argument(
+        "--eval-em-examples",
+        type=int,
+        default=0,
+        help="Generation-based EM/F1 on N eval examples each eval (0=off; slower)",
+    )
+    parser.add_argument(
+        "--log-file",
+        type=Path,
+        default=None,
+        help="Training-progress JSONL (default: training_log.jsonl beside the checkpoint)",
+    )
+    parser.add_argument(
         "--eval-data", type=Path, default=None, help="Held-out JSONL (else use --val-frac)"
     )
     parser.add_argument(
@@ -140,8 +152,10 @@ def main() -> None:
         eval_every=args.eval_every,
         eval_max_examples=args.eval_max_examples,
         save_every=args.save_every,
+        eval_em_examples=args.eval_em_examples,
         seed=args.seed,
         checkpoint_path=str(args.checkpoint_out),
+        log_path=str(args.log_file) if args.log_file else None,
     )
 
 

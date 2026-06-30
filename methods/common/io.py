@@ -1,4 +1,11 @@
-"""Output helpers for text-to-text baseline runs."""
+"""Shared result aggregation + the standardized output writer.
+
+Every method writes the same files via :func:`write_run_outputs`. The aggregators
+and the writer are duck-typed over the per-method result dataclasses (T2TResult /
+LCFXResult / EIYWResult): they only read ``is_correct`` / ``scores`` /
+``latency`` / ``token_counts`` / ``prediction`` / ``answer`` and call
+``result.to_dict()``, so one implementation serves every method.
+"""
 
 from __future__ import annotations
 
@@ -8,10 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .runner import T2TResult
 
-
-def summarize_metrics(results: Sequence[T2TResult]) -> dict[str, Any]:
+def summarize_metrics(results: Sequence[Any]) -> dict[str, Any]:
     """Compute simple aggregate accuracy metrics."""
 
     evaluated = [result for result in results if result.is_correct is not None]
@@ -46,7 +51,7 @@ def summarize_metrics(results: Sequence[T2TResult]) -> dict[str, Any]:
     return metrics
 
 
-def summarize_latency(results: Sequence[T2TResult]) -> dict[str, Any]:
+def summarize_latency(results: Sequence[Any]) -> dict[str, Any]:
     """Compute aggregate latency statistics from result records."""
 
     totals = {
@@ -72,7 +77,7 @@ def summarize_latency(results: Sequence[T2TResult]) -> dict[str, Any]:
     }
 
 
-def summarize_tokens(results: Sequence[T2TResult]) -> dict[str, Any]:
+def summarize_tokens(results: Sequence[Any]) -> dict[str, Any]:
     """Aggregate token counts across result records.
 
     Counts that are ``None`` (backend did not report them) are skipped, and the
@@ -102,17 +107,66 @@ def summarize_tokens(results: Sequence[T2TResult]) -> dict[str, Any]:
     }
 
 
+def _clean_cell(text: Any) -> str:
+    """Collapse whitespace so a value fits one TSV cell."""
+
+    return " ".join(str("" if text is None else text).split())
+
+
+def write_predictions_brief(results: Sequence[Any], path: str | Path) -> Path:
+    """Write a compact, eyeball-friendly TSV: one row per example with just the
+    answer, the model prediction, and the EM/F1 scores.
+
+    A quick-scan companion to ``predictions.jsonl`` (which also carries the full
+    prompts and is too verbose to skim). ``em``/``f1`` come from the free-form
+    ``scores`` when present; otherwise ``em`` falls back to ``is_correct`` (e.g.
+    multiple-choice) and ``f1`` is left blank.
+    """
+
+    path = Path(path)
+    columns = ("id", "em", "f1", "prediction", "answer")
+    with path.open("w", encoding="utf-8") as handle:
+        handle.write("\t".join(columns) + "\n")
+        for result in results:
+            scores = getattr(result, "scores", {}) or {}
+            if "em" in scores:
+                em = "1" if scores["em"] else "0"
+            elif result.is_correct is not None:
+                em = "1" if result.is_correct else "0"
+            else:
+                em = ""
+            f1 = f"{float(scores['f1']):.3f}" if "f1" in scores else ""
+            row = (
+                _clean_cell(result.id),
+                em,
+                f1,
+                _clean_cell(result.prediction),
+                _clean_cell(result.answer),
+            )
+            handle.write("\t".join(row) + "\n")
+    return path
+
+
 def write_run_outputs(
-    results: Sequence[T2TResult],
+    results: Sequence[Any],
     output_dir: str | Path,
+    *,
+    method: str = "unknown",
     metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Path]:
-    """Write standardized output files for a T2T run."""
+    """Write the standardized output files for any method's run.
+
+    Files: ``predictions.jsonl``, ``predictions_brief.tsv``, ``metrics.json``,
+    ``latency.json``, ``run_metadata.json``. ``method`` names the run; a
+    ``"method"`` key in ``metadata`` overrides it (e.g. the no-fusion path of a
+    latent method records ``"receiver_only"``).
+    """
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
     predictions_path = output_path / "predictions.jsonl"
+    brief_path = output_path / "predictions_brief.tsv"
     metrics_path = output_path / "metrics.json"
     latency_path = output_path / "latency.json"
     metadata_path = output_path / "run_metadata.json"
@@ -120,12 +174,13 @@ def write_run_outputs(
     with predictions_path.open("w", encoding="utf-8") as handle:
         for result in results:
             handle.write(json.dumps(result.to_dict(), ensure_ascii=False) + "\n")
+    write_predictions_brief(results, brief_path)
 
     metrics = summarize_metrics(results)
     metrics["token_counts"] = summarize_tokens(results)
     latency = summarize_latency(results)
     run_metadata = {
-        "method": "text_to_text",
+        "method": method,
         "created_at": datetime.now(timezone.utc).isoformat(),
         **dict(metadata or {}),
     }
@@ -136,8 +191,17 @@ def write_run_outputs(
 
     return {
         "predictions": predictions_path,
+        "predictions_brief": brief_path,
         "metrics": metrics_path,
         "latency": latency_path,
         "metadata": metadata_path,
     }
 
+
+__all__ = [
+    "summarize_metrics",
+    "summarize_latency",
+    "summarize_tokens",
+    "write_predictions_brief",
+    "write_run_outputs",
+]

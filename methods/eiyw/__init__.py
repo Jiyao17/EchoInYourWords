@@ -5,7 +5,10 @@ Receiver's own question — that are prepended to the Receiver's input embedding
 The Receiver attends to them natively; only the translator is trained.
 """
 
-from .io import write_run_outputs
+from functools import partial
+
+from methods.common.io import write_run_outputs as _write_run_outputs
+
 from .model import EIYWPair, ModelSpec, check_pair_compatible, load_eiyw_pair
 from .prompts import build_receiver_prompt, build_sharer_encode_text
 from .runner import EIYWResult, run_eiyw_example, run_receiver_only_example
@@ -18,6 +21,10 @@ from .training import (
     train_translator,
 )
 from .translator import EIYWTranslator
+
+# Standard writer with this method's default name (a "method" in metadata still
+# overrides it, e.g. the no-fusion path records "receiver_only").
+write_run_outputs = partial(_write_run_outputs, method="eiyw")
 
 __all__ = [
     "EIYWExample",

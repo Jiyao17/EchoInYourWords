@@ -7,7 +7,7 @@ paragraphs into two disjoint 5-paragraph partitions, each containing exactly
 one gold paragraph and four distractors. One partition goes to the Sharer and
 the other to the Receiver, so neither side can answer alone.
 
-Output is written as normalized ``T2TExample`` rows (one JSON object per line)
+Output is written as normalized `Example` rows (one JSON object per line)
 to ``data/tasks/hotpotqa_bridge_cross.jsonl`` by default, ready for
 ``scripts/run_text_to_text.py``.
 """

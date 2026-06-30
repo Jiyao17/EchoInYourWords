@@ -19,6 +19,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from time import perf_counter
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -30,6 +31,7 @@ from scripts._hf_cache import configure_hf_cache  # noqa: E402
 
 configure_hf_cache()
 
+from methods.common import ProgressLogger, eval_progress_fields  # noqa: E402
 from methods.t2t import (  # noqa: E402
     T2TExample,
     load_generator,
@@ -116,6 +118,19 @@ def main() -> None:
             trust_remote_code=args.trust_remote_code,
         )
 
+    # Persistent eval progress (long runs survive the session); flushed per record.
+    progress = ProgressLogger(
+        args.output_dir / "eval_log.jsonl",
+        config={
+            "method": "text_to_text",
+            "dataset": str(args.dataset),
+            "sharer_model": args.sharer_model,
+            "receiver_model": receiver_model,
+            "num_examples": len(examples),
+        },
+    )
+    t0 = perf_counter()
+
     results = []
     for idx, example in enumerate(examples, start=1):
         results.append(
@@ -123,6 +138,10 @@ def main() -> None:
         )
         if args.print_every and idx % args.print_every == 0:
             print(f"  processed {idx}/{len(examples)}", flush=True)
+            progress.log("progress", **eval_progress_fields(results, len(examples), t0))
+
+    progress.log("done", **eval_progress_fields(results, len(examples), t0))
+    progress.close()
 
     run_metadata = {
         "dataset": str(args.dataset),

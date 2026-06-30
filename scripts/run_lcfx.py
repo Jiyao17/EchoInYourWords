@@ -23,6 +23,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from time import perf_counter
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -44,7 +45,11 @@ from methods.lcfx import (  # noqa: E402
     run_receiver_only_example,
     write_run_outputs,
 )
-from methods.t2t import score_free_form  # noqa: E402
+from methods.common import (  # noqa: E402
+    ProgressLogger,
+    eval_progress_fields,
+    score_free_form,
+)
 
 
 def load_examples(path: Path, limit: int | None) -> list[LCFXExample]:
@@ -142,6 +147,20 @@ def main() -> None:
         fuser.eval()  # deterministic gating (plain sigmoid, no Gumbel noise)
         print(f"Fuser trainable params: {fuser.trainable_parameters()}")
 
+    # Persistent eval progress (long runs survive the session); flushed per record.
+    method_label = "receiver_only" if args.no_fusion else "lcf_x"
+    progress = ProgressLogger(
+        args.output_dir / "eval_log.jsonl",
+        config={
+            "method": method_label,
+            "dataset": str(args.dataset),
+            "sharer_model": args.sharer_model,
+            "receiver_model": receiver_model,
+            "num_examples": len(examples),
+        },
+    )
+    t0 = perf_counter()
+
     results = []
     for idx, example in enumerate(examples, start=1):
         if args.no_fusion:
@@ -160,6 +179,10 @@ def main() -> None:
         results.append(result)
         if args.print_every and idx % args.print_every == 0:
             print(f"  processed {idx}/{len(examples)}", flush=True)
+            progress.log("progress", **eval_progress_fields(results, len(examples), t0))
+
+    progress.log("done", **eval_progress_fields(results, len(examples), t0))
+    progress.close()
 
     run_metadata = {
         "method": "receiver_only" if args.no_fusion else "lcf_x",

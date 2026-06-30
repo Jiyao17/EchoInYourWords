@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
 
-from .parsing import parse_choice_answer
+from methods.common.parsing import parse_choice_answer
+
 from .prompts import (
     build_receiver_only_prompt,
     build_receiver_prompt,

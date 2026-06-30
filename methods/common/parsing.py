@@ -1,4 +1,4 @@
-"""Answer parsing helpers for the text-to-text baseline."""
+"""Answer parsing helpers shared by every method's runner."""
 
 from __future__ import annotations
 
@@ -7,7 +7,10 @@ from collections.abc import Sequence
 
 
 def parse_choice_answer(text: str, choices: Sequence[str]) -> str | None:
-    """Extract a multiple-choice letter from model output."""
+    """Extract a multiple-choice letter from model output.
+
+    For free-form tasks (no ``choices``) the stripped text is returned as-is.
+    """
 
     if not choices:
         return text.strip() or None
@@ -30,3 +33,5 @@ def parse_choice_answer(text: str, choices: Sequence[str]) -> str | None:
 
     return None
 
+
+__all__ = ["parse_choice_answer"]

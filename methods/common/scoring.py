@@ -1,8 +1,8 @@
 """Free-form answer scoring (HotpotQA / SQuAD style EM and F1).
 
-These are the standard normalization and metric functions used by HotpotQA and
-SQuAD: lowercase, strip punctuation and articles, collapse whitespace, then
-compute exact match and token-level F1.
+Shared by every method. These are the standard normalization and metric
+functions used by HotpotQA and SQuAD: lowercase, strip punctuation and articles,
+collapse whitespace, then compute exact match and token-level F1.
 """
 
 from __future__ import annotations
@@ -72,3 +72,6 @@ def score_free_form(prediction: str, answer: str) -> dict[str, Any]:
         "em": em,
         "f1": f1_score(prediction, answer),
     }
+
+
+__all__ = ["normalize_answer", "exact_match", "f1_score", "score_free_form"]

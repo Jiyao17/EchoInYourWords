@@ -118,6 +118,9 @@ LOG_EVERY  ?= 10
 EVAL_EVERY ?= 50
 EVAL_MAX   ?= 500
 SAVE_EVERY ?= 50
+# Generation-based EM/F1 on N eval examples each eval (0=off; slower but is the
+# metric the paper reports — the teacher-forced eval loss hides stop-token issues).
+EVAL_EM    ?= 0
 
 # --- EIYW (our method): translator checkpoint + soft-token count ---
 # Reuses the LCF-X training knobs (SPANS/BOTTLENECK/LR/EPOCHS/BATCH_SIZE/GRAD_ACCUM/
@@ -186,7 +189,7 @@ lcfx-train: data
 	  --sharer-model $(LCFX_SHARER) --receiver-model $(LCFX_RECEIVER) \
 	  --bottleneck-dim $(BOTTLENECK) --num-spans $(SPANS) \
 	  --lr $(LR) --epochs $(EPOCHS) --batch-size $(BATCH_SIZE) --grad-accum $(GRAD_ACCUM) --warmup $(WARMUP) \
-	  --val-frac $(VAL_FRAC) --eval-max-examples $(EVAL_MAX) \
+	  --val-frac $(VAL_FRAC) --eval-max-examples $(EVAL_MAX) --eval-em-examples $(EVAL_EM) \
 	  --log-every $(LOG_EVERY) --eval-every $(EVAL_EVERY) --save-every $(SAVE_EVERY) \
 	  $(if $(MAX_TRAIN),--max-train-examples $(MAX_TRAIN),) \
 	  $(if $(MAX_STEPS),--max-steps $(MAX_STEPS),) \
@@ -228,7 +231,7 @@ eiyw-train: data
 	  --sharer-model $(EIYW_SHARER) --receiver-model $(EIYW_RECEIVER) \
 	  --num-soft-tokens $(SOFT_TOKENS) --bottleneck-dim $(BOTTLENECK) --num-spans $(SPANS) \
 	  --lr $(LR) --epochs $(EPOCHS) --batch-size $(BATCH_SIZE) --grad-accum $(GRAD_ACCUM) --warmup $(WARMUP) \
-	  --val-frac $(VAL_FRAC) --eval-max-examples $(EVAL_MAX) \
+	  --val-frac $(VAL_FRAC) --eval-max-examples $(EVAL_MAX) --eval-em-examples $(EVAL_EM) \
 	  --log-every $(LOG_EVERY) --eval-every $(EVAL_EVERY) --save-every $(SAVE_EVERY) \
 	  $(if $(MAX_TRAIN),--max-train-examples $(MAX_TRAIN),) \
 	  $(if $(MAX_STEPS),--max-steps $(MAX_STEPS),) \

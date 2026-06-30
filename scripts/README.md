@@ -1,10 +1,21 @@
 # Running Experiments
 
 This folder holds the runnable entrypoints. Every script writes the same
-standardized output files (`predictions.jsonl`, `metrics.json`, `latency.json`,
-`run_metadata.json`) into its `--output-dir`, so all runs are directly
-comparable. For the project layout and data/output contracts, see
-[../PROJECT_STRUCTURE.md](../PROJECT_STRUCTURE.md).
+standardized output files (`predictions.jsonl`, `predictions_brief.tsv`,
+`metrics.json`, `latency.json`, `run_metadata.json`) into its `--output-dir`, so
+all runs are directly comparable. `predictions_brief.tsv` is a quick-scan
+companion to `predictions.jsonl` — one row per example with just `id`, `em`,
+`f1`, `prediction`, `answer` (no prompts), e.g. `column -t -s$'\t' <file>` to
+eyeball answer vs. prediction. For the project layout and data/output contracts,
+see [../PROJECT_STRUCTURE.md](../PROJECT_STRUCTURE.md).
+
+Each eval run also writes a persistent **`eval_log.jsonl`** into its
+`--output-dir` (flushed per record, so it survives the session and a crash): a
+`start` config record, a `progress` record every `--print-every` examples with
+`processed`/`total`, `elapsed_s`, `rate_per_s`, `eta_s`, and the running
+`accuracy`/`em`/`f1`, then a `done` summary. Tail it to watch a long run:
+`tail -f <output-dir>/eval_log.jsonl`. (Training writes the analogous
+`training_log.jsonl` beside its checkpoint.)
 
 ## Prerequisites
 
@@ -214,6 +225,33 @@ Or via the Makefile (same knobs as overrides):
 make lcfx-train MAX_TRAIN=2000 BATCH_SIZE=8 GRAD_ACCUM=4   # fewer samples
 make lcfx-train MAX_STEPS=50   BATCH_SIZE=8 GRAD_ACCUM=4   # fewer optimizer steps
 ```
+
+**Training progress is persisted** (survives the session). Every run writes a
+`training_log.jsonl` next to its checkpoint — one JSON object per event: a
+`start` record with the full config, a `train` record per `--log-every`
+(`opt_step`, `train_loss`, `lr`), an `eval` record per eval (`eval_loss`, plus
+`em`/`f1` when enabled, and a `best` flag), and an `end` summary. Override the
+path with `--log-file`. Plot/inspect e.g.:
+
+```bash
+python -c "import json;[print(json.loads(l)) for l in open('data/checkpoints/lcfx/.../training_log.jsonl')]"
+```
+
+The teacher-forced **eval loss alone hides generation failures** (e.g. the model
+not emitting EOS after the answer — loss keeps dropping while EM collapses). Add
+generation-based EM/F1 to each eval with `--eval-em-examples N` (Makefile
+`EVAL_EM=N`; `0` = off, the default, since generation is slower):
+
+```bash
+make lcfx-train EVAL_EM=100   # report EM/F1 on 100 eval examples each eval
+make eiyw-train EVAL_EM=100
+```
+
+With `EVAL_EM > 0`, each eval also writes an **`eval_predictions_brief.tsv`**
+beside the checkpoint — the same `id`/`em`/`f1`/`prediction`/`answer` TSV as the
+inference `predictions_brief.tsv`, but for the dev set, overwritten each eval so
+it always holds the latest snapshot. Handy for watching *what* the model predicts
+as training progresses (e.g. spotting answers that are correct but don't stop).
 
 ### Test D — EIYW (our receiver-anchored method)
 

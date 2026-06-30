@@ -54,6 +54,7 @@ Use a method-module layout with a thin shared experiment layer:
 
 ```text
 methods/
+  common/             # shared layer: Example contract, scoring, parsing, prompts, IO
   t2t/
   lcfx/
   eiyw/                # new receiver-anchored method

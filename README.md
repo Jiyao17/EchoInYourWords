@@ -15,9 +15,6 @@ question, prepended to the Receiver's input).
 
 ## Setup
 
-- Python 3.12 venv at `.venv` — run everything as `.venv/bin/python ...`.
-- **torch must be the CUDA 11.8 build** (`torch==2.7.1+cu118`); the machine's
-  driver is too old for the default CUDA wheels.
 - The Hugging Face cache is auto-routed to `data/hf_cache` by
   `scripts/_hf_cache.py`. Prefix a command with `HF_HUB_OFFLINE=1` once assets are
   downloaded to skip Hub lookups.

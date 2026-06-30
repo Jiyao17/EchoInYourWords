@@ -53,6 +53,7 @@ EchoInYourWords/
 │   ├── BASELINES_SUMMARY.md      # context settings + why C2C/LCF are out of scope
 │   └── IMPLEMENTATION_INSIGHTS.md# framework / repo-shape decisions
 ├── methods/                  # METHOD IMPLEMENTATIONS (one package per method)
+│   ├── common/                   # SHARED experiment layer (contract, scoring, IO)
 │   ├── t2t/                      # text-to-text baseline (implemented)
 │   ├── lcfx/                     # cross-context Latent Cache Flow (implemented)
 │   └── eiyw/                     # receiver-anchored soft-token method (implemented)
@@ -79,20 +80,32 @@ EchoInYourWords/
 > documents*, not model prompts. The actual model prompts (Sharer / Receiver
 > templates) live in code at [methods/t2t/prompts.py](methods/t2t/prompts.py).
 
-## The T2T method package (`methods/t2t/`)
+## The shared layer (`methods/common/`)
 
-A model-agnostic library. The core never imports `torch`; the model backend uses
-deferred imports, so `import methods.t2t` works without a GPU stack.
+The thin experiment layer every method consumes (so methods never import one
+another). Import-light — no `torch`.
 
 | File | Responsibility |
 |------|----------------|
-| [schema.py](methods/t2t/schema.py) | `T2TExample` — the normalized example consumed by every method (the data contract). |
-| [prompts.py](methods/t2t/prompts.py) | Prompt builders: `build_sharer_prompt`, `build_receiver_prompt`, `build_receiver_only_prompt`, `format_choices`. |
+| [schema.py](methods/common/schema.py) | `Example` — the normalized cross-method data contract. Each method re-exports it under a local alias (`T2TExample` / `LCFXExample` / `EIYWExample`). |
+| [scoring.py](methods/common/scoring.py) | HotpotQA/SQuAD `normalize_answer`, `exact_match`, `f1_score`, `score_free_form` (EM/F1). |
+| [parsing.py](methods/common/parsing.py) | `parse_choice_answer` — extract a multiple-choice letter (returns raw text for free-form). |
+| [prompts.py](methods/common/prompts.py) | Method-agnostic prompt primitives: `format_choices`, `build_receiver_only_prompt` (the no-Sharer prompt). |
+| [io.py](methods/common/io.py) | Aggregate metrics/latency/tokens, `write_predictions_brief`, and the single `write_run_outputs(...)` used by every method (each binds its own `method=` default). |
+| [progress.py](methods/common/progress.py) | `ProgressLogger` — persists training **and eval** progress to JSONL (`training_log.jsonl` beside the checkpoint; `eval_log.jsonl` in the run's output dir) so long runs survive the session. `eval_progress_fields` computes counts / ETA / running accuracy-EM-F1. |
+
+## The T2T method package (`methods/t2t/`)
+
+A model-agnostic library. The core never imports `torch`; the model backend uses
+deferred imports, so `import methods.t2t` works without a GPU stack. Scoring,
+parsing, the data contract, and IO come from `methods.common` (re-exported here).
+
+| File | Responsibility |
+|------|----------------|
+| [schema.py](methods/t2t/schema.py) | `T2TExample` — alias of `methods.common.schema.Example`. |
+| [prompts.py](methods/t2t/prompts.py) | T2T-specific `build_sharer_prompt` / `build_receiver_prompt` (the natural-language message); re-exports shared `build_receiver_only_prompt`, `format_choices`. |
 | [model.py](methods/t2t/model.py) | `load_generator(...)` — turns a frozen HF causal LM into a text generator with a token budget; the only torch/transformers dependency. |
 | [runner.py](methods/t2t/runner.py) | Per-example execution: `run_t2t_example` (Sharer→Receiver) and `run_receiver_only_example` (no-Sharer baselines); `T2TResult`, `GenerationOutput`. |
-| [parsing.py](methods/t2t/parsing.py) | `parse_choice_answer` — extract a multiple-choice letter (returns raw text for free-form). |
-| [scoring.py](methods/t2t/scoring.py) | HotpotQA/SQuAD `normalize_answer`, `exact_match`, `f1_score`, `score_free_form` (EM/F1). |
-| [io.py](methods/t2t/io.py) | Aggregate metrics/latency/tokens and write the standardized output files. |
 
 ### Prompts: what they do
 
@@ -112,10 +125,10 @@ All prompts are centralized in [prompts.py](methods/t2t/prompts.py).
   "message from another model" block. Omits the context section entirely for the
   question-only baseline.
 
-### Data contract — `T2TExample`
+### Data contract — `Example`
 
-Every method consumes the same normalized example, so datasets are prepared once
-and reused for fair comparison:
+Every method consumes the same normalized example (`methods.common.schema.Example`),
+so datasets are prepared once and reused for fair comparison:
 
 ```json
 {
@@ -139,6 +152,7 @@ Every run writes four files into its `--output-dir` (under `results/`):
 | File | Contents |
 |------|----------|
 | `predictions.jsonl` | one record per example (prompts, message, output, prediction, answer, `is_correct`, `scores`, `latency`, `token_counts`, `metadata`). |
+| `predictions_brief.tsv` | quick-scan companion: one row per example with just `id`, `em`, `f1`, `prediction`, `answer` (no prompts). For eyeballing answer-vs-prediction fast. |
 | `metrics.json` | aggregate accuracy, free-form `scores` (EM/F1), and `token_counts` totals/averages. |
 | `latency.json` | per-stage and total latency totals/averages, using a uniform cross-method contract: `sharer_ms`, `fuser_ms` (translation/fusion — `0.0` for text-to-text, `>0` for cache/latent methods), `receiver_ms`, `total_ms`. |
 | `run_metadata.json` | method, models, dataset, budgets, scoring mode, timestamp. |
@@ -150,9 +164,10 @@ new receiver-anchored method) are compared apples-to-apples.
 ## The LCF-X and EIYW packages (`methods/lcfx/`, `methods/eiyw/`)
 
 Both mirror the T2T package shape (core import-light; only `model.py` /
-`fuser.py` / `translator.py` touch torch, via deferred imports) and reuse T2T's
-`T2TExample`, scoring, and IO contract. They differ only in how the Sharer's
-information reaches the Receiver:
+`fuser.py` / `translator.py` touch torch, via deferred imports) and consume the
+shared `methods.common` layer (the `Example` contract, scoring, parsing, prompt
+primitives, IO). They differ only in how the Sharer's information reaches the
+Receiver:
 
 - **LCF-X** (`fuser.py`, `cache.py`): pools the Sharer KV into one position-free
   summary per layer and fuses it as a **gated KV residual broadcast to every

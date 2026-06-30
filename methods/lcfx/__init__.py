@@ -1,12 +1,19 @@
 """LCF-X: cross-context, position-free latent cache communication."""
 
+from functools import partial
+
+from methods.common.io import write_run_outputs as _write_run_outputs
+
 from .fuser import LCFXFuser
-from .io import write_run_outputs
 from .model import LCFXPair, ModelSpec, check_pair_compatible, load_lcfx_pair
 from .prompts import build_receiver_prompt, build_sharer_encode_text
 from .runner import LCFXResult, run_lcfx_example, run_receiver_only_example
 from .schema import LCFXExample
 from .training import evaluate, example_loss, load_fuser, save_fuser, train_fuser
+
+# Standard writer with this method's default name (a "method" in metadata still
+# overrides it, e.g. the no-fusion path records "receiver_only").
+write_run_outputs = partial(_write_run_outputs, method="lcf_x")
 
 __all__ = [
     "LCFXExample",

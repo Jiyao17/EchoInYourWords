@@ -1,32 +1,21 @@
-"""Prompt builders for the text-to-text baseline."""
+"""Prompt builders specific to the text-to-text baseline.
+
+The Sharer-message and Receiver-with-message prompts are T2T-specific (T2T is the
+only method that passes a natural-language message). The method-agnostic pieces —
+``format_choices`` and the no-Sharer ``build_receiver_only_prompt`` — live in
+``methods.common.prompts`` and are re-exported here for convenience.
+"""
 
 from __future__ import annotations
 
+from methods.common.prompts import (
+    _choices_block,
+    _context_or_placeholder,
+    build_receiver_only_prompt,
+    format_choices,
+)
+
 from .schema import T2TExample
-
-
-def format_choices(choices: list[str] | tuple[str, ...]) -> str:
-    """Format choices as lettered multiple-choice options."""
-
-    if not choices:
-        return ""
-
-    lines = []
-    for idx, choice in enumerate(choices):
-        label = chr(ord("A") + idx)
-        lines.append(f"{label}. {choice}")
-    return "\n".join(lines)
-
-
-def _context_or_placeholder(context: str) -> str:
-    return context.strip() if context.strip() else "(no additional information)"
-
-
-def _choices_block(example: T2TExample) -> str:
-    choices = format_choices(tuple(example.choices))
-    if not choices:
-        return ""
-    return f"\n\nChoices:\n{choices}"
 
 
 def build_sharer_prompt(example: T2TExample) -> str:
@@ -50,39 +39,6 @@ def build_sharer_prompt(example: T2TExample) -> str:
         f"{example.question}"
         f"{_choices_block(example)}\n\n"
         "Message:"
-    )
-
-
-def build_receiver_only_prompt(
-    example: T2TExample, context: str
-) -> str:
-    """Build a no-Sharer prompt where the Receiver answers from ``context``.
-
-    Used for the LCF-X reference baselines (question-only / half-context /
-    full-context): there is no Sharer message, only the Receiver's own
-    available context (which may be empty for the question-only baseline).
-    """
-
-    if example.choices:
-        final_instruction = "\n\nRespond with only the option letter."
-    else:
-        final_instruction = (
-            "\n\nRespond with only the answer as a short phrase, "
-            "with no explanation."
-        )
-
-    info_block = ""
-    if context.strip():
-        info_block = f"Your information:\n{context.strip()}\n\n"
-
-    return (
-        "Answer the question using your own information.\n\n"
-        f"{info_block}"
-        "Question:\n"
-        f"{example.question}"
-        f"{_choices_block(example)}"
-        f"{final_instruction}\n\n"
-        "Answer:"
     )
 
 
@@ -110,3 +66,10 @@ def build_receiver_prompt(example: T2TExample, sharer_message: str) -> str:
         "Answer:"
     )
 
+
+__all__ = [
+    "format_choices",
+    "build_receiver_only_prompt",
+    "build_sharer_prompt",
+    "build_receiver_prompt",
+]

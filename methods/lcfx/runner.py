@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Any, Callable
 
-from methods.t2t.parsing import parse_choice_answer
+from methods.common.parsing import parse_choice_answer
 
 from .cache import extract_kv
 from .fuser import LCFXFuser
