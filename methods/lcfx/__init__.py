@@ -3,16 +3,16 @@
 from functools import partial
 
 from methods.common.io import write_run_outputs as _write_run_outputs
+from methods.common.prompts import build_receiver_prompt, build_sharer_encode_text
 
 from .fuser import LCFXFuser
 from .model import LCFXPair, ModelSpec, check_pair_compatible, load_lcfx_pair
-from .prompts import build_receiver_prompt, build_sharer_encode_text
-from .runner import LCFXResult, run_lcfx_example, run_receiver_only_example
+from .runner import LCFXResult, run_lcfx_example
 from .schema import LCFXExample
 from .training import evaluate, example_loss, load_fuser, save_fuser, train_fuser
 
 # Standard writer with this method's default name (a "method" in metadata still
-# overrides it, e.g. the no-fusion path records "receiver_only").
+# overrides it).
 write_run_outputs = partial(_write_run_outputs, method="lcf_x")
 
 __all__ = [
@@ -26,7 +26,6 @@ __all__ = [
     "check_pair_compatible",
     "load_lcfx_pair",
     "run_lcfx_example",
-    "run_receiver_only_example",
     "evaluate",
     "example_loss",
     "load_fuser",

@@ -3,7 +3,6 @@
 Orchestrates the cross-context latent pipeline for one example:
 encode the Sharer context -> pool to a position-free summary -> fuse to a
 Receiver cache residual -> decode the Receiver with that residual injected.
-Also provides a no-fusion Receiver-only run used for the zero-init equality check.
 """
 
 from __future__ import annotations
@@ -13,11 +12,11 @@ from time import perf_counter
 from typing import Any, Callable
 
 from methods.common.parsing import parse_choice_answer
+from methods.common.prompts import build_receiver_prompt, build_sharer_encode_text
 
 from .cache import extract_kv
 from .fuser import LCFXFuser
 from .model import LCFXPair
-from .prompts import build_receiver_prompt, build_sharer_encode_text
 from .schema import LCFXExample
 
 ScoreFn = Callable[[str, str], dict[str, Any]]
@@ -139,53 +138,6 @@ def run_lcfx_example(
         token_counts={
             "sharer_input": sharer_tokens,
             "sharer_output": n_layers * num_spans,  # latent summary slots, not text tokens
-            "receiver_input": recv_in,
-            "receiver_output": recv_out,
-        },
-        metadata=dict(example.metadata),
-    )
-
-
-def run_receiver_only_example(
-    example: LCFXExample,
-    pair: LCFXPair,
-    *,
-    max_new_tokens: int = 64,
-    score_fn: ScoreFn | None = None,
-) -> LCFXResult:
-    """Run the Receiver alone (no fusion) — the LCF-X zero-init reference."""
-
-    receiver_prompt = build_receiver_prompt(example)
-
-    start = perf_counter()
-    output, recv_in, recv_out = pair.decode_receiver(
-        receiver_prompt, residual_fn=None, max_new_tokens=max_new_tokens
-    )
-    receiver_ms = (perf_counter() - start) * 1000.0
-
-    prediction = parse_choice_answer(output, example.choices)
-    is_correct, scores = _score_prediction(prediction, example.answer, score_fn)
-
-    return LCFXResult(
-        id=example.id,
-        method="receiver_only",
-        sharer_prompt="",
-        sharer_message="",
-        receiver_prompt=receiver_prompt,
-        receiver_output=output,
-        prediction=prediction,
-        answer=example.answer,
-        is_correct=is_correct,
-        scores=scores,
-        latency={
-            "sharer_ms": 0.0,
-            "fuser_ms": 0.0,
-            "receiver_ms": receiver_ms,
-            "total_ms": receiver_ms,
-        },
-        token_counts={
-            "sharer_input": None,
-            "sharer_output": None,
             "receiver_input": recv_in,
             "receiver_output": recv_out,
         },

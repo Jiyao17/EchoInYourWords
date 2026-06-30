@@ -74,16 +74,18 @@ layer-count reconciliation.
 - The Sharer sees one partition, the Receiver the other; the Receiver answers the
   shared question but needs the Sharer's missing evidence.
 
-Comparison ladder (all free-form, EM/F1):
+Comparison (all free-form, EM/F1):
 
-- Receiver question-only: Receiver sees only the question. (lower bound)
-- Receiver half-context: Receiver sees only its own partition. (no-Sharer floor)
-- Receiver full-context: Receiver sees all evidence. (upper bound)
+- Single-model inference: one model answers from the **full** context (both
+  partitions). The no-communication reference / upper bound.
 - T2T: Sharer reads its partition and sends a bounded text message.
 - LCF-X: Sharer reads its partition and sends a pooled latent cache summary.
+- EIYW: Sharer reads its partition and sends K receiver-anchored soft tokens.
 
-Expected ordering: `question_only ≤ half ≤ {T2T, LCF-X} ≤ full`. Each method's
-value is how much of the half→full gap it recovers via communication.
+Each communication method's value is how much of the gap up to the full-context
+single model it recovers using only a Sharer message / latent summary / soft
+tokens (the Receiver alone, with just its own partition, is the floor — e.g. a
+zero-init LCF-X fuser sits there).
 
 ## Project implications
 

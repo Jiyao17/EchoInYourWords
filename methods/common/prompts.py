@@ -1,10 +1,19 @@
-"""Shared prompt primitives used across methods.
+"""Single home for every prompt builder used across methods.
 
-The pieces here are method-agnostic: choice formatting, and the **no-Sharer**
-Receiver prompt (the Receiver answers from a given context with no message from
-another model). T2T builds its own Sharer/Receiver message prompts on top of
-these; LCF-X and EIYW reuse ``build_receiver_only_prompt`` directly (the Sharer's
-information reaches the Receiver through the cache / soft tokens, not text).
+Three families live here so methods don't duplicate or accidentally share them:
+
+- **Communication prompts** used by the methods (T2T, LCF-X, EIYW):
+  - ``build_sharer_prompt`` / ``build_receiver_message_prompt`` — T2T's
+    natural-language Sharer message and the Receiver-with-message prompt.
+  - ``build_sharer_encode_text`` / ``build_receiver_prompt`` — the latent
+    methods' Sharer encode text and the no-message Receiver prompt (the Sharer's
+    information reaches the Receiver through the cache / soft tokens, not text).
+- **Single-model inference**: ``build_single_model_prompt`` — a *dedicated*
+  prompt for one model answering from a given context. Kept deliberately separate
+  from the method receiver prompt so editing one never disturbs the other.
+
+All builders are duck-typed on the example fields ``question``, ``choices``,
+``sharer_context``, ``receiver_context``; every ``*Example`` provides them.
 """
 
 from __future__ import annotations
@@ -36,23 +45,88 @@ def _choices_block(example: Example) -> str:
     return f"\n\nChoices:\n{choices}"
 
 
-def build_receiver_only_prompt(example: Example, context: str) -> str:
-    """Build a no-Sharer prompt where the Receiver answers from ``context``.
+def _final_instruction(example: Example) -> str:
+    if example.choices:
+        return "\n\nRespond with only the option letter."
+    return (
+        "\n\nRespond with only the answer as a short phrase, "
+        "with no explanation."
+    )
 
-    Used for the receiver reference baselines (question-only / half-context /
-    full-context) and as the Receiver prompt for LCF-X / EIYW: there is no Sharer
-    text message, only the Receiver's own available context (which may be empty
-    for the question-only baseline).
+
+# --------------------------------------------------------------------------- #
+# T2T communication prompts (natural-language message between two models)
+# --------------------------------------------------------------------------- #
+def build_sharer_prompt(example: Example) -> str:
+    """Build the prompt used to ask the Sharer for a message.
+
+    The Sharer may hold only part of the information needed (cross-context
+    setting), so it is asked to relay relevant facts from its own information
+    rather than guess a final answer it cannot support.
     """
 
-    if example.choices:
-        final_instruction = "\n\nRespond with only the option letter."
-    else:
-        final_instruction = (
-            "\n\nRespond with only the answer as a short phrase, "
-            "with no explanation."
-        )
+    return (
+        "You are helping another model answer a question.\n"
+        "You may only have part of the information needed. Read your information "
+        "below and write a concise message that relays the facts from it that are "
+        "most relevant to the question.\n"
+        "Only state facts supported by your information. Do not guess the final "
+        "answer if your information is insufficient.\n\n"
+        "Your information:\n"
+        f"{_context_or_placeholder(example.sharer_context)}\n\n"
+        "Question:\n"
+        f"{example.question}"
+        f"{_choices_block(example)}\n\n"
+        "Message:"
+    )
 
+
+def build_receiver_message_prompt(example: Example, sharer_message: str) -> str:
+    """Build the T2T prompt asking the Receiver for the final answer.
+
+    The Receiver answers from its own information plus the Sharer's text message.
+    """
+
+    return (
+        "Answer the task using your own information and the message from another model.\n\n"
+        "Your information:\n"
+        f"{_context_or_placeholder(example.receiver_context)}\n\n"
+        "Message from the other model:\n"
+        f"{sharer_message.strip()}\n\n"
+        "Question:\n"
+        f"{example.question}"
+        f"{_choices_block(example)}"
+        f"{_final_instruction(example)}\n\n"
+        "Answer:"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Latent-method communication prompts (LCF-X, EIYW)
+# --------------------------------------------------------------------------- #
+def build_sharer_encode_text(example: Example) -> str:
+    """Text the Sharer encodes into its KV cache (its context + the question).
+
+    Shared by LCF-X and EIYW: the Sharer's own context, never the Receiver's
+    evidence, with the shared question (and choices, if any).
+    """
+
+    context = example.sharer_context.strip() or "(no additional information)"
+    text = f"Information:\n{context}\n\nQuestion:\n{example.question}"
+    if example.choices:
+        text += "\n\nChoices:\n" + format_choices(tuple(example.choices))
+    return text
+
+
+def build_receiver_prompt(example: Example) -> str:
+    """Latent-method Receiver prompt: the Receiver answers from its own context.
+
+    Shared by LCF-X and EIYW. The Sharer's information arrives through the fused
+    cache / soft tokens, **not** through text, so this is exactly the Receiver's
+    own-context prompt with no Sharer message.
+    """
+
+    context = example.receiver_context
     info_block = ""
     if context.strip():
         info_block = f"Your information:\n{context.strip()}\n\n"
@@ -63,9 +137,42 @@ def build_receiver_only_prompt(example: Example, context: str) -> str:
         "Question:\n"
         f"{example.question}"
         f"{_choices_block(example)}"
-        f"{final_instruction}\n\n"
+        f"{_final_instruction(example)}\n\n"
         "Answer:"
     )
 
 
-__all__ = ["format_choices", "build_receiver_only_prompt"]
+# --------------------------------------------------------------------------- #
+# Single-model inference (one model answers from a given context)
+# --------------------------------------------------------------------------- #
+def build_single_model_prompt(example: Example, context: str) -> str:
+    """Dedicated prompt for a single model answering from ``context``.
+
+    Intentionally independent of the method receiver prompts: this is the
+    single-model baseline (one model, no communication), so changes to the
+    method prompts must never affect it (and vice versa).
+    """
+
+    info_block = ""
+    if context.strip():
+        info_block = f"Information:\n{context.strip()}\n\n"
+
+    return (
+        "Answer the question using the information provided.\n\n"
+        f"{info_block}"
+        "Question:\n"
+        f"{example.question}"
+        f"{_choices_block(example)}"
+        f"{_final_instruction(example)}\n\n"
+        "Answer:"
+    )
+
+
+__all__ = [
+    "format_choices",
+    "build_sharer_prompt",
+    "build_receiver_message_prompt",
+    "build_sharer_encode_text",
+    "build_receiver_prompt",
+    "build_single_model_prompt",
+]

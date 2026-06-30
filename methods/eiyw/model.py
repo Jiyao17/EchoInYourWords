@@ -9,7 +9,7 @@ tokens prepended to its input. This is the only EIYW module that loads models;
 Decoding differs from LCF-X: EIYW prepends the translated soft tokens to the
 Receiver's input *embeddings*, so prefill uses ``inputs_embeds`` (LCF-X prefilled
 ``input_ids`` and injected a KV residual). With no soft tokens this reduces to
-ordinary greedy decoding (the ``--no-fusion`` Receiver-only floor).
+ordinary greedy decoding (the Receiver answering from its own context alone).
 """
 
 from __future__ import annotations

@@ -8,12 +8,11 @@ from time import perf_counter
 from typing import Any
 
 from methods.common.parsing import parse_choice_answer
-
-from .prompts import (
-    build_receiver_only_prompt,
-    build_receiver_prompt,
+from methods.common.prompts import (
+    build_receiver_message_prompt,
     build_sharer_prompt,
 )
+
 from .schema import T2TExample
 
 
@@ -131,7 +130,7 @@ def run_t2t_example(
     sharer_gen, sharer_ms = _timed_generate(sharer_generate, sharer_prompt)
     sharer_message = sharer_gen.text
 
-    receiver_prompt = build_receiver_prompt(example, sharer_message)
+    receiver_prompt = build_receiver_message_prompt(example, sharer_message)
     receiver_gen, receiver_ms = _timed_generate(receiver_generate, receiver_prompt)
     receiver_output = receiver_gen.text
 
@@ -164,78 +163,5 @@ def run_t2t_example(
             "receiver_output": receiver_gen.output_tokens,
         },
         metadata=dict(example.metadata),
-    )
-
-
-# Receiver-only context for each LCF-X reference baseline.
-RECEIVER_CONTEXT_MODES = ("question_only", "half", "full")
-
-
-def _receiver_context(example: T2TExample, context_mode: str) -> str:
-    """Resolve the Receiver's available context for a no-Sharer baseline."""
-
-    if context_mode == "question_only":
-        return ""
-    if context_mode == "half":
-        return example.receiver_context
-    if context_mode == "full":
-        parts = [example.sharer_context, example.receiver_context]
-        return "\n\n".join(p for p in parts if p.strip())
-    raise ValueError(
-        f"Unknown context_mode {context_mode!r}; expected one of "
-        f"{RECEIVER_CONTEXT_MODES}"
-    )
-
-
-def run_receiver_only_example(
-    example: T2TExample,
-    receiver_generate: TextGenerator,
-    context_mode: str = "half",
-    score_fn: ScoreFn | None = None,
-) -> T2TResult:
-    """Run a no-Sharer reference baseline (LCF-X).
-
-    The Receiver answers from a subset of the evidence and no Sharer message:
-
-    - ``question_only``: no context at all;
-    - ``half``: only the Receiver's own partition (5 of 10 paragraphs);
-    - ``full``: both partitions combined (all 10 paragraphs).
-    """
-
-    context = _receiver_context(example, context_mode)
-    receiver_prompt = build_receiver_only_prompt(example, context)
-    receiver_gen, receiver_ms = _timed_generate(receiver_generate, receiver_prompt)
-    receiver_output = receiver_gen.text
-
-    prediction = parse_choice_answer(receiver_output, example.choices)
-    is_correct, scores = _score_prediction(prediction, example.answer, score_fn)
-
-    metadata = dict(example.metadata)
-    metadata["context_mode"] = context_mode
-
-    return T2TResult(
-        id=example.id,
-        method=f"receiver_{context_mode}",
-        sharer_prompt="",
-        sharer_message="",
-        receiver_prompt=receiver_prompt,
-        receiver_output=receiver_output,
-        prediction=prediction,
-        answer=example.answer,
-        is_correct=is_correct,
-        scores=scores,
-        latency={
-            "sharer_ms": 0.0,
-            "fuser_ms": 0.0,
-            "receiver_ms": receiver_ms,
-            "total_ms": receiver_ms,
-        },
-        token_counts={
-            "sharer_input": None,
-            "sharer_output": None,
-            "receiver_input": receiver_gen.input_tokens,
-            "receiver_output": receiver_gen.output_tokens,
-        },
-        metadata=metadata,
     )
 

@@ -1,21 +1,21 @@
-"""Run a no-Sharer Receiver baseline (LCF-X reference points).
+"""Run the single-model inference baseline.
 
-These baselines have no Sharer message; the Receiver answers from a subset of
-the evidence:
+One model answers each question from the **full** context (both partitions
+combined) — no Sharer, no communication. This is the upper-bound reference the
+communication methods (T2T, LCF-X, EIYW) are measured against.
 
-- ``question_only``: no context at all;
-- ``half``: only the Receiver's own partition (5 of 10 paragraphs);
-- ``full``: both partitions combined (all 10 paragraphs).
+It uses a dedicated single-model prompt (``build_single_model_prompt``) that is
+deliberately separate from the method receiver prompts, so changes to one never
+disturb the other.
 
-Example (half-context, the "no sharer / 5 of 10 paragraphs" setting):
+Example (full-context single model on cross-context HotpotQA-bridge):
 
-    python scripts/run_receiver_baseline.py \
+    python scripts/run_single_model.py \
         --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
-        --context half \
-        --receiver-model Qwen/Qwen2.5-0.5B-Instruct \
-        --output-dir results/receiver_half_context
+        --model Qwen/Qwen2.5-0.5B-Instruct \
+        --output-dir results/single_model
 
-Writes the same standardized output files as the T2T runner.
+Writes the same standardized output files as the method runners.
 """
 
 from __future__ import annotations
@@ -37,10 +37,13 @@ from scripts._hf_cache import configure_hf_cache  # noqa: E402
 configure_hf_cache()
 
 from methods.common import ProgressLogger, eval_progress_fields  # noqa: E402
+from methods.common.prompts import build_single_model_prompt  # noqa: E402
 from methods.t2t import (  # noqa: E402
+    GenerationOutput,
     T2TExample,
+    T2TResult,
     load_generator,
-    run_receiver_only_example,
+    parse_choice_answer,
     score_free_form,
     write_run_outputs,
 )
@@ -59,19 +62,70 @@ def load_examples(path: Path, limit: int | None) -> list[T2TExample]:
     return examples
 
 
+def _full_context(example: T2TExample) -> str:
+    """Both partitions combined — the single model sees all the evidence."""
+
+    parts = [example.sharer_context, example.receiver_context]
+    return "\n\n".join(p for p in parts if p.strip())
+
+
+def run_single_model_example(example, generate, score_fn=None) -> T2TResult:
+    """Generate one single-model answer from the full context."""
+
+    prompt = build_single_model_prompt(example, _full_context(example))
+
+    start = perf_counter()
+    output = generate(prompt)
+    receiver_ms = (perf_counter() - start) * 1000.0
+    if not isinstance(output, GenerationOutput):
+        output = GenerationOutput(text=str(output))
+    receiver_output = output.text.strip()
+
+    prediction = parse_choice_answer(receiver_output, example.choices)
+    is_correct: bool | None = None
+    scores: dict = {}
+    if example.answer is not None and prediction is not None:
+        if score_fn is not None:
+            scores = dict(score_fn(prediction, example.answer))
+            if "is_correct" in scores:
+                is_correct = bool(scores["is_correct"])
+        else:
+            is_correct = prediction.strip().upper() == example.answer.strip().upper()
+
+    return T2TResult(
+        id=example.id,
+        method="single_model",
+        sharer_prompt="",
+        sharer_message="",
+        receiver_prompt=prompt,
+        receiver_output=receiver_output,
+        prediction=prediction,
+        answer=example.answer,
+        is_correct=is_correct,
+        scores=scores,
+        latency={
+            "sharer_ms": 0.0,
+            "fuser_ms": 0.0,
+            "receiver_ms": receiver_ms,
+            "total_ms": receiver_ms,
+        },
+        token_counts={
+            "sharer_input": None,
+            "sharer_output": None,
+            "receiver_input": output.input_tokens,
+            "receiver_output": output.output_tokens,
+        },
+        metadata=dict(example.metadata),
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path, required=True, help="Normalized JSONL")
-    parser.add_argument(
-        "--context",
-        choices=["question_only", "half", "full"],
-        default="half",
-        help="How much evidence the Receiver sees (default: half)",
-    )
-    parser.add_argument("--receiver-model", default=DEFAULT_RECEIVER)
+    parser.add_argument("--model", default=DEFAULT_RECEIVER)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--num-examples", type=int, default=None)
-    parser.add_argument("--receiver-max-new-tokens", type=int, default=64)
+    parser.add_argument("--max-new-tokens", type=int, default=64)
     parser.add_argument("--device", default=None)
     parser.add_argument("--dtype", default="auto")
     parser.add_argument("--trust-remote-code", action="store_true")
@@ -87,7 +141,6 @@ def main() -> None:
     if not examples:
         raise SystemExit(f"No examples loaded from {args.dataset}")
     print(f"Loaded {len(examples)} examples from {args.dataset}")
-    print(f"Receiver context mode: {args.context}")
 
     has_choices = any(ex.choices for ex in examples)
     if args.scoring == "auto":
@@ -97,10 +150,10 @@ def main() -> None:
     score_fn = score_free_form if free_form else None
     print(f"Scoring mode: {'free_form (EM/F1)' if free_form else 'multiple_choice'}")
 
-    print(f"Loading receiver model: {args.receiver_model}")
-    receiver_gen = load_generator(
-        args.receiver_model,
-        max_new_tokens=args.receiver_max_new_tokens,
+    print(f"Loading model: {args.model}")
+    generate = load_generator(
+        args.model,
+        max_new_tokens=args.max_new_tokens,
         deterministic=True,
         device=args.device,
         dtype=args.dtype,
@@ -111,10 +164,9 @@ def main() -> None:
     progress = ProgressLogger(
         args.output_dir / "eval_log.jsonl",
         config={
-            "method": f"receiver_{args.context}",
+            "method": "single_model",
             "dataset": str(args.dataset),
-            "receiver_model": args.receiver_model,
-            "context_mode": args.context,
+            "model": args.model,
             "num_examples": len(examples),
         },
     )
@@ -122,14 +174,7 @@ def main() -> None:
 
     results = []
     for idx, example in enumerate(examples, start=1):
-        results.append(
-            run_receiver_only_example(
-                example,
-                receiver_gen,
-                context_mode=args.context,
-                score_fn=score_fn,
-            )
-        )
+        results.append(run_single_model_example(example, generate, score_fn=score_fn))
         if args.print_every and idx % args.print_every == 0:
             print(f"  processed {idx}/{len(examples)}", flush=True)
             progress.log("progress", **eval_progress_fields(results, len(examples), t0))
@@ -138,12 +183,11 @@ def main() -> None:
     progress.close()
 
     run_metadata = {
-        "method": f"receiver_{args.context}",
+        "method": "single_model",
         "dataset": str(args.dataset),
-        "receiver_model": args.receiver_model,
-        "context_mode": args.context,
+        "model": args.model,
         "num_examples": len(examples),
-        "receiver_max_new_tokens": args.receiver_max_new_tokens,
+        "max_new_tokens": args.max_new_tokens,
         "scoring": "free_form" if free_form else "multiple_choice",
         "dtype": args.dtype,
     }

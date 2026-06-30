@@ -13,8 +13,8 @@ Example (cross-context HotpotQA-bridge, zero-init fuser == receiver baseline):
         --output-dir results/lcfx_hotpotqa_zeroinit
 
 With no ``--fuser-checkpoint`` the fuser is zero-initialized, so LCF-X reproduces
-the Receiver-only run (a plumbing-correctness check). ``--no-fusion`` runs the
-Receiver alone explicitly. Writes the four standardized output files.
+the single-model floor (a plumbing-correctness check). Writes the four
+standardized output files.
 """
 
 from __future__ import annotations
@@ -42,7 +42,6 @@ from methods.lcfx import (  # noqa: E402
     load_fuser,
     load_lcfx_pair,
     run_lcfx_example,
-    run_receiver_only_example,
     write_run_outputs,
 )
 from methods.common import (  # noqa: E402
@@ -81,9 +80,6 @@ def main() -> None:
         help="Latent dim; must match the trained --fuser-checkpoint (paper: 128)",
     )
     parser.add_argument("--num-spans", type=int, default=1, help="Sharer pooling spans")
-    parser.add_argument(
-        "--no-fusion", action="store_true", help="Run the Receiver alone (no fusion)"
-    )
     parser.add_argument(
         "--allow-model-mismatch",
         action="store_true",
@@ -125,34 +121,31 @@ def main() -> None:
     )
     print("pair compatibility:", json.dumps(check_pair_compatible(pair)))
 
-    fuser = None
-    if not args.no_fusion:
-        if args.fuser_checkpoint is not None:
-            fuser = load_fuser(
-                str(args.fuser_checkpoint),
-                pair,
-                device=pair.device,
-                allow_model_mismatch=args.allow_model_mismatch,
-                bottleneck_dim=args.bottleneck_dim,
-            ).to(pair.device)
-            print(f"Loaded fuser checkpoint: {args.fuser_checkpoint}")
-        else:
-            fuser = LCFXFuser.from_specs(
-                pair.sharer_spec,
-                pair.receiver_spec,
-                bottleneck_dim=args.bottleneck_dim,
-                zero_init=True,
-            ).to(pair.device)
-            print("No checkpoint: using ZERO-INIT fuser (== receiver-only baseline)")
-        fuser.eval()  # deterministic gating (plain sigmoid, no Gumbel noise)
-        print(f"Fuser trainable params: {fuser.trainable_parameters()}")
+    if args.fuser_checkpoint is not None:
+        fuser = load_fuser(
+            str(args.fuser_checkpoint),
+            pair,
+            device=pair.device,
+            allow_model_mismatch=args.allow_model_mismatch,
+            bottleneck_dim=args.bottleneck_dim,
+        ).to(pair.device)
+        print(f"Loaded fuser checkpoint: {args.fuser_checkpoint}")
+    else:
+        fuser = LCFXFuser.from_specs(
+            pair.sharer_spec,
+            pair.receiver_spec,
+            bottleneck_dim=args.bottleneck_dim,
+            zero_init=True,
+        ).to(pair.device)
+        print("No checkpoint: using ZERO-INIT fuser (== single-model floor)")
+    fuser.eval()  # deterministic gating (plain sigmoid, no Gumbel noise)
+    print(f"Fuser trainable params: {fuser.trainable_parameters()}")
 
     # Persistent eval progress (long runs survive the session); flushed per record.
-    method_label = "receiver_only" if args.no_fusion else "lcf_x"
     progress = ProgressLogger(
         args.output_dir / "eval_log.jsonl",
         config={
-            "method": method_label,
+            "method": "lcf_x",
             "dataset": str(args.dataset),
             "sharer_model": args.sharer_model,
             "receiver_model": receiver_model,
@@ -163,19 +156,14 @@ def main() -> None:
 
     results = []
     for idx, example in enumerate(examples, start=1):
-        if args.no_fusion:
-            result = run_receiver_only_example(
-                example, pair, max_new_tokens=args.max_new_tokens, score_fn=score_fn
-            )
-        else:
-            result = run_lcfx_example(
-                example,
-                pair,
-                fuser,
-                num_spans=args.num_spans,
-                max_new_tokens=args.max_new_tokens,
-                score_fn=score_fn,
-            )
+        result = run_lcfx_example(
+            example,
+            pair,
+            fuser,
+            num_spans=args.num_spans,
+            max_new_tokens=args.max_new_tokens,
+            score_fn=score_fn,
+        )
         results.append(result)
         if args.print_every and idx % args.print_every == 0:
             print(f"  processed {idx}/{len(examples)}", flush=True)
@@ -185,7 +173,7 @@ def main() -> None:
     progress.close()
 
     run_metadata = {
-        "method": "receiver_only" if args.no_fusion else "lcf_x",
+        "method": "lcf_x",
         "dataset": str(args.dataset),
         "sharer_model": args.sharer_model,
         "receiver_model": receiver_model,
@@ -196,7 +184,6 @@ def main() -> None:
         "fuser_checkpoint": (
             str(args.fuser_checkpoint) if args.fuser_checkpoint else None
         ),
-        "fusion": not args.no_fusion,
         "scoring": "free_form" if free_form else "multiple_choice",
         "dtype": args.dtype,
     }

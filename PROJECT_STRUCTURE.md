@@ -64,7 +64,7 @@ EchoInYourWords/
 │   ├── run_text_to_text.py       # runs the T2T Sharer→Receiver pipeline
 │   ├── run_lcfx.py / train_lcfx_fuser.py   # LCF-X eval / fuser training
 │   ├── run_eiyw.py / train_eiyw.py         # EIYW eval / translator training
-│   └── run_receiver_baseline.py  # runs no-Sharer reference baselines
+│   └── run_single_model.py       # single-model inference baseline (full context)
 ├── data/
 │   ├── hf_cache/                 # HuggingFace cache (its native single-root layout)
 │   │   ├── hub/                  #   all Hub downloads — models--… and datasets--…
@@ -78,7 +78,7 @@ EchoInYourWords/
 
 > **Note on the word "prompt":** the top-level `prompt/` folder holds *planning
 > documents*, not model prompts. The actual model prompts (Sharer / Receiver
-> templates) live in code at [methods/t2t/prompts.py](methods/t2t/prompts.py).
+> templates) live in code at [methods/common/prompts.py](methods/common/prompts.py).
 
 ## The shared layer (`methods/common/`)
 
@@ -90,7 +90,7 @@ another). Import-light — no `torch`.
 | [schema.py](methods/common/schema.py) | `Example` — the normalized cross-method data contract. Each method re-exports it under a local alias (`T2TExample` / `LCFXExample` / `EIYWExample`). |
 | [scoring.py](methods/common/scoring.py) | HotpotQA/SQuAD `normalize_answer`, `exact_match`, `f1_score`, `score_free_form` (EM/F1). |
 | [parsing.py](methods/common/parsing.py) | `parse_choice_answer` — extract a multiple-choice letter (returns raw text for free-form). |
-| [prompts.py](methods/common/prompts.py) | Method-agnostic prompt primitives: `format_choices`, `build_receiver_only_prompt` (the no-Sharer prompt). |
+| [prompts.py](methods/common/prompts.py) | **All** prompt builders: T2T's `build_sharer_prompt` / `build_receiver_message_prompt`, the latent methods' `build_sharer_encode_text` / `build_receiver_prompt` (shared by LCF-X & EIYW), the dedicated `build_single_model_prompt` (single-model baseline), and `format_choices`. |
 | [io.py](methods/common/io.py) | Aggregate metrics/latency/tokens, `write_predictions_brief`, and the single `write_run_outputs(...)` used by every method (each binds its own `method=` default). |
 | [progress.py](methods/common/progress.py) | `ProgressLogger` — persists training **and eval** progress to JSONL (`training_log.jsonl` beside the checkpoint; `eval_log.jsonl` in the run's output dir) so long runs survive the session. `eval_progress_fields` computes counts / ETA / running accuracy-EM-F1. |
 
@@ -103,27 +103,32 @@ parsing, the data contract, and IO come from `methods.common` (re-exported here)
 | File | Responsibility |
 |------|----------------|
 | [schema.py](methods/t2t/schema.py) | `T2TExample` — alias of `methods.common.schema.Example`. |
-| [prompts.py](methods/t2t/prompts.py) | T2T-specific `build_sharer_prompt` / `build_receiver_prompt` (the natural-language message); re-exports shared `build_receiver_only_prompt`, `format_choices`. |
 | [model.py](methods/t2t/model.py) | `load_generator(...)` — turns a frozen HF causal LM into a text generator with a token budget; the only torch/transformers dependency. |
-| [runner.py](methods/t2t/runner.py) | Per-example execution: `run_t2t_example` (Sharer→Receiver) and `run_receiver_only_example` (no-Sharer baselines); `T2TResult`, `GenerationOutput`. |
+| [runner.py](methods/t2t/runner.py) | Per-example execution: `run_t2t_example` (Sharer→Receiver); `T2TResult`, `GenerationOutput`. |
 
 ### Prompts: what they do
 
-All prompts are centralized in [prompts.py](methods/t2t/prompts.py).
+All prompt builders are centralized in
+[methods/common/prompts.py](methods/common/prompts.py) so methods share one copy
+and the single-model baseline stays decoupled.
 
 - **Sharer prompt** (`build_sharer_prompt`): tells the Sharer it may hold only
   *part* of the information, and asks it to **relay relevant facts from its own
   context, not guess the final answer**. This matters in cross-context: the
   Sharer cannot answer alone and should communicate evidence rather than
   hallucinate. Shows the Sharer's context, the question, and any choices.
-- **Receiver prompt** (`build_receiver_prompt`): asks the Receiver to answer
-  using *its own information plus the Sharer's message*. For multiple-choice it
-  requests only the option letter; for free-form it requests a short answer
+- **T2T receiver prompt** (`build_receiver_message_prompt`): asks the Receiver to
+  answer using *its own information plus the Sharer's message*. For
+  multiple-choice it requests only the option letter; for free-form a short
   phrase (keeps EM/F1 meaningful).
-- **Receiver-only prompt** (`build_receiver_only_prompt`): the no-Sharer variant
-  used for the LCF-X reference baselines — same answer formatting, but no
-  "message from another model" block. Omits the context section entirely for the
-  question-only baseline.
+- **Latent receiver prompt** (`build_receiver_prompt`) + **Sharer encode text**
+  (`build_sharer_encode_text`): the LCF-X/EIYW pair — the Receiver answers from
+  its own context with no text message (the Sharer's information arrives via the
+  fused cache / soft tokens), and the Sharer encodes its own context + question.
+- **Single-model prompt** (`build_single_model_prompt`): a *dedicated* prompt for
+  the single-model inference baseline (one model answers from a given context),
+  deliberately separate so it and the method receiver prompts never disturb each
+  other.
 
 ### Data contract — `Example`
 

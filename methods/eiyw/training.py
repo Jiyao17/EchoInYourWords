@@ -25,10 +25,10 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from methods.common.progress import ProgressLogger
+from methods.common.prompts import build_receiver_prompt, build_sharer_encode_text
 
 from .cache import extract_kv
 from .model import EIYWPair
-from .prompts import build_receiver_prompt, build_sharer_encode_text
 from .schema import EIYWExample
 from .translator import EIYWTranslator
 

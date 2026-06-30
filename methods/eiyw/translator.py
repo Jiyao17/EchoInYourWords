@@ -22,10 +22,10 @@ Pipeline (one ``translate`` call):
    to ``hidden_r``, so heterogeneous Sharer/Receiver pairs work unchanged.
 
 ``zero_init=True`` zeros the output projection so the soft tokens start near zero
-(a gradient-safe init). Note this does **not** reduce EIYW to the Receiver-only
-run — zero-valued soft tokens are still extra positions the Receiver attends to.
-The plumbing check is therefore ``--no-fusion`` (no soft tokens at all), not a
-zero-init equality (see ``runner.py`` / ``scripts/run_eiyw.py``).
+(a gradient-safe init). Note this does **not** reduce EIYW to the Receiver
+answering alone — zero-valued soft tokens are still extra positions the Receiver
+attends to. A gentle-init run (no ``--translator-checkpoint``) is therefore a
+plumbing pass, not a zero-init equality (see ``runner.py`` / ``scripts/run_eiyw.py``).
 """
 
 from __future__ import annotations
@@ -80,8 +80,8 @@ class EIYWTranslator(nn.Module):
         # tokens start tiny but nonzero, a near-minimal perturbation of the
         # Receiver. Exact-zero soft embeddings are a numerical degeneracy — feeding
         # all-zero vectors to the frozen Receiver makes its backward non-finite
-        # (``0 * inf``) — and EIYW has no zero-init==Receiver-only property to
-        # preserve anyway (the plumbing check is ``--no-fusion``; see runner.py).
+        # (``0 * inf``) — and EIYW has no zero-init==Receiver-alone property to
+        # preserve anyway (a gentle-init run is just a plumbing pass).
         self.out_proj = nn.Linear(receiver_hidden, receiver_hidden)
         if zero_init:
             nn.init.normal_(self.out_proj.weight, std=1e-3)

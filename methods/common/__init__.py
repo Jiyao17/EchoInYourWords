@@ -14,7 +14,14 @@ from .io import (
     write_run_outputs,
 )
 from .parsing import parse_choice_answer
-from .prompts import build_receiver_only_prompt, format_choices
+from .prompts import (
+    build_receiver_message_prompt,
+    build_receiver_prompt,
+    build_sharer_encode_text,
+    build_sharer_prompt,
+    build_single_model_prompt,
+    format_choices,
+)
 from .progress import ProgressLogger, eval_progress_fields
 from .schema import Example
 from .scoring import exact_match, f1_score, normalize_answer, score_free_form
@@ -27,7 +34,11 @@ __all__ = [
     "score_free_form",
     "parse_choice_answer",
     "format_choices",
-    "build_receiver_only_prompt",
+    "build_sharer_prompt",
+    "build_receiver_message_prompt",
+    "build_sharer_encode_text",
+    "build_receiver_prompt",
+    "build_single_model_prompt",
     "summarize_latency",
     "summarize_metrics",
     "summarize_tokens",

@@ -24,11 +24,11 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from methods.common.progress import ProgressLogger
+from methods.common.prompts import build_receiver_prompt, build_sharer_encode_text
 
 from .cache import add_residual_inplace, extract_kv
 from .fuser import LCFXFuser
 from .model import LCFXPair
-from .prompts import build_receiver_prompt, build_sharer_encode_text
 from .schema import LCFXExample
 
 

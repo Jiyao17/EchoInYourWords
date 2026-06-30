@@ -15,8 +15,7 @@ Example (cross-context HotpotQA-bridge, trained translator):
         --output-dir results/eiyw_hotpotqa
 
 With no ``--translator-checkpoint`` the translator is zero-initialized (soft
-tokens start near zero — a plumbing run, not the method). ``--no-fusion`` runs
-the Receiver alone (the comparison floor / plumbing check). Writes the four
+tokens start near zero — a plumbing run, not the method). Writes the four
 standardized output files.
 """
 
@@ -45,7 +44,6 @@ from methods.eiyw import (  # noqa: E402
     load_eiyw_pair,
     load_translator,
     run_eiyw_example,
-    run_receiver_only_example,
     write_run_outputs,
 )
 from methods.common import (  # noqa: E402
@@ -91,9 +89,6 @@ def main() -> None:
     )
     parser.add_argument("--num-spans", type=int, default=4, help="Sharer pooling spans")
     parser.add_argument(
-        "--no-fusion", action="store_true", help="Run the Receiver alone (no soft tokens)"
-    )
-    parser.add_argument(
         "--allow-model-mismatch",
         action="store_true",
         help="Load the translator even if its stamped Sharer/Receiver differ",
@@ -134,36 +129,33 @@ def main() -> None:
     )
     print("pair compatibility:", json.dumps(check_pair_compatible(pair)))
 
-    translator = None
-    if not args.no_fusion:
-        if args.translator_checkpoint is not None:
-            translator = load_translator(
-                str(args.translator_checkpoint),
-                pair,
-                device=pair.device,
-                allow_model_mismatch=args.allow_model_mismatch,
-                num_soft_tokens=args.num_soft_tokens,
-                bottleneck_dim=args.bottleneck_dim,
-            ).to(pair.device)
-            print(f"Loaded translator checkpoint: {args.translator_checkpoint}")
-        else:
-            translator = EIYWTranslator.from_specs(
-                pair.sharer_spec,
-                pair.receiver_spec,
-                num_soft_tokens=args.num_soft_tokens,
-                bottleneck_dim=args.bottleneck_dim,
-                zero_init=True,
-            ).to(pair.device)
-            print("No checkpoint: using ZERO-INIT translator (soft tokens ~ 0; plumbing only)")
-        translator.eval()
-        print(f"Translator trainable params: {translator.trainable_parameters()}")
+    if args.translator_checkpoint is not None:
+        translator = load_translator(
+            str(args.translator_checkpoint),
+            pair,
+            device=pair.device,
+            allow_model_mismatch=args.allow_model_mismatch,
+            num_soft_tokens=args.num_soft_tokens,
+            bottleneck_dim=args.bottleneck_dim,
+        ).to(pair.device)
+        print(f"Loaded translator checkpoint: {args.translator_checkpoint}")
+    else:
+        translator = EIYWTranslator.from_specs(
+            pair.sharer_spec,
+            pair.receiver_spec,
+            num_soft_tokens=args.num_soft_tokens,
+            bottleneck_dim=args.bottleneck_dim,
+            zero_init=True,
+        ).to(pair.device)
+        print("No checkpoint: using ZERO-INIT translator (soft tokens ~ 0; plumbing only)")
+    translator.eval()
+    print(f"Translator trainable params: {translator.trainable_parameters()}")
 
     # Persistent eval progress (long runs survive the session); flushed per record.
-    method_label = "receiver_only" if args.no_fusion else "eiyw"
     progress = ProgressLogger(
         args.output_dir / "eval_log.jsonl",
         config={
-            "method": method_label,
+            "method": "eiyw",
             "dataset": str(args.dataset),
             "sharer_model": args.sharer_model,
             "receiver_model": receiver_model,
@@ -174,19 +166,14 @@ def main() -> None:
 
     results = []
     for idx, example in enumerate(examples, start=1):
-        if args.no_fusion:
-            result = run_receiver_only_example(
-                example, pair, max_new_tokens=args.max_new_tokens, score_fn=score_fn
-            )
-        else:
-            result = run_eiyw_example(
-                example,
-                pair,
-                translator,
-                num_spans=args.num_spans,
-                max_new_tokens=args.max_new_tokens,
-                score_fn=score_fn,
-            )
+        result = run_eiyw_example(
+            example,
+            pair,
+            translator,
+            num_spans=args.num_spans,
+            max_new_tokens=args.max_new_tokens,
+            score_fn=score_fn,
+        )
         results.append(result)
         if args.print_every and idx % args.print_every == 0:
             print(f"  processed {idx}/{len(examples)}", flush=True)
@@ -196,7 +183,7 @@ def main() -> None:
     progress.close()
 
     run_metadata = {
-        "method": "receiver_only" if args.no_fusion else "eiyw",
+        "method": "eiyw",
         "dataset": str(args.dataset),
         "sharer_model": args.sharer_model,
         "receiver_model": receiver_model,
@@ -208,7 +195,6 @@ def main() -> None:
         "translator_checkpoint": (
             str(args.translator_checkpoint) if args.translator_checkpoint else None
         ),
-        "fusion": not args.no_fusion,
         "scoring": "free_form" if free_form else "multiple_choice",
         "dtype": args.dtype,
     }

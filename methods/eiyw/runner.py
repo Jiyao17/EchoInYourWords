@@ -2,8 +2,7 @@
 
 Orchestrates the soft-token pipeline for one example: encode the Sharer context
 -> compute the Receiver anchor -> translate to K soft tokens -> decode the
-Receiver with those tokens prepended to its input. Also provides a no-fusion
-Receiver-only run (the comparison floor / plumbing check).
+Receiver with those tokens prepended to its input.
 """
 
 from __future__ import annotations
@@ -13,9 +12,9 @@ from time import perf_counter
 from typing import Any, Callable
 
 from methods.common.parsing import parse_choice_answer
+from methods.common.prompts import build_receiver_prompt, build_sharer_encode_text
 
 from .model import EIYWPair
-from .prompts import build_receiver_prompt, build_sharer_encode_text
 from .schema import EIYWExample
 from .translator import EIYWTranslator
 
@@ -138,48 +137,3 @@ def run_eiyw_example(
     )
 
 
-def run_receiver_only_example(
-    example: EIYWExample,
-    pair: EIYWPair,
-    *,
-    max_new_tokens: int = 64,
-    score_fn: ScoreFn | None = None,
-) -> EIYWResult:
-    """Run the Receiver alone (no soft tokens) — the EIYW comparison floor."""
-
-    receiver_prompt = build_receiver_prompt(example)
-
-    start = perf_counter()
-    output, recv_in, recv_out = pair.decode_receiver(
-        receiver_prompt, soft_tokens=None, max_new_tokens=max_new_tokens
-    )
-    receiver_ms = (perf_counter() - start) * 1000.0
-
-    prediction = parse_choice_answer(output, example.choices)
-    is_correct, scores = _score_prediction(prediction, example.answer, score_fn)
-
-    return EIYWResult(
-        id=example.id,
-        method="receiver_only",
-        sharer_prompt="",
-        sharer_message="",
-        receiver_prompt=receiver_prompt,
-        receiver_output=output,
-        prediction=prediction,
-        answer=example.answer,
-        is_correct=is_correct,
-        scores=scores,
-        latency={
-            "sharer_ms": 0.0,
-            "fuser_ms": 0.0,
-            "receiver_ms": receiver_ms,
-            "total_ms": receiver_ms,
-        },
-        token_counts={
-            "sharer_input": None,
-            "sharer_output": None,
-            "receiver_input": recv_in,
-            "receiver_output": recv_out,
-        },
-        metadata=dict(example.metadata),
-    )

@@ -35,7 +35,7 @@ The scripts:
 | `run_text_to_text.py` | Run the T2T Sharer→Receiver pipeline. |
 | `run_lcfx.py` | Run the LCF-X latent cache communication method (Sharer cache → pooled summary → fused into Receiver). |
 | `run_eiyw.py` | Run EIYW, the receiver-anchored method (Sharer cache → K soft tokens conditioned on the Receiver's question → prepended to the Receiver input). |
-| `run_receiver_baseline.py` | Run no-Sharer reference baselines (question-only / half / full context). |
+| `run_single_model.py` | Run the single-model inference baseline (one model answers from the full context — no Sharer, no communication). |
 | `train_lcfx_fuser.py` | Train the LCF-X fuser (frozen Sharer/Receiver; only the fuser learns). |
 | `train_eiyw.py` | Train the EIYW translator (frozen Sharer/Receiver; only the translator learns). |
 | `_hf_cache.py` | Helper imported by the others; not run directly. |
@@ -70,8 +70,8 @@ The produced JSONL is reused by every run below for a fair comparison.
 ## Available tests / experiments
 
 All runs below use the same dataset file and the same EM/F1 scoring (auto-
-selected because HotpotQA answers are free-form). They form the LCF-X comparison
-ladder plus the T2T method.
+selected because HotpotQA answers are free-form). The communication methods (T2T,
+LCF-X, EIYW) are compared against the single-model inference baseline.
 
 ### Test A — Text-to-Text communication (Sharer → Receiver)
 
@@ -105,34 +105,31 @@ for the full list).
 message length is also recorded per example as `token_counts.sharer_output`, so
 you can sweep the budget and plot accuracy vs. message length.
 
-### Test B — Receiver baselines (no Sharer)
+### Test B — Single-model inference baseline
 
-Reference points that bracket the T2T result. Same Receiver, varying how much
-evidence it sees, with **no Sharer message**.
+The reference point the communication methods are measured against: **one model**
+answers each question from the **full** context (both partitions combined) — no
+Sharer, no communication. It uses a dedicated single-model prompt, separate from
+the method receiver prompts.
 
 ```bash
-# Half-context: Receiver sees only its own 5 of 10 paragraphs
-.venv/bin/python scripts/run_receiver_baseline.py \
+.venv/bin/python scripts/run_single_model.py \
   --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
-  --context half \
-  --receiver-model Qwen/Qwen2.5-0.5B-Instruct \
-  --output-dir results/receiver_half_context
+  --model Qwen/Qwen2.5-0.5B-Instruct \
+  --output-dir results/single_model
 ```
 
-The `--context` flag selects the baseline:
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--model` | `Qwen/Qwen3-0.6B` | The single model that answers. |
+| `--max-new-tokens` | `64` | Answer budget. |
+| `--num-examples` | all | Cap the number of examples. |
+| `--scoring` | `auto` | `auto` / `choice` / `free_form`. |
+| `--device`, `--dtype` | auto / `auto` | Device and weight dtype. |
 
-| `--context` | Receiver sees | Paragraphs | Role |
-|-------------|---------------|-----------|------|
-| `question_only` | nothing | 0 / 10 | lower bound (no evidence) |
-| `half` | its own partition | 5 / 10 | "no Sharer" cross-context floor |
-| `full` | both partitions | 10 / 10 | upper bound (all evidence) |
-
-Other flags mirror Test A (`--receiver-max-new-tokens` default `64`,
-`--num-examples`, `--scoring`, `--device`, `--dtype`).
-
-Expected ordering of accuracy: `question_only` ≤ `half` ≤ `T2T` ≤ `full`. T2T's
-value is how much of the gap between *half* and *full* it recovers using only a
-short text message.
+This full-context single model is the upper bound: a communication method's value
+is how much of the gap up to it the method recovers using only a Sharer message /
+latent summary / soft tokens.
 
 ### Test C — LCF-X latent cache communication
 
@@ -157,23 +154,17 @@ no text message, no token-position alignment.
 | `--allow-model-mismatch` | off | Load a checkpoint whose stamped Sharer/Receiver differ from the pair (otherwise a hard error). |
 | `--bottleneck-dim` | `128` | Joint KV bottleneck width (must match the checkpoint). |
 | `--num-spans` | `1` | Sharer pooling spans (position-free summary granularity). |
-| `--no-fusion` | off | Run the Receiver alone (no fusion) for comparison. |
 | `--max-new-tokens` | `64` | Receiver answer budget. |
 
 **Plumbing-correctness check (MVP):** with no `--fuser-checkpoint` the fuser is
-**zero-initialized**, so LCF-X adds a zero residual and must reproduce the
-Receiver-only run **exactly**. Verify:
+**zero-initialized**, so LCF-X adds a zero residual — the Receiver answers from
+its own partition only, i.e. the no-communication floor. Training the fuser is
+what moves accuracy above that floor.
 
 ```bash
 .venv/bin/python scripts/run_lcfx.py --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
-  --num-examples 10 --output-dir results/lcfx_zeroinit            # zero-init fuser
-.venv/bin/python scripts/run_lcfx.py --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
-  --num-examples 10 --no-fusion --output-dir results/lcfx_recvonly  # receiver alone
-# metrics.json (accuracy/EM/F1) and predictions.jsonl outputs must match.
+  --num-examples 10 --output-dir results/lcfx_zeroinit            # zero-init fuser (floor)
 ```
-
-A zero-init (untrained) fuser sits exactly at the `half`-context floor; training
-the fuser is what moves it toward `full`.
 
 ### Test C (training) — train the LCF-X fuser
 
@@ -284,20 +275,14 @@ cache. See [../prompt/EIYW_IMPLEMENTATION_PLAN.md](../prompt/EIYW_IMPLEMENTATION
 | `--num-soft-tokens` | `16` | K soft tokens prepended to the Receiver input (must match the checkpoint). |
 | `--bottleneck-dim` | `128` | Translator latent width (must match the checkpoint). |
 | `--num-spans` | `4` | Sharer pooling spans. |
-| `--no-fusion` | off | Run the Receiver alone (no soft tokens) — the comparison floor / plumbing check. |
 | `--allow-model-mismatch` | off | Load a checkpoint whose stamped Sharer/Receiver differ (otherwise a hard error). |
 | `--max-new-tokens` | `64` | Receiver answer budget. |
 
 **Plumbing-correctness check.** EIYW has no zero-init==Receiver-only equality
 (zero-valued soft tokens are still extra positions, and exactly-zero embeddings
 are numerically degenerate — the init is therefore a *gentle* small-scale start).
-The floor check is `--no-fusion`, which runs the Receiver alone through the same
-`inputs_embeds` decode path:
-
-```bash
-.venv/bin/python scripts/run_eiyw.py --dataset data/tasks/hotpotqa_bridge_val.jsonl \
-  --num-examples 10 --no-fusion --output-dir results/eiyw_recvonly   # == half-context floor
-```
+With no `--translator-checkpoint` the translator is gentle-initialized, so the run
+is a plumbing pass (soft tokens near zero), not the method.
 
 Memory note: EIYW's prompt forward is **grad-enabled** (the soft tokens lead the
 sequence, so every prompt activation depends on them) — heavier than LCF-X, which
@@ -339,14 +324,11 @@ DATA=data/tasks/hotpotqa_bridge_cross.jsonl
 M=Qwen/Qwen2.5-0.5B-Instruct
 N=200
 
-.venv/bin/python scripts/run_receiver_baseline.py --dataset $DATA --context question_only \
-  --receiver-model $M --num-examples $N --output-dir results/receiver_qonly
-.venv/bin/python scripts/run_receiver_baseline.py --dataset $DATA --context half \
-  --receiver-model $M --num-examples $N --output-dir results/receiver_half
-.venv/bin/python scripts/run_receiver_baseline.py --dataset $DATA --context full \
-  --receiver-model $M --num-examples $N --output-dir results/receiver_full
+.venv/bin/python scripts/run_single_model.py --dataset $DATA \
+  --model $M --num-examples $N --output-dir results/single_model
 .venv/bin/python scripts/run_text_to_text.py --dataset $DATA \
   --sharer-model $M --num-examples $N --output-dir results/t2t
 ```
 
-Then compare the `scores` blocks across the four `metrics.json` files.
+Then compare the `scores` blocks across the `metrics.json` files (single-model
+baseline vs. each communication method).

@@ -158,8 +158,8 @@ def write_run_outputs(
 
     Files: ``predictions.jsonl``, ``predictions_brief.tsv``, ``metrics.json``,
     ``latency.json``, ``run_metadata.json``. ``method`` names the run; a
-    ``"method"`` key in ``metadata`` overrides it (e.g. the no-fusion path of a
-    latent method records ``"receiver_only"``).
+    ``"method"`` key in ``metadata`` overrides it (e.g. the single-model baseline
+    records ``"single_model"``).
     """
 
     output_path = Path(output_dir)
