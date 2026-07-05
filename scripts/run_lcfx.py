@@ -48,6 +48,7 @@ from methods.common import (  # noqa: E402
     ProgressLogger,
     eval_progress_fields,
     score_free_form,
+    write_predictions_brief,
 )
 
 
@@ -154,6 +155,11 @@ def main() -> None:
     )
     t0 = perf_counter()
 
+    # Written incrementally so the brief can be tailed mid-run (the full set of
+    # standardized outputs is rewritten once at the end via write_run_outputs).
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    brief_path = args.output_dir / "predictions_brief.tsv"
+
     results = []
     for idx, example in enumerate(examples, start=1):
         result = run_lcfx_example(
@@ -168,6 +174,7 @@ def main() -> None:
         if args.print_every and idx % args.print_every == 0:
             print(f"  processed {idx}/{len(examples)}", flush=True)
             progress.log("progress", **eval_progress_fields(results, len(examples), t0))
+            write_predictions_brief(results, brief_path)
 
     progress.log("done", **eval_progress_fields(results, len(examples), t0))
     progress.close()

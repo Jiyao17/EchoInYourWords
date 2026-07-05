@@ -66,12 +66,16 @@ def build_sharer_prompt(example: Example) -> str:
     """
 
     return (
-        "You are helping another model answer a question.\n"
-        "You may only have part of the information needed. Read your information "
-        "below and write a concise message that relays the facts from it that are "
-        "most relevant to the question.\n"
-        "Only state facts supported by your information. Do not guess the final "
-        "answer if your information is insufficient.\n\n"
+        "You and another model are answering a question together. You hold only "
+        "PART of the information; the other model holds the rest and will write "
+        "the final answer using your message plus its own information.\n\n"
+        "Write a concise message that passes on the facts from your information "
+        "that could help answer the question. You cannot see the other model's "
+        "information, so include the specific names, entities, dates, numbers, "
+        "and relationships from yours — even ones whose relevance is not obvious "
+        "— since one of them may be the link the other model needs.\n\n"
+        "State only facts contained in your information. Do not guess or give a "
+        "final answer; your information alone is not enough to answer.\n\n"
         "Your information:\n"
         f"{_context_or_placeholder(example.sharer_context)}\n\n"
         "Question:\n"
@@ -145,6 +149,36 @@ def build_receiver_prompt(example: Example) -> str:
 # --------------------------------------------------------------------------- #
 # Single-model inference (one model answers from a given context)
 # --------------------------------------------------------------------------- #
+def _single_model_final_instruction(example: Example) -> str:
+    """Answer-format instruction for the single-model baseline.
+
+    Deliberately separate from the shared ``_final_instruction`` (used by the
+    method receiver prompts) so tuning the baseline never disturbs the methods.
+
+    The wording follows the datasets' evaluation conventions, where the
+    answer-format instruction is the dominant lever for the scoring metric:
+
+    - Multiple choice (QASC): the OpenAI simple-evals / OLMES "MCF" style —
+      answer with only the option letter, and state the valid range (A-H) so
+      the model doesn't emit an out-of-range or free-text answer.
+    - Free-form (HotpotQA-bridge, MuSiQue): gold answers are short extractive
+      spans scored by EM/F1, so ask for the shortest span copied from the
+      evidence with no explanation (verbose answers are the main EM killer).
+    """
+
+    if example.choices:
+        last_letter = chr(ord("A") + min(len(example.choices), 26) - 1)
+        return (
+            f"\n\nRespond with only the letter (A-{last_letter}) of the correct "
+            "option."
+        )
+    return (
+        "\n\nAnswer with the shortest possible span copied from the information "
+        "(usually a single name, entity, date, or number). "
+        "Give only the answer, with no explanation."
+    )
+
+
 def build_single_model_prompt(example: Example, context: str) -> str:
     """Dedicated prompt for a single model answering from ``context``.
 
@@ -163,7 +197,7 @@ def build_single_model_prompt(example: Example, context: str) -> str:
         "Question:\n"
         f"{example.question}"
         f"{_choices_block(example)}"
-        f"{_final_instruction(example)}\n\n"
+        f"{_single_model_final_instruction(example)}\n\n"
         "Answer:"
     )
 

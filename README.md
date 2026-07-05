@@ -82,8 +82,10 @@ let the first run download it); gated ids need `HF_TOKEN` exported first:
 - `Qwen/Qwen3-4B` — ungated
 - `meta-llama/Llama-3.2-1B-Instruct` — gated; needs `HF_TOKEN`
 - `google/gemma-3-1b-it` — gated; needs `HF_TOKEN`
+- `google/gemma-3-4b-it` — gated; needs `HF_TOKEN`
 - `unsloth/Llama-3.2-1B-Instruct` — ungated mirror of Llama-3.2-1B (no token)
 - `unsloth/gemma-3-1b-it` — ungated mirror of Gemma-3-1B (no token)
+- `unsloth/gemma-3-4b-it` — ungated mirror of Gemma-3-4B (no token)
 
 Defaults follow the paper (per-device batch 16 × grad-accum 16 = effective batch
 256), which needs a large GPU. On a smaller GPU, override to keep the effective
@@ -121,10 +123,12 @@ Known-good ids (mix freely as Sharer/Receiver):
 | `Qwen/Qwen2.5-0.5B-Instruct` | 896 | 64 | 24 | |
 | `meta-llama/Llama-3.2-1B-Instruct` | 2048 | 64 | 16 | gated — needs `HF_TOKEN` |
 | `google/gemma-3-1b-it` | 1152 | 256 | 26 | gated — needs `HF_TOKEN` |
+| `google/gemma-3-4b-it` | 2560 | 256 | 34 | gated — needs `HF_TOKEN` |
 
 `Qwen/Qwen3-4B` is another known-good (larger) Qwen option. The Llama/Gemma ids
 are **gated** on the Hub — accept their license and export `HF_TOKEN`, or use the
-ungated mirrors `unsloth/Llama-3.2-1B-Instruct` / `unsloth/gemma-3-1b-it`.
+ungated mirrors `unsloth/Llama-3.2-1B-Instruct` / `unsloth/gemma-3-1b-it` /
+`unsloth/gemma-3-4b-it`.
 
 Trained fuser checkpoints are **stamped** with the Sharer/Receiver they were
 trained for, and `run_lcfx.py` hard-errors if you load one against a different

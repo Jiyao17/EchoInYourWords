@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="715" viewBox="0 0 1280 715" font-family="'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrowA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7c3aed"/>
+    </marker>
+    <marker id="arrowG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1280" height="715" fill="#ffffff"/>
+
+  <!-- title -->
+  <text x="640" y="34" text-anchor="middle" font-size="23" font-weight="700" fill="#0f172a">EIYW — receiver-anchored soft-token workflow</text>
+  <text x="640" y="58" text-anchor="middle" font-size="13" fill="#475569">Blocks are components (modules / ops); tensors ride on the arrows. Only the Translator is trained; the Sharer and Receiver stay frozen.</text>
+
+  <!-- lane headers -->
+  <text x="150" y="92" text-anchor="middle" font-size="14" font-weight="700" fill="#1d4ed8">SHARER  (frozen)</text>
+  <text x="574" y="92" text-anchor="middle" font-size="14" font-weight="700" fill="#b45309">TRANSLATOR  (trained)</text>
+  <text x="1045" y="92" text-anchor="middle" font-size="14" font-weight="700" fill="#6d28d9">RECEIVER  (frozen)</text>
+
+  <!-- lane backdrops -->
+  <rect x="380" y="106" width="390" height="470" rx="14" fill="#fffbeb" stroke="#f59e0b" stroke-width="2" stroke-dasharray="7 5"/>
+  <rect x="902" y="106" width="286" height="470" rx="14" fill="#f5f3ff" stroke="#a78bfa" stroke-width="1.6" stroke-dasharray="3 4"/>
+
+  <!-- ================= COMPONENTS ================= -->
+  <!-- Sharer LM -->
+  <rect x="30" y="230" width="240" height="64" rx="9" fill="#dbeafe" stroke="#2563eb" stroke-width="1.6"/>
+  <text x="150" y="257" text-anchor="middle" font-size="13" fill="#0f172a">Sharer LM  &#10052; frozen</text>
+  <text x="150" y="276" text-anchor="middle" font-size="11.5" fill="#475569">forward &#183; use_cache</text>
+
+  <!-- Stage 1 -->
+  <rect x="398" y="230" width="168" height="64" rx="9" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+  <text x="482" y="251" text-anchor="middle" font-size="12" font-weight="600" fill="#0f172a">Stage 1 · pool</text>
+  <text x="482" y="267" text-anchor="middle" font-size="10.5" fill="#7c2d12">within-span, per layer</text>
+  <text x="482" y="282" text-anchor="middle" font-size="10.5" fill="#92400e">N_S &#8594; P  (Sharer KV)</text>
+
+  <!-- mean-pool -->
+  <rect x="582" y="230" width="168" height="64" rx="9" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+  <text x="666" y="251" text-anchor="middle" font-size="12" font-weight="600" fill="#0f172a">mean-pool</text>
+  <text x="666" y="267" text-anchor="middle" font-size="10.5" fill="#7c2d12">question embeds &#8594; anchor</text>
+  <text x="666" y="282" text-anchor="middle" font-size="10.5" fill="#92400e">parameter-free</text>
+
+  <!-- Stage 2 -->
+  <rect x="398" y="346" width="352" height="94" rx="9" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+  <text x="574" y="368" text-anchor="middle" font-size="12.5" font-weight="600" fill="#0f172a">Stage 2 · cross-attention</text>
+  <text x="574" y="387" text-anchor="middle" font-size="11.5" fill="#7c2d12">receiver-anchored (FiLM)</text>
+  <text x="574" y="405" text-anchor="middle" font-size="11" fill="#92400e">queries = Q_base + W&#8347;&#183;anchor</text>
+  <text x="574" y="422" text-anchor="middle" font-size="11" fill="#92400e">K queries attend over span tokens</text>
+
+  <!-- concat -->
+  <rect x="398" y="500" width="352" height="64" rx="9" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+  <text x="574" y="526" text-anchor="middle" font-size="12.5" font-weight="600" fill="#0f172a">concat</text>
+  <text x="574" y="545" text-anchor="middle" font-size="11" fill="#7c2d12">prepend soft tokens to prompt</text>
+
+  <!-- embedding table -->
+  <rect x="920" y="230" width="250" height="64" rx="9" fill="#dbeafe" stroke="#2563eb" stroke-width="1.6"/>
+  <text x="1045" y="257" text-anchor="middle" font-size="13" fill="#0f172a">embedding table  &#10052; frozen</text>
+  <text x="1045" y="276" text-anchor="middle" font-size="11.5" fill="#475569">token lookup (no fwd pass)</text>
+
+  <!-- Receiver LM -->
+  <rect x="920" y="500" width="250" height="64" rx="9" fill="#dbeafe" stroke="#2563eb" stroke-width="1.6"/>
+  <text x="1045" y="526" text-anchor="middle" font-size="13" fill="#0f172a">Receiver LM  &#10052; frozen</text>
+  <text x="1045" y="545" text-anchor="middle" font-size="11.5" fill="#475569">prefill + greedy decode</text>
+
+  <!-- ================= ARROWS (data on the wires) ================= -->
+  <!-- input: context -> Sharer LM -->
+  <line x1="150" y1="208" x2="150" y2="230" stroke="#475569" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text x="150" y="180" text-anchor="middle" font-size="11.5" fill="#334155">Sharer context</text>
+  <text x="150" y="195" text-anchor="middle" font-size="10.5" fill="#64748b">(tokens)</text>
+
+  <!-- Sharer LM -> Stage 1 : KV cache -->
+  <line x1="270" y1="262" x2="398" y2="262" stroke="#475569" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text x="334" y="247" text-anchor="middle" font-size="10.5" fill="#334155">KV cache  L&#8347;&#215;(K,V)</text>
+  <text x="334" y="285" text-anchor="middle" font-size="10" fill="#64748b">[B, H&#8347;, N_S, D&#8347;]</text>
+
+  <!-- Stage 1 -> Stage 2 : span tokens -->
+  <line x1="482" y1="294" x2="490" y2="346" stroke="#475569" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text x="452" y="324" text-anchor="middle" font-size="10.5" fill="#334155">span tokens</text>
+  <text x="452" y="338" text-anchor="middle" font-size="10" fill="#64748b">[B, L&#8347;&#183;P, 2H&#8347;D&#8347;]</text>
+
+  <!-- mean-pool -> Stage 2 : anchor (novelty) -->
+  <line x1="666" y1="294" x2="652" y2="346" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#arrowA)"/>
+  <text x="702" y="324" text-anchor="middle" font-size="10.5" font-weight="600" fill="#7c3aed">anchor&#9733;</text>
+  <text x="702" y="338" text-anchor="middle" font-size="10" fill="#7c3aed">[B, hidden_r]</text>
+
+  <!-- Stage 2 -> concat : soft tokens -->
+  <line x1="574" y1="440" x2="574" y2="500" stroke="#7c3aed" stroke-width="2.2" marker-end="url(#arrowA)"/>
+  <text x="598" y="466" text-anchor="start" font-size="10.5" font-weight="600" fill="#5b21b6">K soft tokens</text>
+  <text x="598" y="480" text-anchor="start" font-size="10" fill="#5b21b6">[B, K, hidden_r]</text>
+
+  <!-- concat -> Receiver LM : inputs_embeds -->
+  <line x1="750" y1="540" x2="920" y2="540" stroke="#2563eb" stroke-width="2.2" marker-end="url(#arrowG)"/>
+  <text x="835" y="528" text-anchor="middle" font-size="10.5" font-weight="600" fill="#1d4ed8">inputs_embeds</text>
+  <text x="835" y="558" text-anchor="middle" font-size="10" fill="#1d4ed8">[ soft ; embed(prompt) ]</text>
+
+  <!-- input: question -> embedding table -->
+  <line x1="1045" y1="208" x2="1045" y2="230" stroke="#475569" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text x="1045" y="180" text-anchor="middle" font-size="11.5" fill="#334155">Receiver question</text>
+  <text x="1045" y="195" text-anchor="middle" font-size="10.5" fill="#64748b">(chat template)</text>
+
+  <!-- embedding table -> mean-pool : prompt embeds -->
+  <line x1="920" y1="262" x2="750" y2="262" stroke="#475569" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text x="835" y="249" text-anchor="middle" font-size="10.5" fill="#334155">prompt embeds [1, T, hidden_r]</text>
+
+  <!-- embedding table -> concat : same prompt embeds (verbatim) -->
+  <path d="M982,294 C900,345 800,486 744,500" fill="none" stroke="#475569" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text x="845" y="430" text-anchor="middle" font-size="10.5" fill="#334155">prompt embeds</text>
+  <text x="845" y="444" text-anchor="middle" font-size="10" fill="#64748b">(verbatim)</text>
+
+  <!-- output: Receiver LM -> answer -->
+  <line x1="1045" y1="564" x2="1045" y2="628" stroke="#475569" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text x="1045" y="648" text-anchor="middle" font-size="12" font-weight="600" fill="#14532d">answer (decoded text)</text>
+
+  <!-- ================= legend ================= -->
+  <rect x="30" y="336" width="300" height="190" rx="9" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.3"/>
+  <text x="44" y="358" font-size="12.5" font-weight="700" fill="#0f172a">Legend</text>
+  <rect x="44" y="368" width="22" height="14" rx="3" fill="#fef3c7" stroke="#d97706"/>
+  <text x="74" y="380" font-size="11.5" fill="#334155">trained — Translator component</text>
+  <rect x="44" y="390" width="22" height="14" rx="3" fill="#dbeafe" stroke="#2563eb"/>
+  <text x="74" y="402" font-size="11.5" fill="#334155">&#10052; frozen base model</text>
+  <line x1="46" y1="424" x2="66" y2="424" stroke="#475569" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text x="74" y="428" font-size="11.5" fill="#334155">tensor on the wire (gray = data)</text>
+  <line x1="46" y1="448" x2="66" y2="448" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#arrowA)"/>
+  <text x="74" y="452" font-size="11.5" fill="#334155">soft-token / anchor (receiver-anchoring)</text>
+  <line x1="46" y1="472" x2="66" y2="472" stroke="#2563eb" stroke-width="2.2" marker-end="url(#arrowG)"/>
+  <text x="74" y="476" font-size="11.5" fill="#334155">assembled embeds &#8594; prefill</text>
+  <text x="44" y="500" font-size="10.5" fill="#64748b">mean-pool is parameter-free, but the Receiver LM has</text>
+  <text x="44" y="514" font-size="10.5" fill="#64748b">no such module, so it is a Translator component.</text>
+
+  <!-- caption -->
+  <text x="640" y="690" text-anchor="middle" font-size="11.5" fill="#64748b">The embedding table feeds the Translator twice: pooled into the anchor (to steer Stage 2) and verbatim into concat (the Receiver's own reading material).</text>
+</svg>

@@ -17,6 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from methods.common.decoding import resolve_stop_ids
+
 from .cache import extract_kv
 
 
@@ -162,7 +164,7 @@ class EIYWPair:
 
         ids = self._encode_chat(self.receiver_tok, text)
         input_tokens = int(ids.shape[1])
-        eos_id = self.receiver_tok.eos_token_id
+        stop_ids = resolve_stop_ids(self.receiver_tok, self.receiver)
         embed = self._receiver_embed()
 
         with torch.no_grad():
@@ -178,7 +180,7 @@ class EIYWPair:
             generated: list[int] = []
             next_id = int(out.logits[:, -1, :].argmax(dim=-1))
             for _ in range(max_new_tokens):
-                if eos_id is not None and next_id == eos_id:
+                if next_id in stop_ids:
                     break
                 generated.append(next_id)
                 cur = torch.tensor([[next_id]], device=self.device)

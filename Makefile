@@ -39,7 +39,7 @@ help:
 	@echo "  make eiyw-eval     EIYW: eval a trained translator (or --no-fusion floor)"
 	@echo "  make eiyw-hetero   EIYW on a heterogeneous pair (Llama -> Qwen preset)"
 	@echo "  make t2t           T2T baseline: EM/F1 on val (no training)"
-	@echo "  make full          Upper bound: ONE model (MODEL) answers with ALL evidence"
+	@echo "  make single        Upper bound: ONE model (MODEL) answers with ALL evidence"
 	@echo ""
 	@echo "Pick models with SHARER=/RECEIVER= (default Qwen/Qwen3-0.6B both sides):"
 	@echo "  make lcfx-train SHARER=<id> RECEIVER=<id>   train a pair"
@@ -47,7 +47,7 @@ help:
 	@echo "  make lcfx       SHARER=<id> RECEIVER=<id>   train -> eval end to end"
 	@echo "  (SHARER/RECEIVER apply to every method target; LCFX_*/T2T_* set one method only)"
 	@echo "  known-good ids: Qwen/Qwen3-0.6B  Qwen/Qwen2.5-0.5B-Instruct  Qwen/Qwen3-4B"
-	@echo "                  meta-llama/Llama-3.2-1B-Instruct  google/gemma-3-1b-it  (gated: HF_TOKEN)"
+	@echo "                  meta-llama/Llama-3.2-1B-Instruct  google/gemma-3-1b-it  google/gemma-3-4b-it  (gated: HF_TOKEN)"
 	@echo "  results + checkpoints auto-separate (results/<method>/<dataset>/<sharer>/<receiver>)."
 	@echo ""
 	@echo "Common knobs:  DATASET=  CKPT=  EVAL_N=  MAX_TRAIN=  MAX_STEPS=  BATCH_SIZE=  GRAD_ACCUM="
@@ -68,7 +68,7 @@ VAL        ?= $(TASKS)/$(DATASET)_val.jsonl
 # set. Mix sizes / families / tokenizers freely (the fuser bridges differing
 # layers/heads/head_dim); known-good ids:
 #   Qwen/Qwen3-0.6B  Qwen/Qwen2.5-0.5B-Instruct  Qwen/Qwen3-4B
-#   meta-llama/Llama-3.2-1B-Instruct  google/gemma-3-1b-it   (gated: needs HF_TOKEN)
+#   meta-llama/Llama-3.2-1B-Instruct  google/gemma-3-1b-it  google/gemma-3-4b-it   (gated: needs HF_TOKEN)
 # Trained fuser checkpoints are stamped with their Sharer/Receiver ids; results and
 # checkpoints auto-separate by dataset + pair (see LCFX_SLUG below), so different
 # runs never overwrite each other. The eval HARD-ERRORS on a model/checkpoint mismatch.
@@ -145,7 +145,7 @@ OFFLINE    ?= HF_HUB_OFFLINE=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # ===== Data preparation (dataset-named; runs once, reused thereafter) =========
 # Add a new dataset by giving it train/val prepare rules below; everything else
 # (methods, baselines) consumes $(TRAIN)/$(VAL) and needs no change.
-.PHONY: data data-hotpotqa-bridge data-musique
+.PHONY: data data-hotpotqa-bridge data-musique data-qasc
 
 # Generic entrypoint: prepare the currently selected $(DATASET).
 data: $(TRAIN) $(VAL)
@@ -169,9 +169,18 @@ $(TASKS)/musique_train.jsonl:
 $(TASKS)/musique_val.jsonl:
 	$(PY) scripts/prepare_musique.py --split validation --num-examples -1 --seed $(SEED) --output $@
 
+# --- qasc: 8-way multiple-choice science QA; two-fact bridge split (fact1|fact2) ---
+data-qasc: $(TASKS)/qasc_train.jsonl $(TASKS)/qasc_val.jsonl
+
+$(TASKS)/qasc_train.jsonl:
+	$(PY) scripts/prepare_qasc.py --split train --num-examples -1 --seed $(SEED) --output $@
+
+$(TASKS)/qasc_val.jsonl:
+	$(PY) scripts/prepare_qasc.py --split validation --num-examples -1 --seed $(SEED) --output $@
+
 # ===== Model download (into data/hf_cache; like `make data` for datasets) ======
 # Fetch a model once so later (offline) runs find it locally. Idempotent. MODEL is
-# the single-model knob shared with `make full` (defaults to RECEIVER). Gated ids
+# the single-model knob shared with `make single` (defaults to RECEIVER). Gated ids
 # (meta-llama/*, google/*) need an exported HF_TOKEN; mirrors (unsloth/*) need none.
 #   make model MODEL=google/gemma-3-1b-it
 MODEL ?= $(RECEIVER)
@@ -264,17 +273,17 @@ t2t-eval t2t: data
 	  $(if $(EVAL_N),--num-examples $(EVAL_N),) \
 	  --output-dir $(T2T_OUT)
 
-# ===== Full-context oracle (baseline: ONE model sees ALL evidence) =============
+# ===== Single-model oracle (baseline: ONE model sees ALL evidence) =============
 # Upper bound: a single model answers from both partitions combined (no split, no
 # Sharer) -- i.e. how each model does on the dataset with all available info. It's
 # a single model (not a pair); set MODEL (defaults to RECEIVER), e.g.
-#   make full DATASET=musique MODEL=Qwen/Qwen3-0.6B
-FULL_OUT ?= results/full/$(DATASET)/$(subst /,--,$(MODEL))
+#   make single DATASET=musique MODEL=Qwen/Qwen3-0.6B
+SINGLE_OUT ?= results/single/$(DATASET)/$(subst /,--,$(MODEL))
 
-.PHONY: full
-full: data
-	$(OFFLINE) $(PY) scripts/run_receiver_baseline.py --dataset $(VAL) \
-	  --context full --receiver-model $(MODEL) \
-	  --receiver-max-new-tokens $(RECV_MAX) \
+.PHONY: single
+single: data
+	$(OFFLINE) $(PY) scripts/run_single_model.py --dataset $(VAL) \
+	  --model $(MODEL) \
+	  --max-new-tokens $(RECV_MAX) \
 	  $(if $(EVAL_N),--num-examples $(EVAL_N),) \
-	  --output-dir $(FULL_OUT)
+	  --output-dir $(SINGLE_OUT)

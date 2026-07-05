@@ -31,7 +31,11 @@ from scripts._hf_cache import configure_hf_cache  # noqa: E402
 
 configure_hf_cache()
 
-from methods.common import ProgressLogger, eval_progress_fields  # noqa: E402
+from methods.common import (  # noqa: E402
+    ProgressLogger,
+    eval_progress_fields,
+    write_predictions_brief,
+)
 from methods.t2t import (  # noqa: E402
     T2TExample,
     load_generator,
@@ -131,6 +135,11 @@ def main() -> None:
     )
     t0 = perf_counter()
 
+    # Written incrementally so the brief can be tailed mid-run (the full set of
+    # standardized outputs is rewritten once at the end via write_run_outputs).
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    brief_path = args.output_dir / "predictions_brief.tsv"
+
     results = []
     for idx, example in enumerate(examples, start=1):
         results.append(
@@ -139,6 +148,7 @@ def main() -> None:
         if args.print_every and idx % args.print_every == 0:
             print(f"  processed {idx}/{len(examples)}", flush=True)
             progress.log("progress", **eval_progress_fields(results, len(examples), t0))
+            write_predictions_brief(results, brief_path)
 
     progress.log("done", **eval_progress_fields(results, len(examples), t0))
     progress.close()

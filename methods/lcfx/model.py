@@ -18,6 +18,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from methods.common.decoding import resolve_stop_ids
+
 from .cache import add_residual_inplace, extract_kv
 
 
@@ -149,7 +151,7 @@ class LCFXPair:
 
         ids = self._encode_chat(self.receiver_tok, text)
         input_tokens = int(ids.shape[1])
-        eos_id = self.receiver_tok.eos_token_id
+        stop_ids = resolve_stop_ids(self.receiver_tok, self.receiver)
 
         with torch.no_grad():
             if ids.shape[1] >= 2:
@@ -169,7 +171,7 @@ class LCFXPair:
                 step = self.receiver(input_ids=cur, past_key_values=cache, use_cache=True)
                 cache = step.past_key_values
                 next_id = int(step.logits[:, -1, :].argmax(dim=-1))
-                if eos_id is not None and next_id == eos_id:
+                if next_id in stop_ids:
                     break
                 generated.append(next_id)
                 cur = torch.tensor([[next_id]], device=self.device)
