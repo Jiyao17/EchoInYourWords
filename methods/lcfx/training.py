@@ -23,6 +23,7 @@ import random
 from pathlib import Path
 from typing import Any, Iterable
 
+from methods.common.decoding import resolve_answer_stop_id
 from methods.common.progress import ProgressLogger
 from methods.common.prompts import build_receiver_prompt, build_sharer_encode_text
 
@@ -67,6 +68,22 @@ def example_loss(
     if prompt_ids.shape[1] < 2 or answer_ids.shape[1] == 0:
         return None
 
+    # Append the stop token to the *target*, not the input: the forward below
+    # already produces one logit position past the last answer token (it
+    # predicts "what comes next" from the last real token, same as any other
+    # position) -- we just weren't using it. Supervising it as `stop_id`
+    # teaches the fuser to end the turn instead of running on forever; without
+    # this the model never receives gradient on the answer->EOS transition, so
+    # inference (which stops only on an actually-generated stop token, see
+    # ``resolve_stop_ids``) runs to ``max_new_tokens`` instead of stopping
+    # cleanly after the answer (EM craters, F1 only partially drops -- see
+    # ``prompt/EOS_STOP_TOKEN_FIX.md``).
+    stop_id = resolve_answer_stop_id(pair.receiver_tok, pair.receiver)
+    target_ids = answer_ids
+    if stop_id is not None:
+        stop_tensor = torch.full((1, 1), stop_id, dtype=answer_ids.dtype, device=pair.device)
+        target_ids = torch.cat([answer_ids, stop_tensor], dim=1)
+
     # Prefill prompt[:-1] (no grad): Receiver KV is a detached projector input.
     with torch.no_grad():
         cache = pair.receiver(input_ids=prompt_ids[:, :-1], use_cache=True).past_key_values
@@ -74,14 +91,16 @@ def example_loss(
     residual = fuser.project(aligned, extract_kv(cache))
     add_residual_inplace(cache, residual)
 
-    # Teacher-forced answer forward: [p_last, a_0, ..., a_{T-1}] over the fused cache.
+    # Teacher-forced answer forward: [p_last, a_0, ..., a_{T-1}] over the fused
+    # cache. Deliberately NOT feeding stop_id as input -- the position after
+    # a_{T-1} already yields the "what comes next" logit we target above.
     decode_input = torch.cat([prompt_ids[:, -1:], answer_ids], dim=1)
     logits = pair.receiver(
         input_ids=decode_input, past_key_values=cache, use_cache=True
-    ).logits[:, : answer_ids.shape[1], :]
+    ).logits[:, : target_ids.shape[1], :]
 
     return F.cross_entropy(
-        logits.reshape(-1, logits.shape[-1]).float(), answer_ids.reshape(-1)
+        logits.reshape(-1, logits.shape[-1]).float(), target_ids.reshape(-1)
     )
 
 
@@ -116,13 +135,21 @@ def batched_example_loss(
     """Teacher-forced loss for a batch of examples (the same fusion as the single path).
 
     Sharer prompts are right-padded (pooled over real tokens only); Receiver
-    prompts are left-padded so the last real token shares a column; answers are
-    right-padded and masked out of the loss. ``reduction='none'`` returns a
-    per-example loss vector ``[B]`` (used for the batched==unbatched check).
+    prompts are left-padded so the last real token shares a column; answers
+    (each with a stop token appended -- see below) are right-padded and masked
+    out of the loss. ``reduction='none'`` returns a per-example loss vector
+    ``[B]`` (used for the batched==unbatched check).
     """
 
     import torch
     from torch.nn import functional as F
+
+    # Same stop-token supervision as `example_loss` (see its comment), appended
+    # per-example *before* padding: `_pad` then naturally places it right after
+    # each example's own real answer tokens, and everything downstream (the
+    # decode-input length, the logits slice, the mask-based targets) already
+    # generalizes to the wider tensors with no further changes needed.
+    stop_id = resolve_answer_stop_id(pair.receiver_tok, pair.receiver)
 
     exs = [_as_example(e) for e in examples]
     rows = []
@@ -133,6 +160,9 @@ def batched_example_loss(
         answer = pair.receiver_tok(
             ex.answer, add_special_tokens=False, return_tensors="pt"
         )["input_ids"][0].to(pair.device)
+        if stop_id is not None:
+            stop_tensor = torch.tensor([stop_id], dtype=answer.dtype, device=pair.device)
+            answer = torch.cat([answer, stop_tensor], dim=0)
         sharer = pair.sharer_tok(
             build_sharer_encode_text(ex), return_tensors="pt"
         )["input_ids"][0].to(pair.device)

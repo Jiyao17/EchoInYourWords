@@ -190,7 +190,9 @@ write **model-stamped** checkpoints (hard-error on a pair mismatch unless
 
 ## Environment
 
-- Python **3.12** virtualenv at `.venv` (run tools as `.venv/bin/python ...`).
+- Python **3.12** virtualenv at `.venv`. Tools are invoked as plain `python ...`
+  (not `.venv/bin/python`) — activate the venv yourself first
+  (`source .venv/bin/activate`) so `python` resolves to it.
 - **torch must be the CUDA 11.8 build** (`torch==2.7.1+cu118`): the machine's
   NVIDIA driver (515.57 / CUDA 11.7) is too old for the default CUDA-13 wheels.
   Install with `--index-url https://download.pytorch.org/whl/cu118`.

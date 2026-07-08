@@ -45,3 +45,25 @@ def resolve_stop_ids(tokenizer: Any, model: Any | None = None) -> set[int]:
         _add(getattr(gen_config, "eos_token_id", None))
 
     return stop
+
+
+def resolve_answer_stop_id(tokenizer: Any, model: Any | None = None) -> int | None:
+    """Pick one stop-token id to teach as "what comes after the answer".
+
+    Training supervises a single next-token target per position, so unlike
+    :func:`resolve_stop_ids` (which returns every id ``generate``-style
+    decoding should treat as a stop), this picks exactly one: the
+    tokenizer's own ``eos_token_id`` when set -- already the correct
+    chat-turn terminator for every receiver this project uses (see the note
+    above on Qwen) -- else an arbitrary member of the full resolved stop
+    set, so a receiver whose tokenizer lacks ``eos_token_id`` still gets
+    *some* terminator supervision instead of none. Different receivers can
+    and do have different ids here; always resolve per-receiver, never
+    hardcode one.
+    """
+
+    eos_id = getattr(tokenizer, "eos_token_id", None)
+    if eos_id is not None:
+        return int(eos_id)
+    stop_ids = resolve_stop_ids(tokenizer, model)
+    return next(iter(stop_ids), None)

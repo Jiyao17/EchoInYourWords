@@ -10,14 +10,18 @@
 #
 # Granular targets: data-<name>, lcfx-train, lcfx-eval, eiyw-train, eiyw-eval, t2t-eval.
 #
-# Select the dataset with DATASET (default: hotpotqa_bridge); $(TRAIN)/$(VAL)
-# derive from it. Pick models with SHARER/RECEIVER (default: the paper's symmetric
-# Qwen3-0.6B; latent dim 128, full ~5,899-example bridge val, EM/F1). The common
-# usage is one knob per axis -- DATASET for data, SHARER/RECEIVER for methods:
+# Select the dataset with DATASET; $(TRAIN)/$(VAL) derive from it. With no
+# DATASET= given, `make data` prepares EVERY known dataset (hotpotqa_bridge,
+# musique, qasc, 2wikimultihop, ropes, strategyqa) instead of picking one.
+# Likewise, `make model` with no MODEL= downloads every known-good model (all
+# ungated -- no HF_TOKEN needed). Pick models with SHARER/RECEIVER (default:
+# the paper's symmetric Qwen3-0.6B; latent dim 128, full ~5,899-example bridge
+# val, EM/F1). The common usage is one knob per axis -- DATASET for data,
+# SHARER/RECEIVER for methods:
 #   make data       DATASET=hotpotqa_bridge
-#   make lcfx-train SHARER=meta-llama/Llama-3.2-1B-Instruct RECEIVER=Qwen/Qwen3-0.6B
-#   make lcfx-eval  SHARER=meta-llama/Llama-3.2-1B-Instruct RECEIVER=Qwen/Qwen3-0.6B
-# With no overrides (make data / lcfx-train / lcfx-eval / lcfx) everything uses the
+#   make lcfx-train SHARER=unsloth/Llama-3.2-1B-Instruct RECEIVER=Qwen/Qwen3-0.6B
+#   make lcfx-eval  SHARER=unsloth/Llama-3.2-1B-Instruct RECEIVER=Qwen/Qwen3-0.6B
+# With no overrides (make lcfx-train / lcfx-eval / lcfx) everything uses the
 # defaults above. SHARER/RECEIVER move every method at once; the per-method
 # LCFX_*/T2T_*/EIYW_* vars (which default to SHARER/RECEIVER) override one method.
 
@@ -28,8 +32,9 @@ help:
 	@echo "EchoInYourWords -- run experiments via make."
 	@echo ""
 	@echo "Main targets:"
-	@echo "  make data          Prepare train+val for DATASET (once; default hotpotqa_bridge)"
-	@echo "  make model         Download MODEL into data/hf_cache (gated ids need HF_TOKEN)"
+	@echo "  make prepare       One-shot setup: make data + make model (everything, or DATASET=/MODEL= for one)"
+	@echo "  make data          Prepare train+val for ALL datasets (or just DATASET= if given)"
+	@echo "  make model         Download ALL known-good models (or just MODEL= if given; all ungated)"
 	@echo "  make lcfx          LCF-X: train fuser -> EM/F1 on val (train + eval)"
 	@echo "  make lcfx-train    LCF-X: train the fuser only"
 	@echo "  make lcfx-eval     LCF-X: eval a trained fuser (+ no-fusion floor)"
@@ -39,22 +44,24 @@ help:
 	@echo "  make eiyw-eval     EIYW: eval a trained translator (or --no-fusion floor)"
 	@echo "  make eiyw-hetero   EIYW on a heterogeneous pair (Llama -> Qwen preset)"
 	@echo "  make t2t           T2T baseline: EM/F1 on val (no training)"
-	@echo "  make single        Upper bound: ONE model (MODEL) answers with ALL evidence"
+	@echo "  make single        Upper bound: MODEL answers with ALL evidence (MODEL=/DATASET= each: given=one, unset=all)"
+	@echo "  make exp           Sweep all model pairs, split by METHOD= then DATASET= (each: given=one, unset=all)"
+	@echo "  make sweep         Full pipeline: prepare + exp for every dataset, parallel across CUDA_VISIBLE_DEVICES"
 	@echo ""
 	@echo "Pick models with SHARER=/RECEIVER= (default Qwen/Qwen3-0.6B both sides):"
 	@echo "  make lcfx-train SHARER=<id> RECEIVER=<id>   train a pair"
 	@echo "  make lcfx-eval  SHARER=<id> RECEIVER=<id>   eval that pair (same CKPT)"
 	@echo "  make lcfx       SHARER=<id> RECEIVER=<id>   train -> eval end to end"
 	@echo "  (SHARER/RECEIVER apply to every method target; LCFX_*/T2T_* set one method only)"
-	@echo "  known-good ids: Qwen/Qwen3-0.6B  Qwen/Qwen2.5-0.5B-Instruct  Qwen/Qwen3-4B"
-	@echo "                  meta-llama/Llama-3.2-1B-Instruct  google/gemma-3-1b-it  google/gemma-3-4b-it  (gated: HF_TOKEN)"
+	@echo "  primary model roster (all ungated -- no HF_TOKEN needed):"
+	@echo "    Qwen/Qwen2.5-0.5B-Instruct  Qwen/Qwen3-0.6B  unsloth/Llama-3.2-1B-Instruct  unsloth/gemma-3-4b-it  Qwen/Qwen3-8B"
 	@echo "  results + checkpoints auto-separate (results/<method>/<dataset>/<sharer>/<receiver>)."
 	@echo ""
 	@echo "Common knobs:  DATASET=  CKPT=  EVAL_N=  MAX_TRAIN=  MAX_STEPS=  BATCH_SIZE=  GRAD_ACCUM="
 	@echo "Quick smoke:   make lcfx MAX_TRAIN=200 MAX_STEPS=5 EVAL_N=50 BATCH_SIZE=4 GRAD_ACCUM=2"
 
 # ===== Config =================================================================
-PY         ?= .venv/bin/python
+PY         ?= python
 
 # --- dataset selection (shared by all methods/baselines) ---
 DATASET    ?= hotpotqa_bridge
@@ -66,13 +73,13 @@ VAL        ?= $(TASKS)/$(DATASET)_val.jsonl
 # Global default pair (the paper's symmetric Qwen3-0.6B). Each method/baseline
 # reads its OWN sharer/receiver below, which fall back to these globals when not
 # set. Mix sizes / families / tokenizers freely (the fuser bridges differing
-# layers/heads/head_dim); known-good ids:
-#   Qwen/Qwen3-0.6B  Qwen/Qwen2.5-0.5B-Instruct  Qwen/Qwen3-4B
-#   meta-llama/Llama-3.2-1B-Instruct  google/gemma-3-1b-it  google/gemma-3-4b-it   (gated: needs HF_TOKEN)
+# layers/heads/head_dim); primary model roster (all ungated -- no HF_TOKEN needed):
+#   Qwen/Qwen2.5-0.5B-Instruct  Qwen/Qwen3-0.6B
+#   unsloth/Llama-3.2-1B-Instruct  unsloth/gemma-3-4b-it  Qwen/Qwen3-8B
 # Trained fuser checkpoints are stamped with their Sharer/Receiver ids; results and
 # checkpoints auto-separate by dataset + pair (see LCFX_SLUG below), so different
 # runs never overwrite each other. The eval HARD-ERRORS on a model/checkpoint mismatch.
-SHARER     ?= Qwen/Qwen3-0.6B
+SHARER     ?= Qwen/Qwen2.5-0.5B-Instruct
 RECEIVER   ?= Qwen/Qwen3-0.6B
 
 # Per-method models: default to the globals; override one method without touching
@@ -145,11 +152,24 @@ OFFLINE    ?= HF_HUB_OFFLINE=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # ===== Data preparation (dataset-named; runs once, reused thereafter) =========
 # Add a new dataset by giving it train/val prepare rules below; everything else
 # (methods, baselines) consumes $(TRAIN)/$(VAL) and needs no change.
-.PHONY: data data-hotpotqa-bridge data-musique data-qasc
+.PHONY: data data-hotpotqa-bridge data-musique data-qasc data-2wikimultihop data-ropes data-strategyqa
 
-# Generic entrypoint: prepare the currently selected $(DATASET).
-data: $(TRAIN) $(VAL)
+ALL_DATASETS := hotpotqa_bridge musique qasc 2wikimultihop ropes strategyqa
+
+# Generic entrypoint: prepare $(DATASET) if given explicitly (DATASET=... on the
+# command line or environment); otherwise prepare every dataset in ALL_DATASETS.
+data:
+ifeq ($(origin DATASET),command line)
+	$(MAKE) $(TRAIN) $(VAL)
 	@echo "Dataset '$(DATASET)' ready: $(TRAIN) + $(VAL)"
+else ifeq ($(origin DATASET),environment)
+	$(MAKE) $(TRAIN) $(VAL)
+	@echo "Dataset '$(DATASET)' ready: $(TRAIN) + $(VAL)"
+else
+	@status=0; for d in $(ALL_DATASETS); do \
+	  $(MAKE) data DATASET=$$d || status=$$?; \
+	done; exit $$status
+endif
 
 # --- hotpotqa_bridge: partitioned HotpotQA-bridge (downloads on first run) ---
 data-hotpotqa-bridge: $(TASKS)/hotpotqa_bridge_train.jsonl $(TASKS)/hotpotqa_bridge_val.jsonl
@@ -178,15 +198,66 @@ $(TASKS)/qasc_train.jsonl:
 $(TASKS)/qasc_val.jsonl:
 	$(PY) scripts/prepare_qasc.py --split validation --num-examples -1 --seed $(SEED) --output $@
 
+# --- 2wikimultihop: 2WikiMultihopQA compositional (bridge-chain) questions, same
+#     10-paragraph/2-gold shape as hotpotqa_bridge (downloads on first run) ---
+data-2wikimultihop: $(TASKS)/2wikimultihop_train.jsonl $(TASKS)/2wikimultihop_val.jsonl
+
+$(TASKS)/2wikimultihop_train.jsonl:
+	$(PY) scripts/prepare_2wikimultihop.py --split train --num-examples -1 --seed $(SEED) --output $@
+
+$(TASKS)/2wikimultihop_val.jsonl:
+	$(PY) scripts/prepare_2wikimultihop.py --split validation --num-examples -1 --seed $(SEED) --output $@
+
+# --- ropes: natively two-part (background rule | situation scenario); no
+#     invented partitioning needed (downloads on first run) ---
+data-ropes: $(TASKS)/ropes_train.jsonl $(TASKS)/ropes_val.jsonl
+
+$(TASKS)/ropes_train.jsonl:
+	$(PY) scripts/prepare_ropes.py --split train --num-examples -1 --seed $(SEED) --output $@
+
+$(TASKS)/ropes_val.jsonl:
+	$(PY) scripts/prepare_ropes.py --split validation --num-examples -1 --seed $(SEED) --output $@
+
+# --- strategyqa: implicit multi-hop boolean QA; facts list split in half
+#     (downloads on first run; train/val is our own carve-out, see the script) ---
+data-strategyqa: $(TASKS)/strategyqa_train.jsonl $(TASKS)/strategyqa_val.jsonl
+
+$(TASKS)/strategyqa_train.jsonl:
+	$(PY) scripts/prepare_strategyqa.py --split train --num-examples -1 --seed $(SEED) --output $@
+
+$(TASKS)/strategyqa_val.jsonl:
+	$(PY) scripts/prepare_strategyqa.py --split validation --num-examples -1 --seed $(SEED) --output $@
+
 # ===== Model download (into data/hf_cache; like `make data` for datasets) ======
 # Fetch a model once so later (offline) runs find it locally. Idempotent. MODEL is
-# the single-model knob shared with `make single` (defaults to RECEIVER). Gated ids
-# (meta-llama/*, google/*) need an exported HF_TOKEN; mirrors (unsloth/*) need none.
-#   make model MODEL=google/gemma-3-1b-it
+# the single-model knob shared with `make single` (defaults to RECEIVER). All
+# known-good ids are ungated -- no HF_TOKEN needed. With no MODEL= given, `make
+# model` downloads every known-good model instead of picking one.
+#   make model MODEL=unsloth/gemma-3-4b-it
 MODEL ?= $(RECEIVER)
+ALL_MODELS := $(sort $(SHARER) $(RECEIVER) \
+  Qwen/Qwen2.5-0.5B-Instruct Qwen/Qwen3-0.6B \
+  unsloth/Llama-3.2-1B-Instruct unsloth/gemma-3-4b-it Qwen/Qwen3-8B)
+
 .PHONY: model
 model:
+ifeq ($(origin MODEL),command line)
 	$(PY) scripts/download_model.py --model $(MODEL)
+else ifeq ($(origin MODEL),environment)
+	$(PY) scripts/download_model.py --model $(MODEL)
+else
+	@status=0; for m in $(ALL_MODELS); do \
+	  $(PY) scripts/download_model.py --model $$m || status=$$?; \
+	done; exit $$status
+endif
+
+# ===== Prepare (one-shot setup: all datasets + all models) ====================
+# Convenience wrapper: `make data` then `make model`. With no DATASET=/MODEL=
+# given, each defaults to "everything" (see above), so a bare `make prepare` is
+# the fastest way to get a clean checkout ready to run any method/dataset/model
+# combination. Pass DATASET=/MODEL= to narrow either half.
+.PHONY: prepare
+prepare: data model
 
 # ===== LCF-X (method: train a fuser, then evaluate) ===========================
 .PHONY: lcfx lcfx-train lcfx-eval
@@ -218,9 +289,9 @@ lcfx: lcfx-train lcfx-eval
 # A genuinely heterogeneous pair (different family, hidden size, head_dim, depth).
 # Results + checkpoint auto-separate by pair (see LCFX_SLUG), so it never collides
 # with other runs. Override the pair via HETERO_SHARER / HETERO_RECEIVER, e.g.
-#   make lcfx-hetero HETERO_SHARER=google/gemma-3-1b-it
-# Llama/Gemma are gated on HF -- export HF_TOKEN and accept their licenses first.
-HETERO_SHARER   ?= meta-llama/Llama-3.2-1B-Instruct
+#   make lcfx-hetero HETERO_SHARER=unsloth/gemma-3-4b-it
+# Both ids are ungated mirrors -- no HF_TOKEN needed.
+HETERO_SHARER   ?= unsloth/Llama-3.2-1B-Instruct
 HETERO_RECEIVER ?= Qwen/Qwen3-0.6B
 
 .PHONY: lcfx-hetero
@@ -276,14 +347,124 @@ t2t-eval t2t: data
 # ===== Single-model oracle (baseline: ONE model sees ALL evidence) =============
 # Upper bound: a single model answers from both partitions combined (no split, no
 # Sharer) -- i.e. how each model does on the dataset with all available info. It's
-# a single model (not a pair); set MODEL (defaults to RECEIVER), e.g.
-#   make single DATASET=musique MODEL=Qwen/Qwen3-0.6B
+# a single model (not a pair). Split MODEL-major, DATASET-minor, same "given=one,
+# unset=all" pattern as `exp`: with no MODEL=, tests every model in ALL_MODELS;
+# with no DATASET=, tests every dataset.
+#   make single                                        # every model, every dataset
+#   make single MODEL=Qwen/Qwen3-0.6B                  # one model, every dataset
+#   make single DATASET=musique                        # every model, one dataset
+#   make single MODEL=Qwen/Qwen3-0.6B DATASET=musique   # one model, one dataset
 SINGLE_OUT ?= results/single/$(DATASET)/$(subst /,--,$(MODEL))
 
+# Outer loop: model.
 .PHONY: single
-single: data
+single:
+ifeq ($(origin MODEL),command line)
+	$(MAKE) _single-dataset MODEL=$(MODEL)
+else ifeq ($(origin MODEL),environment)
+	$(MAKE) _single-dataset MODEL=$(MODEL)
+else
+	@status=0; for m in $(ALL_MODELS); do \
+	  $(MAKE) single MODEL=$$m || status=$$?; \
+	done; exit $$status
+endif
+
+# Inner loop: dataset, for one already-resolved MODEL. Not meant to be called
+# directly -- go through `single` so the model axis resolves first.
+.PHONY: _single-dataset
+_single-dataset: data
+ifeq ($(origin DATASET),command line)
 	$(OFFLINE) $(PY) scripts/run_single_model.py --dataset $(VAL) \
 	  --model $(MODEL) \
 	  --max-new-tokens $(RECV_MAX) \
 	  $(if $(EVAL_N),--num-examples $(EVAL_N),) \
 	  --output-dir $(SINGLE_OUT)
+else ifeq ($(origin DATASET),environment)
+	$(OFFLINE) $(PY) scripts/run_single_model.py --dataset $(VAL) \
+	  --model $(MODEL) \
+	  --max-new-tokens $(RECV_MAX) \
+	  $(if $(EVAL_N),--num-examples $(EVAL_N),) \
+	  --output-dir $(SINGLE_OUT)
+else
+	@status=0; for d in $(ALL_DATASETS); do \
+	  $(MAKE) _single-dataset MODEL=$(MODEL) DATASET=$$d || status=$$?; \
+	done; exit $$status
+endif
+
+# ===== Experiment sweep (all model pairs, split by method then dataset) =======
+# Drives scripts/run_sweep.py -- see prompt/EXPERIMENT_SWEEP_PLAN.md. Runs the
+# smoke-stage grid (reduced budget) for the primary model roster by default:
+# Qwen2.5-0.5B-Instruct, Qwen3-0.6B, unsloth/Llama-3.2-1B-Instruct,
+# unsloth/gemma-3-4b-it, Qwen/Qwen3-8B -- 5x5=25 pairs (incl. symmetric).
+# Tests are split METHOD-major, DATASET-minor: with no METHOD= given, sweeps
+# t2t, then lcfx, then eiyw in turn (each across every DATASET= it's given, or
+# all 6 datasets if that's also unset); with a METHOD= given, only that method
+# runs (still across all datasets, or just one if DATASET= is also given).
+# Resumable: a cell already `ok` in results/sweep_manifest.jsonl is skipped.
+#   make exp                                                # every method, every dataset (450 cells)
+#   make exp METHOD=t2t                                     # t2t only, every dataset (150 cells)
+#   make exp METHOD=t2t DATASET=hotpotqa_bridge              # t2t only, one dataset (25 cells)
+#   make exp DATASET=hotpotqa_bridge                         # every method, one dataset (75 cells)
+#   make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_GPUS=1,2,3
+#   make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--dry-run"
+#   make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--rerun-failed"
+#   make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--sharer Qwen/Qwen3-8B --receiver Qwen/Qwen3-8B"
+EXP_METHODS             := t2t lcfx eiyw
+EXP_STAGE               ?= smoke
+EXP_GPUS                ?=
+EXP_CONCURRENCY_PER_GPU ?= 1
+EXP_ARGS                ?=
+
+# Outer loop: method. With METHOD= given, hand off straight to the dataset
+# loop below; otherwise run every method in turn (each recursive call then
+# resolves its own DATASET= the same way `data`/`model` resolve DATASET=).
+.PHONY: exp
+exp:
+ifeq ($(origin METHOD),command line)
+	$(MAKE) _exp-dataset METHOD=$(METHOD)
+else ifeq ($(origin METHOD),environment)
+	$(MAKE) _exp-dataset METHOD=$(METHOD)
+else
+	@status=0; for m in $(EXP_METHODS); do \
+	  $(MAKE) exp METHOD=$$m || status=$$?; \
+	done; exit $$status
+endif
+
+# Inner loop: dataset, for one already-resolved METHOD. Not meant to be
+# called directly -- go through `exp` so the method axis resolves first.
+.PHONY: _exp-dataset
+_exp-dataset:
+ifeq ($(origin DATASET),command line)
+	$(PY) scripts/run_sweep.py --dataset $(DATASET) --method $(METHOD) --stage $(EXP_STAGE) \
+	  --concurrency-per-gpu $(EXP_CONCURRENCY_PER_GPU) \
+	  $(if $(EXP_GPUS),--gpus $(EXP_GPUS),) $(EXP_ARGS)
+else ifeq ($(origin DATASET),environment)
+	$(PY) scripts/run_sweep.py --dataset $(DATASET) --method $(METHOD) --stage $(EXP_STAGE) \
+	  --concurrency-per-gpu $(EXP_CONCURRENCY_PER_GPU) \
+	  $(if $(EXP_GPUS),--gpus $(EXP_GPUS),) $(EXP_ARGS)
+else
+	@status=0; for d in $(ALL_DATASETS); do \
+	  $(MAKE) _exp-dataset METHOD=$(METHOD) DATASET=$$d || status=$$?; \
+	done; exit $$status
+endif
+
+# ===== Full pipeline (prepare everything, then sweep every dataset in
+# parallel across GPUs) ==========================================================
+# One command for the whole workflow: prepare data+models (`prepare`), then
+# run the experiment grid for every dataset, distributed across the GPUs
+# listed in CUDA_VISIBLE_DEVICES -- one worker per GPU id, each processing
+# its assigned datasets sequentially (queued by dataset, not interleaved).
+# E.g. with 2 GPUs and this project's 6 datasets, each GPU runs 3 datasets
+# one after another while both GPUs run in parallel. Reuses EXP_STAGE from
+# `exp` above (smoke stage by default).
+#   CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep
+#   CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep METHOD=t2t   # t2t only, same GPU distribution
+#   CUDA_VISIBLE_DEVICES=1,2     make sweep SWEEP_ARGS="--dry-run"
+#   CUDA_VISIBLE_DEVICES=1,2     make sweep SWEEP_ARGS="--rerun-failed"
+#   make sweep                                       # no GPUs pinned -> single sequential worker
+#   CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep EXP_STAGE=full
+SWEEP_ARGS ?=
+
+.PHONY: sweep
+sweep: prepare
+	$(PY) scripts/run_all.py --stage $(EXP_STAGE) $(if $(METHOD),--method $(METHOD),) $(SWEEP_ARGS)

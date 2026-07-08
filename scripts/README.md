@@ -19,7 +19,8 @@ Each eval run also writes a persistent **`eval_log.jsonl`** into its
 
 ## Prerequisites
 
-- Run everything with the project venv: `.venv/bin/python ...`.
+- Run everything with plain `python ...` — activate your own environment first
+  (e.g. `source .venv/bin/activate`) so `python` resolves to the right interpreter.
 - The Hugging Face cache is configured automatically by `_hf_cache.py`, which
   points `HF_HOME` at `data/hf_cache` (HF's native single-root layout: one
   `hub/` for all downloads, `datasets/` for built arrow data). You do **not**
@@ -32,6 +33,7 @@ The scripts:
 | Script | Purpose |
 |--------|---------|
 | `prepare_hotpotqa_bridge.py` | Build the cross-context HotpotQA-bridge task file (LCF-X partitioning). |
+| `prepare_musique.py` / `prepare_qasc.py` / `prepare_2wikimultihop.py` / `prepare_ropes.py` / `prepare_strategyqa.py` | Same idea for the other 5 datasets (see [../README.md](../README.md#available-datasets-dataset) for how each splits). |
 | `run_text_to_text.py` | Run the T2T Sharer→Receiver pipeline. |
 | `run_lcfx.py` | Run the LCF-X latent cache communication method (Sharer cache → pooled summary → fused into Receiver). |
 | `run_eiyw.py` | Run EIYW, the receiver-anchored method (Sharer cache → K soft tokens conditioned on the Receiver's question → prepended to the Receiver input). |
@@ -50,7 +52,7 @@ splits the 10 paragraphs into two 5-paragraph partitions (1 supporting + 4
 distractors each); deterministic given `--seed`.
 
 ```bash
-.venv/bin/python scripts/prepare_hotpotqa_bridge.py --num-examples 200
+python scripts/prepare_hotpotqa_bridge.py --num-examples 200
 ```
 
 Key options:
@@ -79,7 +81,7 @@ The main method: Sharer writes a bounded message; Receiver answers using its own
 context + that message.
 
 ```bash
-.venv/bin/python scripts/run_text_to_text.py \
+python scripts/run_text_to_text.py \
   --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
   --sharer-model Qwen/Qwen2.5-0.5B-Instruct \
   --receiver-model Qwen/Qwen3-0.6B \
@@ -113,7 +115,7 @@ Sharer, no communication. It uses a dedicated single-model prompt, separate from
 the method receiver prompts.
 
 ```bash
-.venv/bin/python scripts/run_single_model.py \
+python scripts/run_single_model.py \
   --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
   --model Qwen/Qwen2.5-0.5B-Instruct \
   --output-dir results/single_model
@@ -139,7 +141,7 @@ fuser), and the Receiver answers from its own partition + that latent summary �
 no text message, no token-position alignment.
 
 ```bash
-.venv/bin/python scripts/run_lcfx.py \
+python scripts/run_lcfx.py \
   --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
   --sharer-model Qwen/Qwen2.5-0.5B-Instruct \
   --receiver-model Qwen/Qwen2.5-0.5B-Instruct \
@@ -162,7 +164,7 @@ its own partition only, i.e. the no-communication floor. Training the fuser is
 what moves accuracy above that floor.
 
 ```bash
-.venv/bin/python scripts/run_lcfx.py --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
+python scripts/run_lcfx.py --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
   --num-examples 10 --output-dir results/lcfx_zeroinit            # zero-init fuser (floor)
 ```
 
@@ -172,13 +174,13 @@ Frozen Sharer/Receiver; only the fuser learns (teacher-forced next-token CE on t
 gold answer, with the Sharer summary fused into the Receiver's prompt cache).
 
 ```bash
-.venv/bin/python scripts/train_lcfx_fuser.py \
+python scripts/train_lcfx_fuser.py \
   --train-data data/tasks/hotpotqa_bridge_cross.jsonl \
   --num-spans 4 --epochs 3 --lr 1e-3 \
   --checkpoint-out data/checkpoints/lcfx/fuser.pt
 
 # then evaluate the trained fuser
-.venv/bin/python scripts/run_lcfx.py \
+python scripts/run_lcfx.py \
   --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
   --num-spans 4 --fuser-checkpoint data/checkpoints/lcfx/fuser.pt \
   --output-dir results/lcfx_trained
@@ -200,7 +202,7 @@ gold answer, with the Sharer summary fused into the Receiver's prompt cache).
 ```bash
 # Partial run, direct script: 2k examples, effective batch 32, short warmup
 HF_HUB_OFFLINE=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-.venv/bin/python scripts/train_lcfx_fuser.py \
+python scripts/train_lcfx_fuser.py \
   --train-data data/tasks/hotpotqa_bridge_train.jsonl \
   --eval-data  data/tasks/hotpotqa_bridge_val.jsonl \
   --sharer-model Qwen/Qwen3-0.6B --receiver-model Qwen/Qwen3-0.6B \
@@ -255,13 +257,13 @@ cache. See [../prompt/EIYW_IMPLEMENTATION_PLAN.md](../prompt/EIYW_IMPLEMENTATION
 
 ```bash
 # Train the translator, then evaluate it.
-.venv/bin/python scripts/train_eiyw.py \
+python scripts/train_eiyw.py \
   --train-data data/tasks/hotpotqa_bridge_train.jsonl \
   --sharer-model Qwen/Qwen2.5-0.5B-Instruct --receiver-model Qwen/Qwen3-0.6B \
   --num-soft-tokens 16 --num-spans 4 \
   --checkpoint-out data/checkpoints/eiyw/translator.pt
 
-.venv/bin/python scripts/run_eiyw.py \
+python scripts/run_eiyw.py \
   --dataset data/tasks/hotpotqa_bridge_val.jsonl \
   --sharer-model Qwen/Qwen2.5-0.5B-Instruct --receiver-model Qwen/Qwen3-0.6B \
   --num-soft-tokens 16 --translator-checkpoint data/checkpoints/eiyw/translator.pt \
@@ -324,9 +326,9 @@ DATA=data/tasks/hotpotqa_bridge_cross.jsonl
 M=Qwen/Qwen2.5-0.5B-Instruct
 N=200
 
-.venv/bin/python scripts/run_single_model.py --dataset $DATA \
+python scripts/run_single_model.py --dataset $DATA \
   --model $M --num-examples $N --output-dir results/single_model
-.venv/bin/python scripts/run_text_to_text.py --dataset $DATA \
+python scripts/run_text_to_text.py --dataset $DATA \
   --sharer-model $M --num-examples $N --output-dir results/t2t
 ```
 

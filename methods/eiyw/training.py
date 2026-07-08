@@ -24,6 +24,7 @@ import random
 from pathlib import Path
 from typing import Any, Iterable
 
+from methods.common.decoding import resolve_answer_stop_id
 from methods.common.progress import ProgressLogger
 from methods.common.prompts import build_receiver_prompt, build_sharer_encode_text
 
@@ -53,18 +54,30 @@ def batched_example_loss(
 ) -> "Any | None":
     """Teacher-forced loss for a batch (the same fusion as inference).
 
-    Each example's full sequence ``[soft ; prompt ; answer]`` is built with no
-    internal padding, then the batch is **right-padded** for one grad-enabled
-    Receiver forward. Right-padding (vs LCF-X's left-padding) is required here:
-    the whole forward carries gradient — left-padded leading tokens would attend
-    to nothing (softmax over all ``-inf`` → NaN), whereas trailing pad tokens
-    always attend causally to real tokens. Each example's answer logits are
-    gathered at its own offset. ``reduction='none'`` returns a per-example loss
-    vector ``[B]`` (used for the batched==unbatched check).
+    Each example's full sequence ``[soft ; prompt ; answer ; stop]`` (see the
+    stop-token note below) is built with no internal padding, then the batch
+    is **right-padded** for one grad-enabled Receiver forward. Right-padding
+    (vs LCF-X's left-padding) is required here: the whole forward carries
+    gradient — left-padded leading tokens would attend to nothing (softmax
+    over all ``-inf`` → NaN), whereas trailing pad tokens always attend
+    causally to real tokens. Each example's answer logits are gathered at its
+    own offset. ``reduction='none'`` returns a per-example loss vector ``[B]``
+    (used for the batched==unbatched check).
     """
 
     import torch
     from torch.nn import functional as F
+
+    # Append a resolved stop-token id to each example's answer *before*
+    # embedding it, so it's fed as a real input token and supervised as a
+    # real target -- everything downstream (embedding length, each example's
+    # `lengths[i]`, the per-example logits slice `start:start+a_len`, and the
+    # target `answers[i]` itself) already generalizes to the wider tensor
+    # with no further changes. Without this, inference never learns to stop
+    # after the answer and instead runs to `max_new_tokens` (EM craters, F1
+    # only partially drops -- see ``prompt/EOS_STOP_TOKEN_FIX.md`` and the
+    # matching fix in ``methods/lcfx/training.py``).
+    stop_id = resolve_answer_stop_id(pair.receiver_tok, pair.receiver)
 
     exs = [_as_example(e) for e in examples]
     rows = []
@@ -75,6 +88,9 @@ def batched_example_loss(
         answer = pair.receiver_tok(
             ex.answer, add_special_tokens=False, return_tensors="pt"
         )["input_ids"][0].to(pair.device)
+        if stop_id is not None:
+            stop_tensor = torch.tensor([stop_id], dtype=answer.dtype, device=pair.device)
+            answer = torch.cat([answer, stop_tensor], dim=0)
         sharer = pair.sharer_tok(
             build_sharer_encode_text(ex), return_tensors="pt"
         )["input_ids"][0].to(pair.device)
