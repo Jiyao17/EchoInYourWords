@@ -320,8 +320,10 @@ def load_translator(
     *,
     device: Any = None,
     allow_model_mismatch: bool = False,
-    num_soft_tokens: int = 16,
-    bottleneck_dim: int = 128,
+    num_soft_tokens: int = 64,
+    bottleneck_dim: int = 256,
+    stage2_num_heads: int = 8,
+    stage2_head_dim: int = 256,
 ) -> EIYWTranslator:
     """Load a trained translator, validating it matches the Sharer/Receiver ``pair``.
 
@@ -345,12 +347,20 @@ def load_translator(
             pair.receiver_spec,
             num_soft_tokens=num_soft_tokens,
             bottleneck_dim=bottleneck_dim,
+            stage2_num_heads=stage2_num_heads,
+            stage2_head_dim=stage2_head_dim,
             zero_init=False,
         )
         translator.load_state_dict(ckpt)
         return translator
 
-    expected_arch = {**_pair_arch(pair)}
+    expected_arch = {
+        **_pair_arch(pair),
+        "num_soft_tokens": num_soft_tokens,
+        "bottleneck_dim": bottleneck_dim,
+        "stage2_num_heads": stage2_num_heads,
+        "stage2_head_dim": stage2_head_dim,
+    }
     ckpt_arch = ckpt.get("arch", {})
     mismatches: list[str] = []
     if ckpt.get("sharer_model") != pair.sharer_spec.name:

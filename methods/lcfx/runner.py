@@ -36,7 +36,7 @@ class LCFXResult:
     answer: str | None
     is_correct: bool | None
     scores: dict[str, Any]
-    latency: dict[str, float]
+    latency: dict[str, float | None]
     token_counts: dict[str, int | None]
     metadata: dict[str, Any]
 
@@ -105,7 +105,7 @@ def run_lcfx_example(
         return residual
 
     start = perf_counter()
-    output, recv_in, recv_out = pair.decode_receiver(
+    output, recv_in, recv_out, recv_first_ms, recv_last_ms = pair.decode_receiver(
         receiver_prompt, residual_fn=residual_fn, max_new_tokens=max_new_tokens
     )
     decode_ms = (perf_counter() - start) * 1000.0
@@ -113,6 +113,12 @@ def run_lcfx_example(
     # Attribute the projection time to the fuser, not the Receiver decode.
     fuser_ms = align_ms + sum(project_ms)
     receiver_ms = decode_ms - sum(project_ms)
+
+    # decode_receiver's own timestamps are relative to its call; shift them to be
+    # relative to the start of this example (sharer + align already elapsed).
+    pre_decode_ms = sharer_ms + align_ms
+    first_token_ms = pre_decode_ms + recv_first_ms if recv_first_ms is not None else None
+    last_token_ms = pre_decode_ms + recv_last_ms if recv_last_ms is not None else None
 
     prediction = parse_choice_answer(output, example.choices)
     is_correct, scores = _score_prediction(prediction, example.answer, score_fn)
@@ -134,6 +140,8 @@ def run_lcfx_example(
             "fuser_ms": fuser_ms,
             "receiver_ms": receiver_ms,
             "total_ms": sharer_ms + fuser_ms + receiver_ms,
+            "first_token_ms": first_token_ms,
+            "last_token_ms": last_token_ms,
         },
         token_counts={
             "sharer_input": sharer_tokens,

@@ -9,6 +9,7 @@ without those libraries installed.
 
 from __future__ import annotations
 
+from time import perf_counter
 from typing import Any
 
 from .runner import GenerationOutput, TextGenerator
@@ -140,19 +141,39 @@ def load_generator(
             return _to_device(encoded)
         return _to_device(tokenizer(prompt, return_tensors="pt"))
 
+    from transformers import StoppingCriteria, StoppingCriteriaList
+
+    class _TokenTimer(StoppingCriteria):
+        """Records a timestamp after each generated token, never forces a stop.
+
+        ``generate()`` invokes every ``StoppingCriteria`` once per decode step
+        (after the new token is appended), so this is the hook point for
+        per-token timing without reimplementing the decode loop.
+        """
+
+        def __init__(self) -> None:
+            self.timestamps: list[float] = []
+
+        def __call__(self, *_args: Any, **_kwargs: Any) -> bool:
+            self.timestamps.append(perf_counter())
+            return False
+
     def generate(prompt: str) -> GenerationOutput:
         inputs = _encode(prompt)
         input_len = int(inputs["input_ids"].shape[1])
 
+        timer = _TokenTimer()
         gen_kwargs: dict[str, Any] = {
             "max_new_tokens": max_new_tokens,
             "do_sample": not deterministic,
             "pad_token_id": tokenizer.pad_token_id,
+            "stopping_criteria": StoppingCriteriaList([timer]),
         }
         if not deterministic:
             gen_kwargs["temperature"] = temperature
             gen_kwargs["top_p"] = top_p
 
+        decode_start = perf_counter()
         with torch.no_grad():
             output_ids = model.generate(**inputs, **gen_kwargs)
 
@@ -160,10 +181,18 @@ def load_generator(
         output_len = int(generated_ids.shape[0])
         text = tokenizer.decode(generated_ids, skip_special_tokens=True)
 
+        # One timestamp per decode step; clip to output_len in case a step
+        # produced a token that was trimmed from the final sequence.
+        step_times = timer.timestamps[:output_len]
+        first_token_ms = (step_times[0] - decode_start) * 1000.0 if step_times else None
+        last_token_ms = (step_times[-1] - decode_start) * 1000.0 if step_times else None
+
         return GenerationOutput(
             text=text,
             input_tokens=input_len,
             output_tokens=output_len,
+            first_token_ms=first_token_ms,
+            last_token_ms=last_token_ms,
         )
 
     return generate

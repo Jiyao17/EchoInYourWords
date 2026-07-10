@@ -36,6 +36,10 @@ class ModelSpec:
 
 def _spec_from_model(name: str, model: Any) -> ModelSpec:
     cfg = model.config
+    if not hasattr(cfg, "num_attention_heads") and hasattr(cfg, "text_config"):
+        # Composite configs (e.g. Gemma3Config) nest the decoder dims under
+        # text_config instead of exposing them on the top-level config.
+        cfg = cfg.text_config
     n_heads = cfg.num_attention_heads
     kv_heads = getattr(cfg, "num_key_value_heads", None) or n_heads
     head_dim = getattr(cfg, "head_dim", None) or (cfg.hidden_size // n_heads)
@@ -150,22 +154,30 @@ class EIYWPair:
         text: str,
         soft_tokens: "Any | None" = None,
         max_new_tokens: int = 64,
-    ) -> tuple[str, int, int]:
+    ) -> tuple[str, int, int, "float | None", "float | None"]:
         """Greedy-decode the Receiver, optionally prepending soft tokens to its input.
 
         ``soft_tokens`` is ``[1, K, hidden_r]`` (or ``None`` for the Receiver-only
         floor). Prefill uses ``inputs_embeds`` = ``[soft_tokens ; embed(prompt)]``;
         subsequent steps feed new ``input_ids`` against the growing cache.
 
-        Returns ``(output_text, input_tokens, output_tokens)``.
+        Returns ``(output_text, input_tokens, output_tokens, first_token_ms,
+        last_token_ms)``. The token timestamps are milliseconds elapsed since this
+        call started (tokenize + prefill included) to the first/last *generated*
+        token; both are ``None`` if no tokens were generated.
         """
 
         import torch
+        from time import perf_counter
 
+        decode_start = perf_counter()
         ids = self._encode_chat(self.receiver_tok, text)
         input_tokens = int(ids.shape[1])
         stop_ids = resolve_stop_ids(self.receiver_tok, self.receiver)
         embed = self._receiver_embed()
+
+        first_token_ms: float | None = None
+        last_token_ms: float | None = None
 
         with torch.no_grad():
             prompt_embeds = embed(ids)  # [1, T, H]
@@ -183,13 +195,16 @@ class EIYWPair:
                 if next_id in stop_ids:
                     break
                 generated.append(next_id)
+                last_token_ms = (perf_counter() - decode_start) * 1000.0
+                if first_token_ms is None:
+                    first_token_ms = last_token_ms
                 cur = torch.tensor([[next_id]], device=self.device)
                 step = self.receiver(input_ids=cur, past_key_values=cache, use_cache=True)
                 cache = step.past_key_values
                 next_id = int(step.logits[:, -1, :].argmax(dim=-1))
 
         text_out = self.receiver_tok.decode(generated, skip_special_tokens=True)
-        return text_out.strip(), input_tokens, len(generated)
+        return text_out.strip(), input_tokens, len(generated), first_token_ms, last_token_ms
 
 
 def check_pair_compatible(pair: EIYWPair) -> dict[str, Any]:

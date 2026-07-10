@@ -52,29 +52,43 @@ def summarize_metrics(results: Sequence[Any]) -> dict[str, Any]:
 
 
 def summarize_latency(results: Sequence[Any]) -> dict[str, Any]:
-    """Compute aggregate latency statistics from result records."""
+    """Compute aggregate latency statistics from result records.
 
-    totals = {
-        "sharer_ms": 0.0,
-        "fuser_ms": 0.0,
-        "receiver_ms": 0.0,
-        "total_ms": 0.0,
-    }
+    The core keys (``sharer_ms``/``fuser_ms``/``receiver_ms``/``total_ms``) are
+    reported by every method and summed unconditionally. Methods with a
+    per-token decode loop (LCF-X, EIYW) additionally report ``first_token_ms``/
+    ``last_token_ms``; those are picked up automatically from whichever results
+    carry them. A ``None`` value (e.g. zero tokens generated) is skipped rather
+    than treated as zero, mirroring :func:`summarize_tokens`.
+    """
+
+    core_keys = ("sharer_ms", "fuser_ms", "receiver_ms", "total_ms")
+    extra_keys = sorted(
+        {key for result in results for key in result.latency if key not in core_keys}
+    )
+
+    totals: dict[str, float] = {key: 0.0 for key in (*core_keys, *extra_keys)}
+    counted: dict[str, int] = {key: 0 for key in extra_keys}
 
     for result in results:
-        for key in totals:
+        for key in core_keys:
             totals[key] += float(result.latency.get(key, 0.0))
+        for key in extra_keys:
+            value = result.latency.get(key)
+            if value is not None:
+                totals[key] += float(value)
+                counted[key] += 1
 
     count = len(results)
-    averages = {
-        key: (value / count if count else None)
-        for key, value in totals.items()
-    }
+    averages = {key: (totals[key] / count if count else None) for key in core_keys}
+    averages.update(
+        {key: (totals[key] / counted[key] if counted[key] else None) for key in extra_keys}
+    )
 
-    return {
-        "total": totals,
-        "average": averages,
-    }
+    summary: dict[str, Any] = {"total": totals, "average": averages}
+    if extra_keys:
+        summary["counted_examples"] = counted
+    return summary
 
 
 def summarize_tokens(results: Sequence[Any]) -> dict[str, Any]:

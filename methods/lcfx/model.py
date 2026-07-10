@@ -37,6 +37,10 @@ class ModelSpec:
 
 def _spec_from_model(name: str, model: Any) -> ModelSpec:
     cfg = model.config
+    if not hasattr(cfg, "num_attention_heads") and hasattr(cfg, "text_config"):
+        # Composite configs (e.g. Gemma3Config) nest the decoder dims under
+        # text_config instead of exposing them on the top-level config.
+        cfg = cfg.text_config
     n_heads = cfg.num_attention_heads
     kv_heads = getattr(cfg, "num_key_value_heads", None) or n_heads
     head_dim = getattr(cfg, "head_dim", None) or (cfg.hidden_size // n_heads)
@@ -120,7 +124,9 @@ class LCFXPair:
         Returns ``(summary, input_tokens)`` where ``summary`` is per layer
         ``(K, V)`` of shape ``[B, H_s, N_S, D_s]``. The fuser's 2-stage
         learned-attention pooling (``LCFXFuser.align``) turns these into a
-        Receiver-shaped residual.
+        position-free, still Sharer-shaped summary; ``LCFXFuser.project``
+        then turns that (plus the Receiver cache) into a Receiver-shaped
+        residual.
         """
 
         import torch
@@ -136,7 +142,7 @@ class LCFXPair:
         text: str,
         residual_fn: "Any | None" = None,
         max_new_tokens: int = 64,
-    ) -> tuple[str, int, int]:
+    ) -> tuple[str, int, int, "float | None", "float | None"]:
         """Greedy-decode the Receiver, optionally fusing a residual into its cache.
 
         ``residual_fn`` is called with the prefilled Receiver cache (a
@@ -144,14 +150,23 @@ class LCFXPair:
         — so the projector can read the Receiver cache, per the LCF design. ``None``
         runs the Receiver alone.
 
-        Returns ``(output_text, input_tokens, output_tokens)``.
+        Returns ``(output_text, input_tokens, output_tokens, first_token_ms,
+        last_token_ms)``. The token timestamps are milliseconds elapsed since this
+        call started (tokenize + prefill + residual fuse included) to the
+        first/last *generated* token; both are ``None`` if no tokens were
+        generated (e.g. the prompt already ends on a stop token).
         """
 
         import torch
+        from time import perf_counter
 
+        decode_start = perf_counter()
         ids = self._encode_chat(self.receiver_tok, text)
         input_tokens = int(ids.shape[1])
         stop_ids = resolve_stop_ids(self.receiver_tok, self.receiver)
+
+        first_token_ms: float | None = None
+        last_token_ms: float | None = None
 
         with torch.no_grad():
             if ids.shape[1] >= 2:
@@ -174,10 +189,13 @@ class LCFXPair:
                 if next_id in stop_ids:
                     break
                 generated.append(next_id)
+                last_token_ms = (perf_counter() - decode_start) * 1000.0
+                if first_token_ms is None:
+                    first_token_ms = last_token_ms
                 cur = torch.tensor([[next_id]], device=self.device)
 
         text_out = self.receiver_tok.decode(generated, skip_special_tokens=True)
-        return text_out.strip(), input_tokens, len(generated)
+        return text_out.strip(), input_tokens, len(generated), first_token_ms, last_token_ms
 
 
 def check_pair_compatible(pair: LCFXPair) -> dict[str, Any]:

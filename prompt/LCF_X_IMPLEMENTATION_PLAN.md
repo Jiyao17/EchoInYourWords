@@ -57,54 +57,53 @@ Per-Receiver-layer flow. **Bold** = the LCF-X-specific step.
    - *Within-span* (stage 1): a shared learned query attends over the tokens of
      each of `P` spans → `[B, H_s, P, D_s]` (keeps Sharer geometry), over each
      example's **real** tokens (length-masked in the batched path).
-   - *Across-span + cross-model* (stage 2): Receiver-sized learnable queries (one
-     per Receiver layer) attend over the `L_s·P` span tokens, and the value
-     projection emits Receiver head geometry → a **position-free** summary
-     `ℝ^(B×H_r×1×D_r)` per Receiver layer. Note the axes are converted by *two*
-     mechanisms (see Cross-model handling): sequence `P→1` and layers `L_s→L_r`
-     by the **attention queries**; heads `H_s→H_r` and head-dim `D_s→D_r` by the
-     **value projection**. (The paper's pool keeps the `1` slot and keeps `H, D`;
-     we remap `H/D` in the value projection because we allow different models.)
-4. **Project (the paper's joint KV bottleneck) — per Receiver layer, Receiver-aware:**
-   the projector assumes Sharer and Receiver caches share shape, which step 3
-   guarantees. Faithful to the paper, per layer:
-   `x = concat&flatten(aS_K, aS_V, R_K, R_V)` (the `4·H·D` Concat & Flatten) →
+   - *Across-span* (stage 2): Receiver-sized learnable queries (one per Receiver
+     layer) attend over the `L_s·P` span tokens → a **position-free** summary
+     `ℝ^(B×H_s×1×D_s)` per Receiver layer, still in **Sharer** geometry. Only
+     sequence `P→1` and layers `L_s→L_r` are converted, both by the **attention
+     queries** (see Cross-model handling); `H_s`/`D_s` are never remapped —
+     matching the paper's Fig. 3, which keeps `H, D` through the pool.
+4. **Project (the paper's joint KV bottleneck) — per Receiver layer:** the
+   projector does **not** require Sharer and Receiver caches to share shape —
+   it concatenates the still-Sharer-shaped pooled summary with the Receiver
+   cache directly, so the Sharer's KV shape never has to match the Receiver's.
+   Faithful to the paper, per layer:
+   `x = concat&flatten(aS_K, aS_V, R_K, R_V)` (Concat & Flatten, width
+   `2·H_s·D_s + 2·H_r·D_r`) →
    `z = W_down x` → **2-layer MLP** → split `[z_K, z_V]` → **input-dependent
    per-head gates** `α_i = σ(W_gate z)` → **separate per-layer up-projections**
-   `Δ_i = W_up^i z_i` → **per-layer (Gumbel-)sigmoid gate** `g`. The residual is
-   position-dependent and Receiver-aware. (~26.6M trainable params for the Qwen3
-   pair, matching the paper's ~25.9M.)
+   `Δ_i = W_up^i z_i` (always emitting Receiver geometry) → **per-layer
+   (Gumbel-)sigmoid gate** `g`. The residual is position-dependent and
+   Receiver-shaped.
 5. **Fuse:** gated residual add into the Receiver cache: `R_i' = R_i + g·(α_i⊙Δ_i)`.
 6. **Generate:** the Receiver answers from its own context + fused cache; score
    free-form with EM/F1.
 
 ### Cross-model handling — how each axis is converted (precise mechanism)
 
-The LCF projector assumes the Sharer and Receiver caches share shape, so `align`
-does all cross-model conversion *first*. **But not every axis is converted the
-same way** — this matters for understanding/extending the code:
+Unlike an earlier draft of this design, the pool does **not** convert every
+axis: `align` only ever converts `N` and `L`; `H` and `D` pass through
+untouched, matching the paper's Fig. 3 (its Sharer and Receiver are both
+Qwen3-0.6B, so `H, D` trivially match — the paper never needed to convert
+them). We support different-sized Sharer/Receiver pairs anyway, because the
+projector's concat-and-bottleneck doesn't require its two inputs to share
+shape:
 
 | Axis | Conversion | Mechanism |
 |---|---|---|
 | Sequence `N` | `N_S → P → 1` (broadcast to `N_R` in `project`) | **attention** — query count sets the output count (within-span query pools each span; the result is one position-free slot) |
 | Layers `L` | `L_s → L_r` | **attention** — one learnable query per Receiver layer attends over all Sharer-layer span tokens |
-| Heads `H` | `H_s → H_r` | **value projection** — `value_proj: 2·H_s·D_s → 2·H_r·D_r`, then reshaped into `H_r` heads (NOT query-driven) |
-| Head-dim `D` | `D_s → D_r` | **value projection** (the feature dim; in attention the output feature dim always comes from the value, so this is a projection even in the paper, which keeps `D`) |
+| Heads `H` | untouched (`H_s` stays `H_s`) | pooled summary stays in Sharer geometry; absorbed by the projector's `W_down` (input width `2·H_s·D_s + 2·H_r·D_r`) |
+| Head-dim `D` | untouched (`D_s` stays `D_s`) | same — absorbed by `W_down`, not by the pool |
 
-So `N` and `L` are handled by the attention queries (the "N way"), while `H` and
-`D` are folded into the stage-2 `value_proj` linear. `H` *could* be made
-query-driven too (per-`(layer, head)` queries, like `N_R` queries produce `N_R`
-outputs); we deliberately keep it as a value projection — it's simpler, and `D`
-is a value projection regardless. The projector then concatenates the aligned
-Sharer cache with the Receiver cache (now identical shape) and emits the residual.
+So `N` and `L` are the only axes the pool converts, both via the attention
+queries. The projector then concatenates the (still Sharer-shaped) aligned
+summary with the Receiver cache — no shape match required — and its
+`W_up^K`/`W_up^V` always emit Receiver geometry, so the residual comes out
+Receiver-shaped regardless of how different the Sharer was.
 
 `check_pair_compatible(...)` **records** dims/heads/layers (used to size the
 projections); it never *requires* equality, so different model sizes work.
-
-> Honest caveat: the paper's pool keeps `H, D` (its Sharer and Receiver are both
-> Qwen3-0.6B, so they match) and leaves any mismatch to the learned projections.
-> Converting `H/D` in the value projection (and `N/L` by the queries) is **our**
-> principled generalization for different model sizes.
 
 ## Relationship to LCF (why no separate flag/mode)
 
@@ -124,7 +123,7 @@ touch torch (deferred imports).
 | `schema.py` | `LCFXExample` — cross-context example (`id, question, choices, answer, sharer_context, receiver_context, metadata`). Mirrors `T2TExample`. |
 | `prompts.py` | Build the Sharer encode prompt (its context) and the Receiver answer prompt (its context + fused summary); reuse T2T answer formatting. |
 | `cache.py` | `extract_kv` (raw per-layer KV) + `add_residual_inplace` (gated residual add). All pooling/alignment lives in the fuser. Targets transformers-5 `DynamicCache` (`.layers[i].keys/.values`). |
-| `fuser.py` | `LCFXFuser(nn.Module)` — `align` (**2-stage learned-attention pooling**: within-span `N_S→P` keeping Sharer geom, then across-span + cross-model `L_s·P→1` with Receiver-sized queries → Receiver geometry; converts `N/H/D/L`) + `project` (the paper's **per-layer** joint KV bottleneck: `W_down` → 2-layer MLP → latent split `z_K/z_V` → input-dependent per-head gates `α(z)` → separate `W_up^K/W_up^V` → per-layer Gumbel-sigmoid gate `g`). `zero_init` zeroes the up-projections (Δ=0 ⇒ residual 0; gates stay nonzero so up still gets gradient). ~26.9M params (≈ paper's 25.9M). |
+| `fuser.py` | `LCFXFuser(nn.Module)` — `align` (**2-stage learned-attention pooling**: within-span `N_S→P` keeping Sharer geom, then across-span `L_s·P→1` with Receiver-sized queries, still Sharer geometry; converts only `N/L`, `H/D` untouched) + `project` (the paper's **per-layer** joint KV bottleneck on `[aligned-S (Sharer geom) ; R (Receiver geom)]`: `W_down` (input width `2·H_s·D_s + 2·H_r·D_r`) → 2-layer MLP → latent split `z_K/z_V` → input-dependent per-head gates `α(z)` → separate `W_up^K/W_up^V` (always Receiver geometry) → per-layer Gumbel-sigmoid gate `g`). `zero_init` zeroes the up-projections (Δ=0 ⇒ residual 0; gates stay nonzero so up still gets gradient). |
 | `model.py` | `load_lcfx_pair(...)` (frozen Sharer + Receiver, deferred torch), `sharer_summary` (encode → raw KV), `decode_receiver` (greedy; computes the residual from the prefilled Receiver cache via a `residual_fn` callback, then injects), `check_pair_compatible`. |
 | `runner.py` | `run_lcfx_example` (encode→align[2-stage pool]→project[with Receiver cache]→fuse→generate) and `run_receiver_only_example` (no fusion, for the equality check); `LCFXResult` (`method="lcf_x"`). |
 | `io.py` | Mirror of T2T `io.py` for `LCFXResult`; same four output files; uniform latency contract `sharer_ms` (encode), `fuser_ms` (align[pool]+project), `receiver_ms` (generate), `total_ms`. |

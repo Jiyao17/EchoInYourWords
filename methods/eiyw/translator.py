@@ -16,10 +16,12 @@ Pipeline (one ``translate`` call):
    ``Q_base in R^{K x d}`` is modulated by the Receiver-question anchor
    (``Q = Q_base + W_a . anchor``, FiLM-style), so *what gets communicated depends
    on the Receiver's task*, not only on how the Sharer encoded its context.
-3. **Cross-attention** of the K queries over the ``L_s*P`` span tokens; the value
-   projection emits ``hidden_r`` features, and an output projection produces the
-   K soft tokens ``[B, K, hidden_r]``. This bridges arbitrary ``(H_s, D_s, L_s)``
-   to ``hidden_r``, so heterogeneous Sharer/Receiver pairs work unchanged.
+3. **Multi-head cross-attention** of the K queries over the ``L_s*P`` span tokens;
+    the attention runs in ``stage2_num_heads`` heads of width ``stage2_head_dim``
+    each, so the internal stage-2 width grows with head count. A final output
+    projection produces the K soft tokens ``[B, K, hidden_r]``. This bridges
+    arbitrary ``(H_s, D_s, L_s)`` to ``hidden_r``, so heterogeneous Sharer/Receiver
+    pairs work unchanged.
 
 ``zero_init=True`` zeros the output projection so the soft tokens start near zero
 (a gradient-safe init). Note this does **not** reduce EIYW to the Receiver
@@ -44,13 +46,19 @@ class EIYWTranslator(nn.Module):
         sharer_kv_heads: int,
         sharer_head_dim: int,
         receiver_hidden: int,
-        num_soft_tokens: int = 16,
-        bottleneck_dim: int = 128,
+        num_soft_tokens: int = 64,
+        bottleneck_dim: int = 256,
+        stage2_num_heads: int = 8,
+        stage2_head_dim: int = 256,
         zero_init: bool = True,
     ) -> None:
         super().__init__()
         if num_soft_tokens < 1:
             raise ValueError("num_soft_tokens must be >= 1")
+        if stage2_num_heads < 1:
+            raise ValueError("stage2_num_heads must be >= 1")
+        if stage2_head_dim < 1:
+            raise ValueError("stage2_head_dim must be >= 1")
         # Sharer dims + receiver hidden are kept so the module is self-describing
         # for checkpointing (they determine every weight shape).
         self.sharer_layers = sharer_layers
@@ -59,6 +67,9 @@ class EIYWTranslator(nn.Module):
         self.receiver_hidden = receiver_hidden
         self.num_soft_tokens = num_soft_tokens
         self.bottleneck_dim = bottleneck_dim
+        self.stage2_num_heads = stage2_num_heads
+        self.stage2_head_dim = stage2_head_dim
+        self.stage2_width = stage2_num_heads * stage2_head_dim
         self.attn_dim = bottleneck_dim
         sharer_token_dim = 2 * sharer_kv_heads * sharer_head_dim
 
@@ -67,13 +78,13 @@ class EIYWTranslator(nn.Module):
         self.span_key = nn.Linear(sharer_token_dim, bottleneck_dim)
         self.span_query = nn.Parameter(torch.randn(bottleneck_dim) * 0.02)
 
-        # --- Stage 2: receiver-anchored cross-attention (L_s*P -> K soft tokens).
-        self.key_proj = nn.Linear(sharer_token_dim, bottleneck_dim)
-        self.value_proj = nn.Linear(sharer_token_dim, receiver_hidden)
+        # --- Stage 2: receiver-anchored multi-head cross-attention (L_s*P -> K).
+        self.key_proj = nn.Linear(sharer_token_dim, self.stage2_width)
+        self.value_proj = nn.Linear(sharer_token_dim, self.stage2_width)
         # Learnable query bank (one query per soft token) ...
-        self.query_bank = nn.Parameter(torch.randn(num_soft_tokens, bottleneck_dim) * 0.02)
+        self.query_bank = nn.Parameter(torch.randn(num_soft_tokens, self.stage2_width) * 0.02)
         # ... modulated by the Receiver-question anchor (the receiver-anchoring).
-        self.anchor_proj = nn.Linear(receiver_hidden, bottleneck_dim)
+        self.anchor_proj = nn.Linear(receiver_hidden, self.stage2_width)
 
         # --- Output projection into Receiver embedding space.
         # ``zero_init`` uses a *gentle* small-scale init (not exact zero): the soft
@@ -82,7 +93,7 @@ class EIYWTranslator(nn.Module):
         # all-zero vectors to the frozen Receiver makes its backward non-finite
         # (``0 * inf``) — and EIYW has no zero-init==Receiver-alone property to
         # preserve anyway (a gentle-init run is just a plumbing pass).
-        self.out_proj = nn.Linear(receiver_hidden, receiver_hidden)
+        self.out_proj = nn.Linear(self.stage2_width, receiver_hidden)
         if zero_init:
             nn.init.normal_(self.out_proj.weight, std=1e-3)
             nn.init.zeros_(self.out_proj.bias)
@@ -156,11 +167,18 @@ class EIYWTranslator(nn.Module):
 
         # Stage 2: receiver-anchored queries attend over the span tokens.
         keys = self.key_proj(token_set)  # [B, L_s*P, d]
-        values = self.value_proj(token_set)  # [B, L_s*P, hidden_r]
+        values = self.value_proj(token_set)  # [B, L_s*P, d]
         anchor_q = self.anchor_proj(anchor.to(weight_dtype))  # [B, d]
         queries = self.query_bank.to(weight_dtype)[None] + anchor_q[:, None, :]  # [B, K, d]
-        scores = torch.einsum("bkd,btd->bkt", queries, keys) / (self.attn_dim**0.5)
-        pooled = torch.einsum("bkt,btf->bkf", scores.softmax(dim=-1), values)  # [B, K, hidden_r]
+
+        h = self.stage2_num_heads
+        d_h = self.stage2_head_dim
+        keys = keys.view(batch, -1, h, d_h).transpose(1, 2)  # [B, H, T, d_h]
+        values = values.view(batch, -1, h, d_h).transpose(1, 2)  # [B, H, T, d_h]
+        queries = queries.view(batch, -1, h, d_h).transpose(1, 2)  # [B, H, K, d_h]
+        scores = torch.einsum("bhkd,bhtd->bhkt", queries, keys) / (d_h**0.5)
+        pooled = torch.einsum("bhkt,bhtd->bhkd", scores.softmax(dim=-1), values)  # [B, H, K, d_h]
+        pooled = pooled.transpose(1, 2).contiguous().view(batch, self.num_soft_tokens, self.stage2_width)
         return self.out_proj(pooled)  # [B, K, hidden_r]
 
     def forward(
@@ -178,8 +196,10 @@ class EIYWTranslator(nn.Module):
         sharer_spec: "object",
         receiver_spec: "object",
         *,
-        num_soft_tokens: int = 16,
-        bottleneck_dim: int = 128,
+        num_soft_tokens: int = 64,
+        bottleneck_dim: int = 256,
+        stage2_num_heads: int = 8,
+        stage2_head_dim: int = 256,
         zero_init: bool = True,
     ) -> "EIYWTranslator":
         return cls(
@@ -189,6 +209,8 @@ class EIYWTranslator(nn.Module):
             receiver_hidden=receiver_spec.hidden,
             num_soft_tokens=num_soft_tokens,
             bottleneck_dim=bottleneck_dim,
+            stage2_num_heads=stage2_num_heads,
+            stage2_head_dim=stage2_head_dim,
             zero_init=zero_init,
         )
 
@@ -206,6 +228,8 @@ class EIYWTranslator(nn.Module):
             "receiver_hidden": self.receiver_hidden,
             "num_soft_tokens": self.num_soft_tokens,
             "bottleneck_dim": self.bottleneck_dim,
+            "stage2_num_heads": self.stage2_num_heads,
+            "stage2_head_dim": self.stage2_head_dim,
         }
 
     @classmethod
@@ -219,6 +243,8 @@ class EIYWTranslator(nn.Module):
             receiver_hidden=cfg["receiver_hidden"],
             num_soft_tokens=cfg["num_soft_tokens"],
             bottleneck_dim=cfg["bottleneck_dim"],
+            stage2_num_heads=cfg.get("stage2_num_heads", 8),
+            stage2_head_dim=cfg.get("stage2_head_dim", 256),
             zero_init=zero_init,
         )
 

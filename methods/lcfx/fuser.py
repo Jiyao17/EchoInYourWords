@@ -2,28 +2,31 @@
 
 Two stages:
 
-1. **Pooling / align (learned attention).** Following the paper, the pool is a
-   learned attention whose query count determines the output count. Two stages:
-   within-span (`N_S -> P`, keeps Sharer geometry) then across-span
-   (`L_s*P -> 1`). For cross-model use, the axes are converted by *two*
-   mechanisms (NOT all "the N way"):
-     - sequence `N` and layers `L`: by the **attention queries** (`N_S->P->1`;
-       one query per Receiver layer gives `L_s->L_r`);
-     - heads `H` and head-dim `D`: by the stage-2 **value projection**
-       (`2*H_s*D_s -> 2*H_r*D_r`, reshaped to `H_r` heads). `D` is a feature dim,
-       so it is a projection in any attention design (and the paper keeps `D`).
-   Output: a Receiver-shaped Sharer summary `[B, H_r, 1, D_r]` per Receiver
-   layer. With matched models this just reproduces a Receiver-geometry summary.
+1. **Pooling / align (learned attention).** Following the paper (Fig. 3), the
+   pool is a learned attention whose query count determines the output count,
+   and it leaves `H` and `D` untouched — only `N` (sequence) and `L` (layers)
+   are converted:
+     - within-span (`N_S -> P`, keeps Sharer geometry) then across-span
+       (`L_s*P -> 1`), both driven by the **attention queries** (one query per
+       Receiver layer gives `L_s -> L_r`).
+   Output: a *Sharer*-shaped Sharer summary `[B, H_s, 1, D_s]` per Receiver
+   layer — `H_s`/`D_s` are never remapped here. The Sharer's KV shape doesn't
+   need to match the Receiver's at all: the projector below concatenates the
+   (still Sharer-shaped) pooled summary with the Receiver cache and lets the
+   down-projection absorb the size difference; the up-projection then emits a
+   Receiver-shaped residual regardless of how the Sharer was shaped.
 
 2. **Projector (paper's joint key-value bottleneck), per Receiver layer.** Faithful
    to the paper:
-       x      = concat&flatten(aS_K, aS_V, R_K, R_V)        # 4 * H_r * D_r
+       x      = concat&flatten(aS_K, aS_V, R_K, R_V)        # 2*H_s*D_s + 2*H_r*D_r
        z      = W_down x ; z = 2-layer MLP(z)               # -> d, intermediate 4d
        z_K,z_V = split(z)                                   # each d/2
        a_i    = sigmoid(W_gate z)                           # input-dependent per-head gate
        Δ_i    = W_up^i z_i,  i in {K,V}                     # separate per-layer up-proj
        R_i'   = R_i + g · (a_i ⊙ Δ_i)                       # g = per-layer (Gumbel-)sigmoid gate
-   Each Receiver layer has its own down / MLP / gate / up (per-layer projectors).
+   Each Receiver layer has its own down / MLP / gate / up (per-layer projectors);
+   `W_up^i` outputs Receiver geometry, so this is also where any Sharer/Receiver
+   shape mismatch resolves.
 
 ``zero_init=True`` zeroes the up-projections, so Δ = 0 ⇒ residual = 0 and LCF-X
 reproduces the Receiver-only run (the plumbing check), while the gates stay
@@ -46,19 +49,34 @@ def _gumbel_sigmoid(logit: torch.Tensor, training: bool, tau: float = 1.0) -> to
 
 
 class _LayerProjector(nn.Module):
-    """Paper's per-layer joint KV bottleneck (operates on matched Receiver dims)."""
+    """Paper's per-layer joint KV bottleneck.
+
+    Input is `[aS_K ; aS_V ; R_K ; R_V]` — the pooled Sharer summary (still in
+    *Sharer* geometry) concatenated with the Receiver cache (Receiver
+    geometry) — so the down-projection's input width is
+    `2*H_s*D_s + 2*H_r*D_r`, not `4*H_r*D_r`. Output (`W_up^i`) is always
+    Receiver geometry, so this is where any Sharer/Receiver shape mismatch
+    resolves.
+    """
 
     def __init__(
-        self, kv_heads: int, head_dim: int, bottleneck_dim: int, zero_init: bool
+        self,
+        sharer_kv_heads: int,
+        sharer_head_dim: int,
+        kv_heads: int,
+        head_dim: int,
+        bottleneck_dim: int,
+        zero_init: bool,
     ) -> None:
         super().__init__()
         self.kv_heads = kv_heads
         self.head_dim = head_dim
         self.bottleneck_dim = bottleneck_dim
+        sharer_feat = sharer_kv_heads * sharer_head_dim  # H_s * D_s
         receiver_feat = kv_heads * head_dim  # H_r * D_r
         half = bottleneck_dim // 2
 
-        self.down = nn.Linear(4 * receiver_feat, bottleneck_dim)
+        self.down = nn.Linear(2 * sharer_feat + 2 * receiver_feat, bottleneck_dim)
         self.mlp = nn.Sequential(
             nn.Linear(bottleneck_dim, 4 * bottleneck_dim),
             nn.GELU(),
@@ -83,7 +101,8 @@ class _LayerProjector(nn.Module):
         layer_gate: torch.Tensor,
         training: bool,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        # aligned_*: [B, H_r, 1, D_r] (broadcast over N); recv_*: [B, H_r, N, D_r]
+        # aligned_*: [B, H_s, 1, D_s] (Sharer geometry, broadcast over N);
+        # recv_*: [B, H_r, N, D_r] (Receiver geometry).
         weight_dtype = self.down.weight.dtype
         batch, _, seq, _ = recv_key.shape
 
@@ -98,7 +117,7 @@ class _LayerProjector(nn.Module):
                 _flat(recv_value),
             ],
             dim=-1,
-        )  # [B, N, 4*receiver_feat]
+        )  # [B, N, 2*sharer_feat + 2*receiver_feat]
 
         z = self.mlp(self.down(joint))  # [B, N, d]
         half = self.bottleneck_dim // 2
@@ -117,7 +136,14 @@ class _LayerProjector(nn.Module):
 
 
 class LCFXFuser(nn.Module):
-    """Learned-attention pooling (cross-model) + paper's per-layer KV-bottleneck projector."""
+    """Paper-faithful learned-attention pooling + per-layer KV-bottleneck projector.
+
+    The pool (``align``) never remaps `H`/`D`; the Sharer summary stays in
+    Sharer geometry. Cross-model shape differences are resolved entirely by
+    the projector (``project``): its down-projection input width is
+    `2*H_s*D_s + 2*H_r*D_r`, and its up-projection always emits Receiver
+    geometry.
+    """
 
     def __init__(
         self,
@@ -143,7 +169,6 @@ class LCFXFuser(nn.Module):
         self.receiver_head_dim = receiver_head_dim
         self.bottleneck_dim = bottleneck_dim
         self.attn_dim = bottleneck_dim
-        receiver_feat = receiver_kv_heads * receiver_head_dim
         sharer_token_dim = 2 * sharer_kv_heads * sharer_head_dim
 
         # --- Stage 1a: within-span learned attention (N_S -> P), keeps Sharer geometry.
@@ -151,20 +176,25 @@ class LCFXFuser(nn.Module):
         # pooling query is reused for every span").
         self.span_key = nn.Linear(sharer_token_dim, bottleneck_dim)
         self.span_query = nn.Parameter(torch.randn(bottleneck_dim) * 0.02)
-        # --- Stage 1b: across-span + cross-model attention (L_s*P tokens -> Receiver
-        # geometry). Receiver-sized queries (one per Receiver layer) attend over the
-        # span tokens; the value projection emits Receiver head geometry. This is how
-        # H/D (and the remaining N, L) are converted -- the same learned-attention
-        # mechanism the paper uses to pool N.
+        # --- Stage 1b: across-span attention (L_s*P tokens -> 1), still Sharer
+        # geometry (paper: pool keeps H, D). One learnable query per Receiver
+        # layer attends over the span tokens to convert L_s -> L_r; the value
+        # projection stays in Sharer feature space (no H/D remap here) -- the
+        # projector below absorbs any Sharer/Receiver shape mismatch instead.
         self.key_proj = nn.Linear(sharer_token_dim, bottleneck_dim)
-        self.value_proj = nn.Linear(sharer_token_dim, 2 * receiver_feat)
+        self.value_proj = nn.Linear(sharer_token_dim, sharer_token_dim)
         self.queries = nn.Parameter(torch.randn(receiver_layers, bottleneck_dim) * 0.02)
 
         # --- Stage 2: paper's per-layer joint KV bottleneck projector ---
         self.projectors = nn.ModuleList(
             [
                 _LayerProjector(
-                    receiver_kv_heads, receiver_head_dim, bottleneck_dim, zero_init
+                    sharer_kv_heads,
+                    sharer_head_dim,
+                    receiver_kv_heads,
+                    receiver_head_dim,
+                    bottleneck_dim,
+                    zero_init,
                 )
                 for _ in range(receiver_layers)
             ]
@@ -211,14 +241,14 @@ class LCFXFuser(nn.Module):
         lengths: "torch.Tensor | None" = None,
         num_spans: int = 4,
     ) -> list[tuple[torch.Tensor, torch.Tensor]]:
-        """2-stage learned pooling: raw Sharer cache -> Receiver-shaped summary.
+        """2-stage learned pooling: raw Sharer cache -> position-free Sharer-shaped summary.
 
         Input:  ``L_s`` x ``(K, V)`` each ``[B, H_s, N_S, D_s]`` (raw, possibly padded).
         ``lengths[b]`` = real token count for row ``b`` (None => use full N_S).
         Stage 1: within-span learned attention ``N_S -> P`` (per example, real tokens
-        only). Stage 2: across-span + cross-model attention ``L_s*P -> 1`` in Receiver
-        geometry.
-        Output: ``L_r`` x ``(aK, aV)`` each ``[B, H_r, 1, D_r]``.
+        only). Stage 2: across-span attention ``L_s*P -> 1``, one query per Receiver
+        layer (``L_s -> L_r``); `H_s`/`D_s` are untouched (paper-faithful pool).
+        Output: ``L_r`` x ``(aK, aV)`` each ``[B, H_s, 1, D_s]``.
         """
 
         weight_dtype = self.key_proj.weight.dtype
@@ -236,7 +266,8 @@ class LCFXFuser(nn.Module):
             token_sets.append(torch.cat(layer_spans, dim=1))  # [1, L_s*P, F_s]
         token_set = torch.cat(token_sets, dim=0).to(weight_dtype)  # [B, L_s*P, F_s]
 
-        # Stage 2: Receiver-sized queries attend over the span tokens -> Receiver geom.
+        # Stage 2: Receiver-sized queries attend over the span tokens -> L_s -> L_r,
+        # values stay in Sharer feature space (H_s, D_s untouched).
         keys = self.key_proj(token_set)
         values = self.value_proj(token_set)
         queries = self.queries.to(weight_dtype)
@@ -246,7 +277,7 @@ class LCFXFuser(nn.Module):
         aligned: list[tuple[torch.Tensor, torch.Tensor]] = []
         for layer_idx in range(self.receiver_layers):
             out = pooled[:, layer_idx].view(
-                batch, 2, self.receiver_kv_heads, self.receiver_head_dim
+                batch, 2, self.sharer_kv_heads, self.sharer_head_dim
             )
             aligned.append((out[:, 0].unsqueeze(2), out[:, 1].unsqueeze(2)))
         return aligned
@@ -257,7 +288,7 @@ class LCFXFuser(nn.Module):
         aligned: list[tuple[torch.Tensor, torch.Tensor]],
         receiver_kv: list[tuple[torch.Tensor, torch.Tensor]],
     ) -> list[tuple[torch.Tensor, torch.Tensor]]:
-        """Per-layer joint KV bottleneck on matched ``[aligned-S ; R]`` -> residual."""
+        """Per-layer joint KV bottleneck on ``[aligned-S (Sharer geom) ; R]`` -> residual."""
 
         residuals: list[tuple[torch.Tensor, torch.Tensor]] = []
         for layer_idx, ((a_key, a_value), (r_key, r_value)) in enumerate(

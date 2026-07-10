@@ -32,7 +32,7 @@ help:
 	@echo "EchoInYourWords -- run experiments via make."
 	@echo ""
 	@echo "Main targets:"
-	@echo "  make prepare       One-shot setup: make data + make model (everything, or DATASET=/MODEL= for one)"
+	@echo "  make prepare       One-shot setup: make data + make model (primary roster + pair-testing extras, or DATASET=/MODEL= for one)"
 	@echo "  make data          Prepare train+val for ALL datasets (or just DATASET= if given)"
 	@echo "  make model         Download ALL known-good models (or just MODEL= if given; all ungated)"
 	@echo "  make lcfx          LCF-X: train fuser -> EM/F1 on val (train + eval)"
@@ -53,11 +53,13 @@ help:
 	@echo "  make lcfx-eval  SHARER=<id> RECEIVER=<id>   eval that pair (same CKPT)"
 	@echo "  make lcfx       SHARER=<id> RECEIVER=<id>   train -> eval end to end"
 	@echo "  (SHARER/RECEIVER apply to every method target; LCFX_*/T2T_* set one method only)"
-	@echo "  primary model roster (all ungated -- no HF_TOKEN needed):"
+	@echo "  primary model roster (used by exp/sweep; all ungated -- no HF_TOKEN needed):"
 	@echo "    Qwen/Qwen2.5-0.5B-Instruct  Qwen/Qwen3-0.6B  unsloth/Llama-3.2-1B-Instruct  unsloth/gemma-3-4b-it  Qwen/Qwen3-8B"
+	@echo "  pair-testing extras (available for manual SHARER=/RECEIVER= use; not in exp/sweep):"
+	@echo "    unsloth/gemma-3-1b-it  Qwen/Qwen3-4B"
 	@echo "  results + checkpoints auto-separate (results/<method>/<dataset>/<sharer>/<receiver>)."
 	@echo ""
-	@echo "Common knobs:  DATASET=  CKPT=  EVAL_N=  MAX_TRAIN=  MAX_STEPS=  BATCH_SIZE=  GRAD_ACCUM="
+	@echo "Common knobs:  DATASET=  CKPT=  EVAL_N=  MAX_TRAIN=  MAX_STEPS=  BATCH_SIZE=  GRAD_ACCUM=  SOFT_TOKENS=  BOTTLENECK=  STAGE2_NUM_HEADS=  STAGE2_HEAD_DIM="
 	@echo "Quick smoke:   make lcfx MAX_TRAIN=200 MAX_STEPS=5 EVAL_N=50 BATCH_SIZE=4 GRAD_ACCUM=2"
 
 # ===== Config =================================================================
@@ -73,9 +75,11 @@ VAL        ?= $(TASKS)/$(DATASET)_val.jsonl
 # Global default pair (the paper's symmetric Qwen3-0.6B). Each method/baseline
 # reads its OWN sharer/receiver below, which fall back to these globals when not
 # set. Mix sizes / families / tokenizers freely (the fuser bridges differing
-# layers/heads/head_dim); primary model roster (all ungated -- no HF_TOKEN needed):
+# layers/heads/head_dim); primary model roster (used by exp/sweep; all ungated -- no HF_TOKEN needed):
 #   Qwen/Qwen2.5-0.5B-Instruct  Qwen/Qwen3-0.6B
 #   unsloth/Llama-3.2-1B-Instruct  unsloth/gemma-3-4b-it  Qwen/Qwen3-8B
+# Pair-testing extras (manual SHARER=/RECEIVER= use; not in exp/sweep):
+#   unsloth/gemma-3-1b-it  Qwen/Qwen3-4B
 # Trained fuser checkpoints are stamped with their Sharer/Receiver ids; results and
 # checkpoints auto-separate by dataset + pair (see LCFX_SLUG below), so different
 # runs never overwrite each other. The eval HARD-ERRORS on a model/checkpoint mismatch.
@@ -101,7 +105,11 @@ EIYW_RECEIVER ?= $(RECEIVER)
 #   results/lcfx/hotpotqa_bridge/Qwen--Qwen2.5-0.5B-Instruct/Qwen--Qwen3-0.6B
 LCFX_SLUG = $(DATASET)/$(subst /,--,$(LCFX_SHARER))/$(subst /,--,$(LCFX_RECEIVER))
 T2T_SLUG  = $(DATASET)/$(subst /,--,$(T2T_SHARER))/$(subst /,--,$(T2T_RECEIVER))
-EIYW_SLUG = $(DATASET)/$(subst /,--,$(EIYW_SHARER))/$(subst /,--,$(EIYW_RECEIVER))
+# EIYW's slug also carries the soft-token count (SOFT_TOKENS), bottleneck dim
+# (BOTTLENECK), stage-2 head count (STAGE2_NUM_HEADS), and stage-2 head dim
+# (STAGE2_HEAD_DIM, all defined below) so sweeping any of them lands each run in
+# its own folder instead of overwriting a previous combination's checkpoint/results.
+EIYW_SLUG = $(DATASET)/$(subst /,--,$(EIYW_SHARER))/$(subst /,--,$(EIYW_RECEIVER))/k$(SOFT_TOKENS)/b$(BOTTLENECK)/h$(STAGE2_NUM_HEADS)/d$(STAGE2_HEAD_DIM)
 LCFX_OUT  ?= results/lcfx/$(LCFX_SLUG)
 T2T_OUT   ?= results/t2t/$(T2T_SLUG)
 EIYW_OUT  ?= results/eiyw/$(EIYW_SLUG)
@@ -110,7 +118,7 @@ EIYW_OUT  ?= results/eiyw/$(EIYW_SLUG)
 # Checkpoint path is dataset+pair-scoped by default (override CKPT= to place it elsewhere).
 CKPT       ?= data/checkpoints/lcfx/$(LCFX_SLUG)/fuser.pt
 SPANS      ?= 4
-BOTTLENECK ?= 128
+BOTTLENECK ?= 256
 LR         ?= 1e-4
 EPOCHS     ?= 1
 # Paper defaults: per-device batch 16 x grad-accum 16 = effective batch 256.
@@ -135,7 +143,9 @@ EVAL_EM    ?= 0
 # NOTE: EIYW's prompt forward is grad-enabled (soft tokens lead the sequence), so it
 # uses more memory than LCF-X — drop BATCH_SIZE / raise GRAD_ACCUM as needed.
 EIYW_CKPT   ?= data/checkpoints/eiyw/$(EIYW_SLUG)/translator.pt
-SOFT_TOKENS ?= 16
+SOFT_TOKENS ?= 64
+STAGE2_NUM_HEADS ?= 8
+STAGE2_HEAD_DIM ?= 256
 
 # --- T2T baseline: paper's "T2T Max 200" caps the Sharer message at 200 tokens
 #     (Receiver answer budget matches LCF-X eval at 64) ---
@@ -235,9 +245,10 @@ $(TASKS)/strategyqa_val.jsonl:
 # model` downloads every known-good model instead of picking one.
 #   make model MODEL=unsloth/gemma-3-4b-it
 MODEL ?= $(RECEIVER)
-ALL_MODELS := $(sort $(SHARER) $(RECEIVER) \
-  Qwen/Qwen2.5-0.5B-Instruct Qwen/Qwen3-0.6B \
-  unsloth/Llama-3.2-1B-Instruct unsloth/gemma-3-4b-it Qwen/Qwen3-8B)
+PRIMARY_MODELS := Qwen/Qwen2.5-0.5B-Instruct Qwen/Qwen3-0.6B \
+	unsloth/Llama-3.2-1B-Instruct unsloth/gemma-3-4b-it Qwen/Qwen3-8B
+PAIR_TEST_MODELS := $(PRIMARY_MODELS) unsloth/gemma-3-1b-it Qwen/Qwen3-4B
+ALL_MODELS := $(sort $(PAIR_TEST_MODELS))
 
 .PHONY: model
 model:
@@ -309,7 +320,7 @@ eiyw-train: data
 	$(OFFLINE) $(PY) scripts/train_eiyw.py \
 	  --train-data $(TRAIN) \
 	  --sharer-model $(EIYW_SHARER) --receiver-model $(EIYW_RECEIVER) \
-	  --num-soft-tokens $(SOFT_TOKENS) --bottleneck-dim $(BOTTLENECK) --num-spans $(SPANS) \
+	  --num-soft-tokens $(SOFT_TOKENS) --bottleneck-dim $(BOTTLENECK) --stage2-num-heads $(STAGE2_NUM_HEADS) --stage2-head-dim $(STAGE2_HEAD_DIM) --num-spans $(SPANS) \
 	  --lr $(LR) --epochs $(EPOCHS) --batch-size $(BATCH_SIZE) --grad-accum $(GRAD_ACCUM) --warmup $(WARMUP) \
 	  --val-frac $(VAL_FRAC) --eval-max-examples $(EVAL_MAX) --eval-em-examples $(EVAL_EM) \
 	  --log-every $(LOG_EVERY) --eval-every $(EVAL_EVERY) --save-every $(SAVE_EVERY) \
@@ -321,7 +332,7 @@ eiyw-train: data
 eiyw-eval: data
 	$(OFFLINE) $(PY) scripts/run_eiyw.py --dataset $(VAL) --num-spans $(SPANS) \
 	  --sharer-model $(EIYW_SHARER) --receiver-model $(EIYW_RECEIVER) \
-	  --num-soft-tokens $(SOFT_TOKENS) --bottleneck-dim $(BOTTLENECK) \
+	  --num-soft-tokens $(SOFT_TOKENS) --bottleneck-dim $(BOTTLENECK) --stage2-num-heads $(STAGE2_NUM_HEADS) --stage2-head-dim $(STAGE2_HEAD_DIM) \
 	  $(if $(EVAL_N),--num-examples $(EVAL_N),) \
 	  --translator-checkpoint $(EIYW_CKPT) --output-dir $(EIYW_OUT)
 
@@ -348,7 +359,7 @@ t2t-eval t2t: data
 # Upper bound: a single model answers from both partitions combined (no split, no
 # Sharer) -- i.e. how each model does on the dataset with all available info. It's
 # a single model (not a pair). Split MODEL-major, DATASET-minor, same "given=one,
-# unset=all" pattern as `exp`: with no MODEL=, tests every model in ALL_MODELS;
+# unset=all" pattern as `exp`: with no MODEL=, tests every model in PRIMARY_MODELS;
 # with no DATASET=, tests every dataset.
 #   make single                                        # every model, every dataset
 #   make single MODEL=Qwen/Qwen3-0.6B                  # one model, every dataset
@@ -364,7 +375,7 @@ ifeq ($(origin MODEL),command line)
 else ifeq ($(origin MODEL),environment)
 	$(MAKE) _single-dataset MODEL=$(MODEL)
 else
-	@status=0; for m in $(ALL_MODELS); do \
+	@status=0; for m in $(PRIMARY_MODELS); do \
 	  $(MAKE) single MODEL=$$m || status=$$?; \
 	done; exit $$status
 endif

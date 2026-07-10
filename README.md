@@ -52,7 +52,7 @@ One-time, idempotent (skipped if already present) — do it all with a single
 command, no `DATASET=`/`MODEL=` means "all of them":
 
 ```bash
-make prepare     # = make data + make model: every dataset, every known-good model
+make prepare     # = make data + make model: every dataset, primary roster + pair-testing extras
 ```
 
 Or pick just the axis you need:
@@ -61,7 +61,7 @@ Or pick just the axis you need:
 make data                            # every dataset: hotpotqa_bridge, musique, qasc, 2wikimultihop, ropes, strategyqa
 make data  DATASET=hotpotqa_bridge   # ...or just one: train (~70.7K) + val (5,899)
 
-make model                                    # fetch every known-good model into data/hf_cache
+make model                                    # fetch every known-good model into data/hf_cache (primary roster + pair-testing extras)
 make model MODEL=Qwen/Qwen2.5-0.5B-Instruct   # ...or just one
 ```
 
@@ -161,6 +161,12 @@ All ids are **ungated** (no `HF_TOKEN` needed). Fetch one with
 - `unsloth/gemma-3-4b-it` — 4B; ungated mirror of Gemma-3-4B
 - `Qwen/Qwen3-8B` — 8B tier
 
+Pair-testing extras, available for manual `SHARER=`/`RECEIVER=` runs and
+downloaded by `make model`, but **not** included in `make exp`/`make sweep`:
+
+- `unsloth/gemma-3-1b-it` — 1B; ungated mirror of Gemma-3-1B
+- `Qwen/Qwen3-4B` — 4B tier
+
 Defaults follow the paper (per-device batch 16 × grad-accum 16 = effective batch
 256), which needs a large GPU. On a smaller GPU, override to keep the effective
 batch at 256, e.g. `make lcfx-train BATCH_SIZE=4 GRAD_ACCUM=64` (see
@@ -189,7 +195,7 @@ Use a **heterogeneous** pair: they may differ in family, size, hidden dim, head
 dim, and depth — the LCF-X fuser's align stage bridges the differing shapes. Any
 id works as either role.
 
-Known-good ids (mix freely as Sharer/Receiver) — all **ungated**, no `HF_TOKEN`
+Primary roster (mix freely as Sharer/Receiver) — all **ungated**, no `HF_TOKEN`
 needed:
 
 | Model | hidden | head_dim | layers | notes |
@@ -199,6 +205,8 @@ needed:
 | `unsloth/Llama-3.2-1B-Instruct` | 2048 | 64 | 16 | **1B tier**; ungated mirror of Llama-3.2-1B |
 | `unsloth/gemma-3-4b-it` | 2560 | 256 | 34 | **4B tier**; ungated mirror of Gemma-3-4B |
 | `Qwen/Qwen3-8B` | 4096 | 128 | 36 | **8B tier** |
+
+Pair-testing extras (manual `SHARER=` / `RECEIVER=` use; not part of the primary roster): `unsloth/gemma-3-1b-it`, `Qwen/Qwen3-4B`.
 
 Trained fuser checkpoints are **stamped** with the Sharer/Receiver they were
 trained for, and `run_lcfx.py` hard-errors if you load one against a different

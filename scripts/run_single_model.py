@@ -112,6 +112,8 @@ def run_single_model_example(example, generate, score_fn=None) -> T2TResult:
             "fuser_ms": 0.0,
             "receiver_ms": receiver_ms,
             "total_ms": receiver_ms,
+            "first_token_ms": output.first_token_ms,
+            "last_token_ms": output.last_token_ms,
         },
         token_counts={
             "sharer_input": None,

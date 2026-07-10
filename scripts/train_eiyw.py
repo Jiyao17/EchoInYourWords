@@ -45,8 +45,10 @@ def main() -> None:
     parser.add_argument("--receiver-model", default=DEFAULT_RECEIVER)
     # On a smaller GPU, lower --batch-size and raise --grad-accum to keep the
     # effective batch (B*A) at 256 (see README).
-    parser.add_argument("--num-soft-tokens", type=int, default=16, help="K soft tokens")
-    parser.add_argument("--bottleneck-dim", type=int, default=128, help="Translator latent dim")
+    parser.add_argument("--num-soft-tokens", type=int, default=64, help="K soft tokens")
+    parser.add_argument("--bottleneck-dim", type=int, default=256, help="Translator latent dim")
+    parser.add_argument("--stage2-num-heads", type=int, default=8, help="Multi-head count for the stage-2 cross-attention")
+    parser.add_argument("--stage2-head-dim", type=int, default=256, help="Per-head width for the stage-2 cross-attention")
     parser.add_argument("--num-spans", type=int, default=4, help="Sharer pooling spans")
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--batch-size", type=int, default=16, help="Per-step micro-batch")
@@ -133,6 +135,8 @@ def main() -> None:
         pair.receiver_spec,
         num_soft_tokens=args.num_soft_tokens,
         bottleneck_dim=args.bottleneck_dim,
+        stage2_num_heads=args.stage2_num_heads,
+        stage2_head_dim=args.stage2_head_dim,
         zero_init=True,
     ).to(pair.device)
 

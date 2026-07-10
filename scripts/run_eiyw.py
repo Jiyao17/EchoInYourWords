@@ -79,14 +79,26 @@ def main() -> None:
     parser.add_argument(
         "--num-soft-tokens",
         type=int,
-        default=16,
+        default=64,
         help="K soft tokens; must match the trained --translator-checkpoint",
     )
     parser.add_argument(
         "--bottleneck-dim",
         type=int,
-        default=128,
+        default=256,
         help="Translator latent dim; must match the trained checkpoint",
+    )
+    parser.add_argument(
+        "--stage2-num-heads",
+        type=int,
+        default=8,
+        help="Multi-head count for the stage-2 cross-attention; must match the trained checkpoint",
+    )
+    parser.add_argument(
+        "--stage2-head-dim",
+        type=int,
+        default=256,
+        help="Per-head width for the stage-2 cross-attention; must match the trained checkpoint",
     )
     parser.add_argument("--num-spans", type=int, default=4, help="Sharer pooling spans")
     parser.add_argument(
@@ -138,6 +150,8 @@ def main() -> None:
             allow_model_mismatch=args.allow_model_mismatch,
             num_soft_tokens=args.num_soft_tokens,
             bottleneck_dim=args.bottleneck_dim,
+            stage2_num_heads=args.stage2_num_heads,
+            stage2_head_dim=args.stage2_head_dim,
         ).to(pair.device)
         print(f"Loaded translator checkpoint: {args.translator_checkpoint}")
     else:
@@ -146,6 +160,8 @@ def main() -> None:
             pair.receiver_spec,
             num_soft_tokens=args.num_soft_tokens,
             bottleneck_dim=args.bottleneck_dim,
+            stage2_num_heads=args.stage2_num_heads,
+            stage2_head_dim=args.stage2_head_dim,
             zero_init=True,
         ).to(pair.device)
         print("No checkpoint: using ZERO-INIT translator (soft tokens ~ 0; plumbing only)")
@@ -199,6 +215,7 @@ def main() -> None:
         "num_spans": args.num_spans,
         "num_soft_tokens": args.num_soft_tokens,
         "bottleneck_dim": args.bottleneck_dim,
+        "stage2_num_heads": args.stage2_num_heads,
         "translator_checkpoint": (
             str(args.translator_checkpoint) if args.translator_checkpoint else None
         ),

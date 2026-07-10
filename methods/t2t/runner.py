@@ -22,11 +22,17 @@ class GenerationOutput:
 
     A ``TextGenerator`` may return either a plain string (token counts unknown)
     or this richer object when the backend can report token usage.
+
+    ``first_token_ms``/``last_token_ms`` are milliseconds elapsed since the
+    generator call started to the first/last *generated* token (``None`` when
+    the backend can't report per-token timing, or zero tokens were generated).
     """
 
     text: str
     input_tokens: int | None = None
     output_tokens: int | None = None
+    first_token_ms: float | None = None
+    last_token_ms: float | None = None
 
 
 # A generator maps a prompt to either raw text or a GenerationOutput.
@@ -47,7 +53,7 @@ class T2TResult:
     answer: str | None
     is_correct: bool | None
     scores: dict[str, Any]
-    latency: dict[str, float]
+    latency: dict[str, float | None]
     token_counts: dict[str, int | None]
     metadata: dict[str, Any]
 
@@ -82,6 +88,8 @@ def _timed_generate(
             text=str(output.text).strip(),
             input_tokens=output.input_tokens,
             output_tokens=output.output_tokens,
+            first_token_ms=output.first_token_ms,
+            last_token_ms=output.last_token_ms,
         )
     else:
         normalized = GenerationOutput(text=str(output).strip())
@@ -134,6 +142,18 @@ def run_t2t_example(
     receiver_gen, receiver_ms = _timed_generate(receiver_generate, receiver_prompt)
     receiver_output = receiver_gen.text
 
+    # receiver_gen's timestamps are relative to that generate() call; shift them
+    # to be relative to the start of this example (sharer already elapsed), to
+    # match the LCF-X/EIYW latency contract.
+    if receiver_gen.first_token_ms is not None:
+        first_token_ms = sharer_ms + receiver_gen.first_token_ms
+    else:
+        first_token_ms = None
+    if receiver_gen.last_token_ms is not None:
+        last_token_ms = sharer_ms + receiver_gen.last_token_ms
+    else:
+        last_token_ms = None
+
     prediction = parse_choice_answer(receiver_output, example.choices)
     is_correct, scores = _score_prediction(prediction, example.answer, score_fn)
 
@@ -155,6 +175,8 @@ def run_t2t_example(
             "fuser_ms": 0.0,
             "receiver_ms": receiver_ms,
             "total_ms": sharer_ms + receiver_ms,
+            "first_token_ms": first_token_ms,
+            "last_token_ms": last_token_ms,
         },
         token_counts={
             "sharer_input": sharer_gen.input_tokens,
