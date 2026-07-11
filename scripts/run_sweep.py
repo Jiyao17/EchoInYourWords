@@ -6,9 +6,12 @@ datasets the same way it already does for ``data``/``model``).
 Implements the **smoke** stage in full: reduced training/eval budget, a
 resumable JSONL manifest (skip cells already ``ok`` unless ``--force`` /
 ``--rerun-failed``), and a fixed-size GPU worker pool via
-``CUDA_VISIBLE_DEVICES``. The **full** stage is wired (empty budget overrides
-== Makefile defaults, i.e. paper scale) but Stage 2's priority-tiering
-(symmetric pairs first, etc.) is not implemented yet -- run it manually via
+``CUDA_VISIBLE_DEVICES``. The **full** stage uses the Makefile's paper-scale
+defaults (full train split, full val EM/F1) except for BATCH_SIZE/GRAD_ACCUM,
+which are picked per Sharer/Receiver pair (see ``pick_batch_grad_accum``) so
+larger pairs don't OOM, always keeping the effective batch
+(BATCH_SIZE x GRAD_ACCUM) at 256. Stage 2's priority-tiering (symmetric pairs
+first, etc.) is not implemented yet -- run it manually via
 ``--sharer``/``--receiver`` filters for now.
 
     python scripts/run_sweep.py --dataset hotpotqa_bridge --gpus 1,2,3
@@ -43,9 +46,20 @@ PRIMARY_MODELS = [
 ]
 METHODS = ["t2t", "lcfx", "eiyw"]
 
+# Approx parameter count (billions) per roster model, used only to size
+# BATCH_SIZE/GRAD_ACCUM for the full stage (see pick_batch_grad_accum below).
+MODEL_PARAMS_B = {
+    "Qwen/Qwen2.5-0.5B-Instruct": 0.5,
+    "Qwen/Qwen3-0.6B": 0.6,
+    "unsloth/Llama-3.2-1B-Instruct": 1.0,
+    "unsloth/gemma-3-4b-it": 4.0,
+    "Qwen/Qwen3-8B": 8.0,
+}
+
 # Budget overrides passed to `make <method> ...` as command-line variables.
-# Empty dict ("full") means no overrides -- the Makefile's own defaults
-# (paper scale) apply.
+# Empty dict ("full") means no overrides beyond the pair-size-aware
+# BATCH_SIZE/GRAD_ACCUM added by resolve_overrides() -- the Makefile's other
+# defaults (full train split, full val EM/F1, paper LR/warmup/etc.) apply.
 STAGE_OVERRIDES = {
     "smoke": {
         "MAX_TRAIN": "800",
@@ -60,6 +74,50 @@ STAGE_OVERRIDES = {
     },
     "full": {},
 }
+
+# Sized for an ~80GB GPU (the paper's own hardware -- see README.md's
+# "Smaller GPUs" table): the paper's reference pair (Qwen2.5-0.5B Sharer +
+# Qwen3-0.6B Receiver, combined 1.1B) fits the paper's batch16/accum16
+# default there. Larger Sharer/Receiver combos hold more frozen-model
+# activations for the same projector, so batch halves (and grad-accum
+# doubles) as combined pair size grows, keeping BATCH_SIZE x GRAD_ACCUM =
+# 256 (same effective batch, same optimization, less parallelism) -- only
+# slower, not different, matching README's guidance on this tradeoff.
+# (threshold_billions, batch_size, grad_accum), first match wins:
+BATCH_ACCUM_TIERS = [
+    (2.5, 16, 16),   # up to 1B+1B
+    (5.5, 8, 32),    # up to 1B+4B
+    (9.5, 4, 64),    # up to 4B+4B / 1B+8B
+    (13.0, 2, 128),  # up to 4B+8B
+    (float("inf"), 1, 256),  # 8B+8B
+]
+
+
+def pick_batch_grad_accum(sharer: str, receiver: str) -> tuple[int, int]:
+    """BATCH_SIZE/GRAD_ACCUM for a pair, keeping effective batch at 256."""
+
+    combined = MODEL_PARAMS_B.get(sharer, 0.0) + MODEL_PARAMS_B.get(receiver, 0.0)
+    for threshold, batch, accum in BATCH_ACCUM_TIERS:
+        if combined <= threshold:
+            return batch, accum
+    return BATCH_ACCUM_TIERS[-1][1], BATCH_ACCUM_TIERS[-1][2]
+
+
+def resolve_overrides(stage: str, method: str, sharer: str, receiver: str) -> dict[str, str]:
+    """Per-cell `make <method> ...` overrides.
+
+    smoke keeps its fixed reduced-budget knobs regardless of pair. full
+    leaves data/step budgets at the Makefile's paper defaults but still
+    needs pair-size-aware BATCH_SIZE/GRAD_ACCUM (t2t has no batch knob, so
+    it's skipped there) so larger pairs don't OOM.
+    """
+
+    overrides = dict(STAGE_OVERRIDES[stage])
+    if stage == "full" and method != "t2t":
+        batch, accum = pick_batch_grad_accum(sharer, receiver)
+        overrides["BATCH_SIZE"] = str(batch)
+        overrides["GRAD_ACCUM"] = str(accum)
+    return overrides
 
 # Substrings (checked case-insensitively against the tail of a failed run's
 # log) that indicate an out-of-memory failure rather than a generic bug.
@@ -134,7 +192,7 @@ def run_cell(
     manifest_lock: threading.Lock,
     log_dir: Path,
 ) -> None:
-    overrides = STAGE_OVERRIDES[stage]
+    overrides = resolve_overrides(stage, method, sharer, receiver)
     cmd = ["make", method, f"DATASET={dataset}", f"SHARER={sharer}", f"RECEIVER={receiver}"]
     cmd += [f"{key}={value}" for key, value in overrides.items()]
 
@@ -147,6 +205,8 @@ def run_cell(
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
     label = f"[{stage}/{method}] {dataset} {sharer} -> {receiver}"
+    if "BATCH_SIZE" in overrides:
+        label += f" (batch={overrides['BATCH_SIZE']} accum={overrides['GRAD_ACCUM']})"
     if gpu is not None:
         label += f" (gpu {gpu})"
     print(f"START {label}", flush=True)
@@ -176,6 +236,8 @@ def run_cell(
         "sharer": sharer,
         "receiver": receiver,
         "status": status,
+        "batch_size": overrides.get("BATCH_SIZE"),
+        "grad_accum": overrides.get("GRAD_ACCUM"),
         "started_at": started.isoformat(),
         "finished_at": finished.isoformat(),
         "wall_s": round(wall_s, 1),

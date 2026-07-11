@@ -83,7 +83,7 @@ VAL        ?= $(TASKS)/$(DATASET)_val.jsonl
 # Trained fuser checkpoints are stamped with their Sharer/Receiver ids; results and
 # checkpoints auto-separate by dataset + pair (see LCFX_SLUG below), so different
 # runs never overwrite each other. The eval HARD-ERRORS on a model/checkpoint mismatch.
-SHARER     ?= Qwen/Qwen2.5-0.5B-Instruct
+SHARER     ?= Qwen/Qwen3-0.6B
 RECEIVER   ?= Qwen/Qwen3-0.6B
 
 # Per-method models: default to the globals; override one method without touching
@@ -117,8 +117,8 @@ EIYW_OUT  ?= results/eiyw/$(EIYW_SLUG)
 # --- LCF-X fuser (architecture + training) ---
 # Checkpoint path is dataset+pair-scoped by default (override CKPT= to place it elsewhere).
 CKPT       ?= data/checkpoints/lcfx/$(LCFX_SLUG)/fuser.pt
-SPANS      ?= 4
-BOTTLENECK ?= 256
+SPANS      ?= 5
+BOTTLENECK ?= 128
 LR         ?= 1e-4
 EPOCHS     ?= 1
 # Paper defaults: per-device batch 16 x grad-accum 16 = effective batch 256.
@@ -404,9 +404,12 @@ endif
 
 # ===== Experiment sweep (all model pairs, split by method then dataset) =======
 # Drives scripts/run_sweep.py -- see prompt/EXPERIMENT_SWEEP_PLAN.md. Runs the
-# smoke-stage grid (reduced budget) for the primary model roster by default:
+# full-scale grid (paper defaults; BATCH_SIZE/GRAD_ACCUM auto-picked per pair
+# to avoid OOM while keeping effective batch 256 -- see run_sweep.py's
+# pick_batch_grad_accum) for the primary model roster by default:
 # Qwen2.5-0.5B-Instruct, Qwen3-0.6B, unsloth/Llama-3.2-1B-Instruct,
 # unsloth/gemma-3-4b-it, Qwen/Qwen3-8B -- 5x5=25 pairs (incl. symmetric).
+# Pass EXP_STAGE=smoke for a cheap reduced-budget sanity pass instead.
 # Tests are split METHOD-major, DATASET-minor: with no METHOD= given, sweeps
 # t2t, then lcfx, then eiyw in turn (each across every DATASET= it's given, or
 # all 6 datasets if that's also unset); with a METHOD= given, only that method
@@ -420,8 +423,9 @@ endif
 #   make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--dry-run"
 #   make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--rerun-failed"
 #   make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--sharer Qwen/Qwen3-8B --receiver Qwen/Qwen3-8B"
+#   make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_STAGE=smoke   # cheap reduced-budget sanity pass
 EXP_METHODS             := t2t lcfx eiyw
-EXP_STAGE               ?= smoke
+EXP_STAGE               ?= full
 EXP_GPUS                ?=
 EXP_CONCURRENCY_PER_GPU ?= 1
 EXP_ARGS                ?=
@@ -467,13 +471,13 @@ endif
 # its assigned datasets sequentially (queued by dataset, not interleaved).
 # E.g. with 2 GPUs and this project's 6 datasets, each GPU runs 3 datasets
 # one after another while both GPUs run in parallel. Reuses EXP_STAGE from
-# `exp` above (smoke stage by default).
+# `exp` above (full stage by default).
 #   CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep
 #   CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep METHOD=t2t   # t2t only, same GPU distribution
 #   CUDA_VISIBLE_DEVICES=1,2     make sweep SWEEP_ARGS="--dry-run"
 #   CUDA_VISIBLE_DEVICES=1,2     make sweep SWEEP_ARGS="--rerun-failed"
 #   make sweep                                       # no GPUs pinned -> single sequential worker
-#   CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep EXP_STAGE=full
+#   CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep EXP_STAGE=smoke   # cheap reduced-budget sanity pass
 SWEEP_ARGS ?=
 
 .PHONY: sweep

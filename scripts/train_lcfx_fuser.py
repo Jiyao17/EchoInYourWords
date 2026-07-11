@@ -43,7 +43,7 @@ def main() -> None:
     # Defaults follow the LCF-X paper. On a smaller GPU, lower --batch-size and
     # raise --grad-accum to keep the effective batch (B*A) at 256 (see README).
     parser.add_argument("--bottleneck-dim", type=int, default=128, help="Latent dim (paper: 128)")
-    parser.add_argument("--num-spans", type=int, default=4, help="Sharer pooling spans")
+    parser.add_argument("--num-spans", type=int, default=5, help="Sharer pooling spans (paper: 5, HotpotQA's 5-paragraph partition)")
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--batch-size", type=int, default=16, help="Per-step micro-batch (paper: 16)")
     parser.add_argument("--grad-accum", type=int, default=16, help="Micro-batches per optimizer step (paper: 16 -> eff. batch 256)")

@@ -96,9 +96,13 @@ don't blindly launch all 300 full trainings at once):
    understood.
 
 Budget: paper defaults (full train split, effective batch 256, full val
-EM/F1) — `make lcfx` / `make eiyw` / `make t2t` with no overrides. Re-check
-`nvidia-smi` before launching each tier and cap concurrency to what actually
-fits alongside whatever else is running on the box.
+EM/F1) — `make lcfx` / `make eiyw` / `make t2t` with no manual overrides.
+`run_sweep.py --stage full` now auto-picks `BATCH_SIZE`/`GRAD_ACCUM` per
+Sharer/Receiver pair (see `pick_batch_grad_accum` — sized for an ~80GB GPU,
+always keeping the effective batch at 256), so no per-tier manual tuning is
+needed for pair size alone. Re-check `nvidia-smi` before launching each tier
+and cap concurrency to what actually fits alongside whatever else is running
+on the box.
 
 ## Stage 3 — Aggregate & analyze
 
@@ -114,10 +118,12 @@ dataset/model.
 **Status: implemented and verified for the smoke stage** (real end-to-end
 run: T2T, 1B<->1B, `hotpotqa_bridge`, 150 eval examples, wrote a correct
 `metrics.json` and manifest entry; resume-skip and `--force` both verified).
-The `full` stage mechanism is wired (empty budget overrides == Makefile
-defaults) but Stage 2's priority-tiering (`--priority-tier`) is **not yet
-implemented** — for now, scope a full-stage run manually with
-`--sharer`/`--receiver` filters.
+The `full` stage uses the Makefile's paper-scale defaults (full train split,
+full val EM/F1) plus a pair-size-aware `BATCH_SIZE`/`GRAD_ACCUM`
+(`pick_batch_grad_accum`, sized for an ~80GB GPU, effective batch always
+256) so larger pairs don't OOM without hand-tuning per cell. Stage 2's
+priority-tiering (`--priority-tier`) is **not yet implemented** — for now,
+scope a full-stage run manually with `--sharer`/`--receiver` filters.
 
 The script enumerates cells (method x sharer x receiver, for the one
 `--dataset` it's given) from the fixed 5-model `PRIMARY_MODELS` roster,
@@ -192,11 +198,11 @@ adopt `exp`'s method-major recursion (each GPU's worker still runs all
 methods -- or just the one given -- for each of its assigned datasets).
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep                          # prepare everything, then sweep, 4-way parallel
+CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep                          # prepare everything, then sweep at full scale, 4-way parallel
 CUDA_VISIBLE_DEVICES=1,2     make sweep SWEEP_ARGS="--dry-run"   # preview the whole plan, no GPUs touched
 CUDA_VISIBLE_DEVICES=1,2     make sweep SWEEP_ARGS="--rerun-failed"
 make sweep                                                        # no GPUs pinned -> single sequential worker
-CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep EXP_STAGE=full            # (once ready for real compute)
+CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep EXP_STAGE=smoke           # cheap reduced-budget sanity pass instead
 ```
 
 Verified for real (at the prior 3-model/9-pair roster, before the 0.5B/0.6B
@@ -216,8 +222,11 @@ Hub (Qwen3's smallest is 0.6B) — every other reference in the repo uses
 model`/`make prepare`/`make sweep` would have failed trying to download it.
 Fixed to match.
 
-**Full flag list:** `--dataset` (required), `--stage {smoke,full}` (default
-`smoke`), `--method {t2t,lcfx,eiyw}` (repeatable, default all 3),
+**Full flag list:** `--dataset` (required), `--stage {smoke,full}` (script's
+own default is `smoke`, but `make exp`/`make sweep` pass `--stage full` by
+default via `EXP_STAGE ?= full` in the Makefile -- pass `EXP_STAGE=smoke` to
+get the script's cheap default instead), `--method {t2t,lcfx,eiyw}`
+(repeatable, default all 3),
 `--sharer`/`--receiver` (repeatable filters into the 5-model roster),
 `--gpus` (comma-separated ids; default: no `CUDA_VISIBLE_DEVICES` pinning,
 one worker), `--concurrency-per-gpu` (default 1), `--rerun-failed`,
@@ -240,8 +249,10 @@ separation by dataset+pair.
 - **Gemma pairs** (`head_dim=256`, vs. 64/128 for Llama/Qwen) exercise the
   LCF-X fuser's shape-bridging hardest — worth checking first in Stage 1.
 - **Qwen-8B <-> Qwen-8B** is the heaviest memory cell (two 8B models loaded
-  frozen simultaneously, plus the trainable fuser/translator) — may need a
-  smaller `BATCH_SIZE` / larger `GRAD_ACCUM` even at "full scale."
+  frozen simultaneously, plus the trainable fuser/translator) — automatically
+  gets the smallest `BATCH_SIZE`/largest `GRAD_ACCUM` tier (1/256) at "full
+  scale" (see Stage 2 above); still worth watching as the first real test of
+  the tiering.
 - **StrategyQA is small** (~2.3K examples total, ~337 val) — its full-scale
   "epoch" is naturally much shorter than HotpotQA's (~70.7K train); that's
   expected, not a bug.

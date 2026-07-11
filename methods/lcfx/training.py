@@ -487,6 +487,22 @@ def train_fuser(
     torch.manual_seed(seed)
     rng = random.Random(seed)
 
+    train_list = list(train_data)
+    eval_list = list(eval_data) if eval_data is not None else None
+    if not train_list:
+        raise ValueError("train_data is empty")
+
+    grad_accum = max(1, int(grad_accum))
+    warmup = max(0, int(warmup_steps))
+
+    # Gate temperature anneal 1.0 -> 0.5 over the run (Table 11). Falls back to
+    # the epoch/batch-derived step count when max_steps isn't given.
+    steps_per_epoch = max(1, -(-len(train_list) // (batch_size * grad_accum)))  # ceil div
+    total_steps = max_steps if max_steps is not None else max(1, epochs * steps_per_epoch)
+
+    def _gate_tau(step: int) -> float:
+        return 1.0 - 0.5 * min(1.0, step / total_steps)
+
     if log_path is None and checkpoint_path:
         log_path = str(Path(checkpoint_path).with_name("training_log.jsonl"))
     logger = ProgressLogger(
@@ -506,16 +522,10 @@ def train_fuser(
             "bottleneck_dim": fuser.bottleneck_dim,
             "eval_em_examples": eval_em_examples,
             "checkpoint_path": checkpoint_path,
+            "total_steps": total_steps,
         },
     )
 
-    train_list = list(train_data)
-    eval_list = list(eval_data) if eval_data is not None else None
-    if not train_list:
-        raise ValueError("train_data is empty")
-
-    grad_accum = max(1, int(grad_accum))
-    warmup = max(0, int(warmup_steps))
     optimizer = torch.optim.AdamW(
         [p for p in fuser.parameters() if p.requires_grad], lr=lr
     )
@@ -587,6 +597,7 @@ def train_fuser(
             rng.shuffle(order)
         for chunk in _chunks(order, batch_size):
             batch = [train_list[i] for i in chunk]
+            fuser.gate_tau = _gate_tau(opt_step)
             loss = batched_example_loss(pair, fuser, batch, num_spans, reduction="mean")
             if loss is None:
                 continue
@@ -611,12 +622,12 @@ def train_fuser(
                 print(
                     f"epoch {epoch + 1}/{epochs} opt_step {opt_step} "
                     f"| train_loss {train_loss:.4f} "
-                    f"| lr {cur_lr:.2e}",
+                    f"| lr {cur_lr:.2e} | gate_tau {fuser.gate_tau:.3f}",
                     flush=True,
                 )
                 logger.log(
                     "train", epoch=epoch + 1, opt_step=opt_step,
-                    train_loss=train_loss, lr=cur_lr,
+                    train_loss=train_loss, lr=cur_lr, gate_tau=fuser.gate_tau,
                 )
                 running, running_count = 0.0, 0
             if eval_every and opt_step % eval_every == 0:

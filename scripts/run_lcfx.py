@@ -80,7 +80,12 @@ def main() -> None:
         default=128,
         help="Latent dim; must match the trained --fuser-checkpoint (paper: 128)",
     )
-    parser.add_argument("--num-spans", type=int, default=1, help="Sharer pooling spans")
+    parser.add_argument(
+        "--num-spans",
+        type=int,
+        default=5,
+        help="Sharer pooling spans; must match the trained --fuser-checkpoint (paper: 5)",
+    )
     parser.add_argument(
         "--allow-model-mismatch",
         action="store_true",
