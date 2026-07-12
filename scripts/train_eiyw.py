@@ -47,6 +47,7 @@ def main() -> None:
     # effective batch (B*A) at 256 (see README).
     parser.add_argument("--num-soft-tokens", type=int, default=64, help="K soft tokens")
     parser.add_argument("--bottleneck-dim", type=int, default=256, help="Translator latent dim")
+    parser.add_argument("--stage1-num-heads", type=int, default=1, help="Multi-head count for the stage-1 span pooling")
     parser.add_argument("--stage2-num-heads", type=int, default=8, help="Multi-head count for the stage-2 cross-attention")
     parser.add_argument("--stage2-head-dim", type=int, default=256, help="Per-head width for the stage-2 cross-attention")
     parser.add_argument("--num-spans", type=int, default=4, help="Sharer pooling spans")
@@ -135,6 +136,7 @@ def main() -> None:
         pair.receiver_spec,
         num_soft_tokens=args.num_soft_tokens,
         bottleneck_dim=args.bottleneck_dim,
+        stage1_num_heads=args.stage1_num_heads,
         stage2_num_heads=args.stage2_num_heads,
         stage2_head_dim=args.stage2_head_dim,
         zero_init=True,

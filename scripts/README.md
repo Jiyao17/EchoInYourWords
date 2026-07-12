@@ -274,8 +274,11 @@ python scripts/run_eiyw.py \
 |------|---------|---------|
 | `--sharer-model` / `--receiver-model` | `Qwen/Qwen3-0.6B` each | Independent frozen pair (may differ in size/arch). |
 | `--translator-checkpoint` | (none) | Trained translator weights. **Omit → gentle-init translator (plumbing only).** |
-| `--num-soft-tokens` | `16` | K soft tokens prepended to the Receiver input (must match the checkpoint). |
-| `--bottleneck-dim` | `128` | Translator latent width (must match the checkpoint). |
+| `--num-soft-tokens` | `64` | K soft tokens prepended to the Receiver input (must match the checkpoint). |
+| `--bottleneck-dim` | `256` | Translator latent width (must match the checkpoint). |
+| `--stage1-num-heads` | `1` | Independent stage-1 span-pooling heads (must match the checkpoint); `1` = original single-query pooling. |
+| `--stage2-num-heads` | `8` | Multi-head count for the stage-2 soft-token cross-attention (must match the checkpoint). |
+| `--stage2-head-dim` | `256` | Per-head width for the stage-2 cross-attention (must match the checkpoint). |
 | `--num-spans` | `4` | Sharer pooling spans. |
 | `--allow-model-mismatch` | off | Load a checkpoint whose stamped Sharer/Receiver differ (otherwise a hard error). |
 | `--max-new-tokens` | `64` | Receiver answer budget. |

@@ -10,8 +10,14 @@ to them natively. Only this module is trained; both base models stay frozen.
 Pipeline (one ``translate`` call):
 
 1. **Pool the Sharer cache** (learned attention, reused from the LCF-X design):
-   within-span ``N_S -> P`` keeping Sharer geometry, giving ``L_s*P`` span tokens
-   of feature dim ``2*H_s*D_s``.
+   within-span ``N_S -> P`` keeping Sharer geometry, giving ``L_s*P`` span tokens.
+   Pooling runs in ``stage1_num_heads`` independent heads, each with its own
+   learned query attending over the span's raw (unprojected) tokens -- multiple
+   views of "what matters in this span" instead of one -- so the span-token
+   feature dim is ``stage1_num_heads * 2*H_s*D_s``. No value projection: the
+   pooled features stay full-fidelity Sharer geometry, only *which* tokens get
+   weighted is learned. ``stage1_num_heads=1`` reproduces the original
+   single-query pooling.
 2. **Receiver-anchored queries (the novelty):** a learnable query bank
    ``Q_base in R^{K x d}`` is modulated by the Receiver-question anchor
    (``Q = Q_base + W_a . anchor``, FiLM-style), so *what gets communicated depends
@@ -48,6 +54,7 @@ class EIYWTranslator(nn.Module):
         receiver_hidden: int,
         num_soft_tokens: int = 64,
         bottleneck_dim: int = 256,
+        stage1_num_heads: int = 1,
         stage2_num_heads: int = 8,
         stage2_head_dim: int = 256,
         zero_init: bool = True,
@@ -55,6 +62,8 @@ class EIYWTranslator(nn.Module):
         super().__init__()
         if num_soft_tokens < 1:
             raise ValueError("num_soft_tokens must be >= 1")
+        if stage1_num_heads < 1:
+            raise ValueError("stage1_num_heads must be >= 1")
         if stage2_num_heads < 1:
             raise ValueError("stage2_num_heads must be >= 1")
         if stage2_head_dim < 1:
@@ -67,20 +76,24 @@ class EIYWTranslator(nn.Module):
         self.receiver_hidden = receiver_hidden
         self.num_soft_tokens = num_soft_tokens
         self.bottleneck_dim = bottleneck_dim
+        self.stage1_num_heads = stage1_num_heads
         self.stage2_num_heads = stage2_num_heads
         self.stage2_head_dim = stage2_head_dim
         self.stage2_width = stage2_num_heads * stage2_head_dim
         self.attn_dim = bottleneck_dim
         sharer_token_dim = 2 * sharer_kv_heads * sharer_head_dim
+        stage1_output_dim = stage1_num_heads * sharer_token_dim
 
         # --- Stage 1: within-span learned attention (N_S -> P), keeps Sharer geom.
-        # A shared learned query pools the tokens within each span.
+        # One query per stage-1 head (shared across Sharer layers); each head pools
+        # the span's raw, unprojected tokens its own way -- multiple independent
+        # views of "what matters" instead of one, with no value-side compression.
         self.span_key = nn.Linear(sharer_token_dim, bottleneck_dim)
-        self.span_query = nn.Parameter(torch.randn(bottleneck_dim) * 0.02)
+        self.span_query = nn.Parameter(torch.randn(stage1_num_heads, bottleneck_dim) * 0.02)
 
         # --- Stage 2: receiver-anchored multi-head cross-attention (L_s*P -> K).
-        self.key_proj = nn.Linear(sharer_token_dim, self.stage2_width)
-        self.value_proj = nn.Linear(sharer_token_dim, self.stage2_width)
+        self.key_proj = nn.Linear(stage1_output_dim, self.stage2_width)
+        self.value_proj = nn.Linear(stage1_output_dim, self.stage2_width)
         # Learnable query bank (one query per soft token) ...
         self.query_bank = nn.Parameter(torch.randn(num_soft_tokens, self.stage2_width) * 0.02)
         # ... modulated by the Receiver-question anchor (the receiver-anchoring).
@@ -109,23 +122,27 @@ class EIYWTranslator(nn.Module):
         return torch.cat([kf, vf], dim=2)
 
     def _within_span(self, tokens: torch.Tensor, num_spans: int) -> torch.Tensor:
-        """Within-span learned attention: [1, n, F] -> [1, P, F] (keeps Sharer geom).
+        """Within-span learned attention: [1, n, F] -> [1, P, H1*F] (keeps Sharer geom).
 
-        Splits the n real tokens into P spans; a shared learned query attends within
-        each span. Pads to exactly ``num_spans`` rows if n < num_spans.
+        Splits the n real tokens into P spans; ``stage1_num_heads`` (H1) learned
+        queries each attend within a span independently and pool the same raw
+        (unprojected) tokens their own way -- the per-head pools are concatenated,
+        so no information is discarded on the value side, only re-weighted H1 ways.
+        Pads to exactly ``num_spans`` rows if n < num_spans.
         """
 
         n = tokens.shape[1]
         p = max(1, min(int(num_spans), n))
         key = self.span_key(tokens.to(self.span_key.weight.dtype))  # [1, n, d]
-        scores = torch.einsum("bnd,d->bn", key, self.span_query) / (self.attn_dim**0.5)
+        scores = torch.einsum("bnd,hd->bhn", key, self.span_query) / (self.attn_dim**0.5)  # [1, H1, n]
         out = []
         for tok_span, score_span in zip(
-            torch.tensor_split(tokens, p, dim=1), torch.tensor_split(scores, p, dim=1)
+            torch.tensor_split(tokens, p, dim=1), torch.tensor_split(scores, p, dim=2)
         ):
-            weight = score_span.softmax(dim=1).to(tok_span.dtype)  # [1, s]
-            out.append(torch.einsum("bs,bsf->bf", weight, tok_span))  # [1, F]
-        spans = torch.stack(out, dim=1)  # [1, p, F]
+            weight = score_span.softmax(dim=2).to(tok_span.dtype)  # [1, H1, s]
+            pooled = torch.einsum("bhs,bsf->bhf", weight, tok_span)  # [1, H1, F]
+            out.append(pooled.reshape(pooled.shape[0], -1))  # [1, H1*F]
+        spans = torch.stack(out, dim=1)  # [1, p, H1*F]
         if p < num_spans:  # pad to a fixed P so the across-span token set is uniform
             pad = spans.new_zeros(1, num_spans - p, spans.shape[-1])
             spans = torch.cat([spans, pad], dim=1)
@@ -198,6 +215,7 @@ class EIYWTranslator(nn.Module):
         *,
         num_soft_tokens: int = 64,
         bottleneck_dim: int = 256,
+        stage1_num_heads: int = 1,
         stage2_num_heads: int = 8,
         stage2_head_dim: int = 256,
         zero_init: bool = True,
@@ -209,6 +227,7 @@ class EIYWTranslator(nn.Module):
             receiver_hidden=receiver_spec.hidden,
             num_soft_tokens=num_soft_tokens,
             bottleneck_dim=bottleneck_dim,
+            stage1_num_heads=stage1_num_heads,
             stage2_num_heads=stage2_num_heads,
             stage2_head_dim=stage2_head_dim,
             zero_init=zero_init,
@@ -228,6 +247,7 @@ class EIYWTranslator(nn.Module):
             "receiver_hidden": self.receiver_hidden,
             "num_soft_tokens": self.num_soft_tokens,
             "bottleneck_dim": self.bottleneck_dim,
+            "stage1_num_heads": self.stage1_num_heads,
             "stage2_num_heads": self.stage2_num_heads,
             "stage2_head_dim": self.stage2_head_dim,
         }
@@ -243,6 +263,7 @@ class EIYWTranslator(nn.Module):
             receiver_hidden=cfg["receiver_hidden"],
             num_soft_tokens=cfg["num_soft_tokens"],
             bottleneck_dim=cfg["bottleneck_dim"],
+            stage1_num_heads=cfg.get("stage1_num_heads", 1),
             stage2_num_heads=cfg.get("stage2_num_heads", 8),
             stage2_head_dim=cfg.get("stage2_head_dim", 256),
             zero_init=zero_init,

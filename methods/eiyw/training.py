@@ -322,6 +322,7 @@ def load_translator(
     allow_model_mismatch: bool = False,
     num_soft_tokens: int = 64,
     bottleneck_dim: int = 256,
+    stage1_num_heads: int = 1,
     stage2_num_heads: int = 8,
     stage2_head_dim: int = 256,
 ) -> EIYWTranslator:
@@ -347,6 +348,7 @@ def load_translator(
             pair.receiver_spec,
             num_soft_tokens=num_soft_tokens,
             bottleneck_dim=bottleneck_dim,
+            stage1_num_heads=stage1_num_heads,
             stage2_num_heads=stage2_num_heads,
             stage2_head_dim=stage2_head_dim,
             zero_init=False,
@@ -358,10 +360,14 @@ def load_translator(
         **_pair_arch(pair),
         "num_soft_tokens": num_soft_tokens,
         "bottleneck_dim": bottleneck_dim,
+        "stage1_num_heads": stage1_num_heads,
         "stage2_num_heads": stage2_num_heads,
         "stage2_head_dim": stage2_head_dim,
     }
-    ckpt_arch = ckpt.get("arch", {})
+    ckpt_arch = dict(ckpt.get("arch", {}))
+    # Checkpoints saved before stage1_num_heads existed implicitly used the
+    # original single-query pooling -- treat a missing key as 1, not a mismatch.
+    ckpt_arch.setdefault("stage1_num_heads", 1)
     mismatches: list[str] = []
     if ckpt.get("sharer_model") != pair.sharer_spec.name:
         mismatches.append(

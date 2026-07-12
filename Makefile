@@ -47,6 +47,7 @@ help:
 	@echo "  make single        Upper bound: MODEL answers with ALL evidence (MODEL=/DATASET= each: given=one, unset=all)"
 	@echo "  make exp           Sweep all model pairs, split by METHOD= then DATASET= (each: given=one, unset=all)"
 	@echo "  make sweep         Full pipeline: prepare + exp for every dataset, parallel across CUDA_VISIBLE_DEVICES"
+	@echo "  make visual        Comparison table: DATASET= + ITEM=scores (EM+F1, default), ITEM=params (trainable params), or ITEM=latency (avg latency); ITEM=datasets for a size/oracle-score overview of every dataset"
 	@echo ""
 	@echo "Pick models with SHARER=/RECEIVER= (default Qwen/Qwen3-0.6B both sides):"
 	@echo "  make lcfx-train SHARER=<id> RECEIVER=<id>   train a pair"
@@ -57,9 +58,11 @@ help:
 	@echo "    Qwen/Qwen2.5-0.5B-Instruct  Qwen/Qwen3-0.6B  unsloth/Llama-3.2-1B-Instruct  unsloth/gemma-3-4b-it  Qwen/Qwen3-8B"
 	@echo "  pair-testing extras (available for manual SHARER=/RECEIVER= use; not in exp/sweep):"
 	@echo "    unsloth/gemma-3-1b-it  Qwen/Qwen3-4B"
-	@echo "  results + checkpoints auto-separate (results/<method>/<dataset>/<sharer>/<receiver>)."
+	@echo "  results + checkpoints auto-separate (results/<method>/<dataset>/<sharer>/<receiver>/sp<SPANS>)."
 	@echo ""
-	@echo "Common knobs:  DATASET=  CKPT=  EVAL_N=  MAX_TRAIN=  MAX_STEPS=  BATCH_SIZE=  GRAD_ACCUM=  SOFT_TOKENS=  BOTTLENECK=  STAGE2_NUM_HEADS=  STAGE2_HEAD_DIM="
+	@echo "Common knobs:  DATASET=  CKPT=  EVAL_N=  MAX_TRAIN=  MAX_STEPS=  BATCH_SIZE=  GRAD_ACCUM=  SOFT_TOKENS=  STAGE1_NUM_HEADS=  STAGE2_NUM_HEADS=  STAGE2_HEAD_DIM="
+	@echo "  LCF-X span count / bottleneck dim:  SPANS=  BOTTLENECK=      (defaults: 5 / 128)"
+	@echo "  EIYW span count / bottleneck dim:   EIYW_SPANS=  EIYW_BOTTLENECK=  (defaults: 32 / 256; independent of LCF-X's SPANS/BOTTLENECK)"
 	@echo "Quick smoke:   make lcfx MAX_TRAIN=200 MAX_STEPS=5 EVAL_N=50 BATCH_SIZE=4 GRAD_ACCUM=2"
 
 # ===== Config =================================================================
@@ -103,13 +106,20 @@ EIYW_RECEIVER ?= $(RECEIVER)
 # combinations land in their own folders instead of overwriting each other. Layout is
 # <method>/<dataset>/<sharer>/<receiver> (model id "/" -> "--"), e.g.
 #   results/lcfx/hotpotqa_bridge/Qwen--Qwen2.5-0.5B-Instruct/Qwen--Qwen3-0.6B
-LCFX_SLUG = $(DATASET)/$(subst /,--,$(LCFX_SHARER))/$(subst /,--,$(LCFX_RECEIVER))
+# Both also carry the pooling span count (SPANS, defined below) so sweeping it
+# lands each run in its own folder instead of overwriting a previous span count's
+# checkpoint/results.
+LCFX_SLUG = $(DATASET)/$(subst /,--,$(LCFX_SHARER))/$(subst /,--,$(LCFX_RECEIVER))/sp$(SPANS)
 T2T_SLUG  = $(DATASET)/$(subst /,--,$(T2T_SHARER))/$(subst /,--,$(T2T_RECEIVER))
 # EIYW's slug also carries the soft-token count (SOFT_TOKENS), bottleneck dim
-# (BOTTLENECK), stage-2 head count (STAGE2_NUM_HEADS), and stage-2 head dim
-# (STAGE2_HEAD_DIM, all defined below) so sweeping any of them lands each run in
-# its own folder instead of overwriting a previous combination's checkpoint/results.
-EIYW_SLUG = $(DATASET)/$(subst /,--,$(EIYW_SHARER))/$(subst /,--,$(EIYW_RECEIVER))/k$(SOFT_TOKENS)/b$(BOTTLENECK)/h$(STAGE2_NUM_HEADS)/d$(STAGE2_HEAD_DIM)
+# (EIYW_BOTTLENECK), stage-1 head count (STAGE1_NUM_HEADS), stage-2 head count
+# (STAGE2_NUM_HEADS), stage-2 head dim (STAGE2_HEAD_DIM), and pooling span
+# count (EIYW_SPANS, all defined below) so sweeping any of them lands each run
+# in its own folder instead of overwriting a previous combination's
+# checkpoint/results. EIYW gets its own SPANS/BOTTLENECK knobs (EIYW_SPANS/
+# EIYW_BOTTLENECK, rather than reusing LCF-X's SPANS/BOTTLENECK) since its
+# best-known defaults differ from LCF-X's.
+EIYW_SLUG = $(DATASET)/$(subst /,--,$(EIYW_SHARER))/$(subst /,--,$(EIYW_RECEIVER))/k$(SOFT_TOKENS)/b$(EIYW_BOTTLENECK)/s1h$(STAGE1_NUM_HEADS)/h$(STAGE2_NUM_HEADS)/d$(STAGE2_HEAD_DIM)/sp$(EIYW_SPANS)
 LCFX_OUT  ?= results/lcfx/$(LCFX_SLUG)
 T2T_OUT   ?= results/t2t/$(T2T_SLUG)
 EIYW_OUT  ?= results/eiyw/$(EIYW_SLUG)
@@ -138,25 +148,36 @@ SAVE_EVERY ?= 50
 EVAL_EM    ?= 0
 
 # --- EIYW (our method): translator checkpoint + soft-token count ---
-# Reuses the LCF-X training knobs (SPANS/BOTTLENECK/LR/EPOCHS/BATCH_SIZE/GRAD_ACCUM/
-# WARMUP/VAL_FRAC/EVAL_*). Checkpoint path is dataset+pair-scoped (override EIYW_CKPT).
+# Reuses the LCF-X training knobs (LR/EPOCHS/BATCH_SIZE/GRAD_ACCUM/WARMUP/
+# VAL_FRAC/EVAL_*) but NOT its span count / bottleneck dim -- EIYW has its own
+# EIYW_SPANS/EIYW_BOTTLENECK (best-known defaults differ from LCF-X's; override
+# either independently without touching `make lcfx`). Checkpoint path is
+# dataset+pair-scoped (override EIYW_CKPT).
 # NOTE: EIYW's prompt forward is grad-enabled (soft tokens lead the sequence), so it
 # uses more memory than LCF-X — drop BATCH_SIZE / raise GRAD_ACCUM as needed.
-EIYW_CKPT   ?= data/checkpoints/eiyw/$(EIYW_SLUG)/translator.pt
-SOFT_TOKENS ?= 64
+EIYW_CKPT       ?= data/checkpoints/eiyw/$(EIYW_SLUG)/translator.pt
+EIYW_SPANS      ?= 32
+EIYW_BOTTLENECK ?= 256
+SOFT_TOKENS ?= 256
+# Stage-1 pooling heads: independent query vectors that each pool a span's raw
+# Sharer tokens their own way (no value projection -- keeps Sharer geometry);
+# default 1 reproduces the original single-query pooling. Widens the span
+# token dim (and hence stage-2's input) by this factor when > 1.
+STAGE1_NUM_HEADS ?= 8
 STAGE2_NUM_HEADS ?= 8
 STAGE2_HEAD_DIM ?= 256
 
-# --- T2T baseline: paper's "T2T Max 200" caps the Sharer message at 200 tokens
+# --- T2T baseline: caps the Sharer message at SHARER_MAX tokens (paper default
+#     was "T2T Max 200"; ours defaults to 100 -- override with SHARER_MAX=)
 #     (Receiver answer budget matches LCF-X eval at 64) ---
-SHARER_MAX ?= 200
+SHARER_MAX ?= 100
 RECV_MAX   ?= 64
 
 # --- shared knobs ---
 SEED       ?= 0
 MAX_TRAIN  ?=          # cap number of training examples (partial run); empty = all
 MAX_STEPS  ?=          # cap number of optimizer steps; empty = full epoch(s)
-EVAL_N     ?=          # cap eval examples in lcfx-eval / t2t; empty = full val split
+EVAL_N     ?=          # cap eval examples in lcfx-eval / eiyw-eval / t2t; empty = full val split
 OFFLINE    ?= HF_HUB_OFFLINE=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # ===== Data preparation (dataset-named; runs once, reused thereafter) =========
@@ -320,7 +341,7 @@ eiyw-train: data
 	$(OFFLINE) $(PY) scripts/train_eiyw.py \
 	  --train-data $(TRAIN) \
 	  --sharer-model $(EIYW_SHARER) --receiver-model $(EIYW_RECEIVER) \
-	  --num-soft-tokens $(SOFT_TOKENS) --bottleneck-dim $(BOTTLENECK) --stage2-num-heads $(STAGE2_NUM_HEADS) --stage2-head-dim $(STAGE2_HEAD_DIM) --num-spans $(SPANS) \
+	  --num-soft-tokens $(SOFT_TOKENS) --bottleneck-dim $(EIYW_BOTTLENECK) --stage1-num-heads $(STAGE1_NUM_HEADS) --stage2-num-heads $(STAGE2_NUM_HEADS) --stage2-head-dim $(STAGE2_HEAD_DIM) --num-spans $(EIYW_SPANS) \
 	  --lr $(LR) --epochs $(EPOCHS) --batch-size $(BATCH_SIZE) --grad-accum $(GRAD_ACCUM) --warmup $(WARMUP) \
 	  --val-frac $(VAL_FRAC) --eval-max-examples $(EVAL_MAX) --eval-em-examples $(EVAL_EM) \
 	  --log-every $(LOG_EVERY) --eval-every $(EVAL_EVERY) --save-every $(SAVE_EVERY) \
@@ -330,9 +351,9 @@ eiyw-train: data
 
 # Final EM/F1 of the trained translator on the val split (EVAL_N=200 for a quick eval).
 eiyw-eval: data
-	$(OFFLINE) $(PY) scripts/run_eiyw.py --dataset $(VAL) --num-spans $(SPANS) \
+	$(OFFLINE) $(PY) scripts/run_eiyw.py --dataset $(VAL) --num-spans $(EIYW_SPANS) \
 	  --sharer-model $(EIYW_SHARER) --receiver-model $(EIYW_RECEIVER) \
-	  --num-soft-tokens $(SOFT_TOKENS) --bottleneck-dim $(BOTTLENECK) --stage2-num-heads $(STAGE2_NUM_HEADS) --stage2-head-dim $(STAGE2_HEAD_DIM) \
+	  --num-soft-tokens $(SOFT_TOKENS) --bottleneck-dim $(EIYW_BOTTLENECK) --stage1-num-heads $(STAGE1_NUM_HEADS) --stage2-num-heads $(STAGE2_NUM_HEADS) --stage2-head-dim $(STAGE2_HEAD_DIM) \
 	  $(if $(EVAL_N),--num-examples $(EVAL_N),) \
 	  --translator-checkpoint $(EIYW_CKPT) --output-dir $(EIYW_OUT)
 
@@ -344,8 +365,9 @@ eiyw-hetero:
 	$(MAKE) eiyw EIYW_SHARER=$(HETERO_SHARER) EIYW_RECEIVER=$(HETERO_RECEIVER)
 
 # ===== T2T (baseline: no training, single eval pass) ==========================
-# Same models / data / EM-F1 scoring as lcfx-eval, with the paper's "T2T Max 200"
-# Sharer budget -> directly comparable. Pass EVAL_N=200 for a quick partial eval.
+# Same models / data / EM-F1 scoring as lcfx-eval. Sharer message budget is
+# SHARER_MAX (default 100; paper's own default was 200) -> tune with
+# `make t2t SHARER_MAX=<n>`. Pass EVAL_N=200 for a quick partial eval.
 .PHONY: t2t t2t-eval
 
 t2t-eval t2t: data
@@ -483,3 +505,31 @@ SWEEP_ARGS ?=
 .PHONY: sweep
 sweep: prepare
 	$(PY) scripts/run_all.py --stage $(EXP_STAGE) $(if $(METHOD),--method $(METHOD),) $(SWEEP_ARGS)
+
+# ===== Visual comparison table (lcfx vs eiyw vs t2t) ===========================
+# Sharer x Receiver grid over the primary model roster (5x5 = 25 cells) for one
+# dataset. Missing results/checkpoints (method not run, or whole cell not run)
+# are left blank rather than erroring. Four views via ITEM=:
+#   ITEM=scores (default)  lcfx/eiyw/t2t EM+F1 from results/<method>/.../metrics.json
+#                           (best EM and best F1 in each cell are bolded)
+#   ITEM=params             lcfx/eiyw trainable parameter counts from
+#                           data/checkpoints/<method>/.../training_log.jsonl (t2t
+#                           trains nothing, so it's not shown)
+#   ITEM=latency             lcfx/eiyw/t2t average per-example total latency from
+#                           results/<method>/.../latency.json (fastest of each
+#                           cell is bolded)
+#   ITEM=datasets            one overview table, every dataset (DATASET= ignored):
+#                           train/val split sizes + single-model-oracle EM+F1 for
+#                           a representative 1B/4B/8B model (results/single/...)
+#   make visual DATASET=ropes
+#   make visual DATASET=ropes ITEM=params
+#   make visual DATASET=ropes ITEM=latency
+#   make visual ITEM=datasets
+#   make visual DATASET=ropes OUT=results/comparison/ropes_custom.md
+ITEM       ?= scores
+VISUAL_SUFFIX = $(if $(filter params latency,$(ITEM)),_$(ITEM),)
+VISUAL_OUT ?= $(if $(filter datasets,$(ITEM)),results/comparison/datasets.md,results/comparison/$(DATASET)$(VISUAL_SUFFIX).md)
+
+.PHONY: visual
+visual:
+	$(PY) scripts/make_comparison_table.py --item $(ITEM) $(if $(filter-out datasets,$(ITEM)),--dataset $(DATASET),) --output $(if $(OUT),$(OUT),$(VISUAL_OUT))

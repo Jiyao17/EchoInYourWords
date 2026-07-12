@@ -89,6 +89,12 @@ def main() -> None:
         help="Translator latent dim; must match the trained checkpoint",
     )
     parser.add_argument(
+        "--stage1-num-heads",
+        type=int,
+        default=1,
+        help="Multi-head count for the stage-1 span pooling; must match the trained checkpoint",
+    )
+    parser.add_argument(
         "--stage2-num-heads",
         type=int,
         default=8,
@@ -150,6 +156,7 @@ def main() -> None:
             allow_model_mismatch=args.allow_model_mismatch,
             num_soft_tokens=args.num_soft_tokens,
             bottleneck_dim=args.bottleneck_dim,
+            stage1_num_heads=args.stage1_num_heads,
             stage2_num_heads=args.stage2_num_heads,
             stage2_head_dim=args.stage2_head_dim,
         ).to(pair.device)
@@ -160,6 +167,7 @@ def main() -> None:
             pair.receiver_spec,
             num_soft_tokens=args.num_soft_tokens,
             bottleneck_dim=args.bottleneck_dim,
+            stage1_num_heads=args.stage1_num_heads,
             stage2_num_heads=args.stage2_num_heads,
             stage2_head_dim=args.stage2_head_dim,
             zero_init=True,
@@ -215,6 +223,7 @@ def main() -> None:
         "num_spans": args.num_spans,
         "num_soft_tokens": args.num_soft_tokens,
         "bottleneck_dim": args.bottleneck_dim,
+        "stage1_num_heads": args.stage1_num_heads,
         "stage2_num_heads": args.stage2_num_heads,
         "translator_checkpoint": (
             str(args.translator_checkpoint) if args.translator_checkpoint else None
