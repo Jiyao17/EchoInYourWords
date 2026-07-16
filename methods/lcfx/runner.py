@@ -18,6 +18,7 @@ from .cache import extract_kv
 from .fuser import LCFXFuser
 from .model import LCFXPair
 from .schema import LCFXExample
+from .spans import paragraph_span_starts
 
 ScoreFn = Callable[[str, str], dict[str, Any]]
 
@@ -78,11 +79,17 @@ def run_lcfx_example(
     pair: LCFXPair,
     fuser: LCFXFuser,
     *,
-    num_spans: int = 1,
+    num_spans: int = 5,
+    span_scheme: str = "paragraphs",
     max_new_tokens: int = 64,
     score_fn: ScoreFn | None = None,
 ) -> LCFXResult:
-    """Run the LCF-X latent-communication pipeline for a single example."""
+    """Run the LCF-X latent-communication pipeline for a single example.
+
+    ``span_scheme``: ``"paragraphs"`` pools over the sharer text's natural
+    ``\\n\\n``-separated blocks (the paper's scheme, P varies per example);
+    ``"fixed"`` divides the tokens into ``num_spans`` near-equal chunks.
+    """
 
     sharer_text = build_sharer_encode_text(example)
     receiver_prompt = build_receiver_prompt(example)
@@ -91,10 +98,16 @@ def run_lcfx_example(
     summary, sharer_tokens = pair.sharer_summary(sharer_text)
     sharer_ms = (perf_counter() - start) * 1000.0
 
-    # Align the Sharer summary to Receiver shape up front; the joint projection
-    # (which needs the Receiver cache) runs inside decode via this callback.
+    # Pool the Sharer cache into per-layer summaries up front; the joint
+    # projection (which needs the Receiver cache) runs inside decode via this
+    # callback.
     start = perf_counter()
-    aligned = fuser.align(summary, num_spans=num_spans)
+    boundaries = (
+        [paragraph_span_starts(pair.sharer_tok, sharer_text)]
+        if span_scheme == "paragraphs"
+        else None
+    )
+    aligned = fuser.align(summary, num_spans=num_spans, span_boundaries=boundaries)
     align_ms = (perf_counter() - start) * 1000.0
     project_ms: list[float] = []
 
@@ -124,11 +137,14 @@ def run_lcfx_example(
     is_correct, scores = _score_prediction(prediction, example.answer, score_fn)
 
     n_layers = len(summary)
+    n_spans = len(boundaries[0]) if boundaries else num_spans
     return LCFXResult(
         id=example.id,
         method="lcf_x",
         sharer_prompt=sharer_text,
-        sharer_message=f"[latent cache summary: {n_layers} layers x {num_spans} spans]",
+        sharer_message=(
+            f"[latent cache summary: {n_layers} layers x 1 slot ({n_spans} spans pooled)]"
+        ),
         receiver_prompt=receiver_prompt,
         receiver_output=output,
         prediction=prediction,
@@ -145,7 +161,7 @@ def run_lcfx_example(
         },
         token_counts={
             "sharer_input": sharer_tokens,
-            "sharer_output": n_layers * num_spans,  # latent summary slots, not text tokens
+            "sharer_output": n_layers,  # one pooled K*/V* slot per layer, not text tokens
             "receiver_input": recv_in,
             "receiver_output": recv_out,
         },

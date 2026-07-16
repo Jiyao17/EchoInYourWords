@@ -1,16 +1,21 @@
 """Train the EIYW translator (frozen Sharer/Receiver; only the translator learns).
 
-Each example: encode the Sharer context -> translate to K receiver-anchored soft
-tokens -> prepend to the Receiver input -> next-token cross-entropy on the gold
-answer. Unlike LCF-X the whole prompt forward is grad-enabled (the soft tokens
-sit at the front), so this is heavier on memory. The loop lives in
-``methods.eiyw.training.train_translator``.
+Each example: encode the Sharer's own context (paper-exact LCF-X pool, up to
+``--queries-per-layer`` k slots per layer -> k*L_s soft-token queries at
+``--d-model`` width, default receiver_hidden//2, with layer/query tags); look
+up the Receiver's own context *embeddings* (no forward pass) as the
+cross-attention memory (+ sinusoidal PE); ``--num-blocks`` blocks of
+self-attn + cross-attn + MLP refine the slots into the soft tokens ->
+prepended to the Receiver's prompt (grad-enabled) -> next-token cross-entropy
+on the gold answer. ``--adaptive-k-tokens w`` scales the active k with the
+Sharer's context length (one query per w tokens, capped at k). The loop lives
+in ``methods.eiyw.training.train_translator``.
 
 Example (smoke on the cross-context task file):
 
     python scripts/train_eiyw.py \
         --train-data data/tasks/hotpotqa_bridge_train.jsonl \
-        --num-soft-tokens 16 --num-spans 4 --max-steps 200 \
+        --max-steps 200 \
         --checkpoint-out data/checkpoints/eiyw/translator.pt
 
 Then evaluate the trained translator:
@@ -43,17 +48,67 @@ def main() -> None:
     # Qwen pair when unspecified (the project assumes heterogeneous settings).
     parser.add_argument("--sharer-model", default=DEFAULT_SHARER)
     parser.add_argument("--receiver-model", default=DEFAULT_RECEIVER)
-    # On a smaller GPU, lower --batch-size and raise --grad-accum to keep the
-    # effective batch (B*A) at 256 (see README).
-    parser.add_argument("--num-soft-tokens", type=int, default=64, help="K soft tokens")
-    parser.add_argument("--bottleneck-dim", type=int, default=256, help="Translator latent dim")
-    parser.add_argument("--stage1-num-heads", type=int, default=1, help="Multi-head count for the stage-1 span pooling")
-    parser.add_argument("--stage2-num-heads", type=int, default=8, help="Multi-head count for the stage-2 cross-attention")
-    parser.add_argument("--stage2-head-dim", type=int, default=256, help="Per-head width for the stage-2 cross-attention")
-    parser.add_argument("--num-spans", type=int, default=4, help="Sharer pooling spans")
+    # Defaults follow LCF-X (this iteration reuses its pooling design on both
+    # sides). On a smaller GPU, lower --batch-size and raise --grad-accum to
+    # keep the effective batch (B*A) at 256 (see README).
+    parser.add_argument(
+        "--span-scheme",
+        choices=["paragraphs", "fixed"],
+        default="paragraphs",
+        help=(
+            "Sharer pooling span partition: 'paragraphs' uses the encode "
+            "text's blank-line blocks (LCF-X's scheme), 'fixed' uses --num-spans "
+            "near-equal token chunks"
+        ),
+    )
+    parser.add_argument("--num-spans", type=int, default=5, help="Span count for --span-scheme fixed")
+    parser.add_argument(
+        "--queries-per-layer",
+        type=int,
+        default=1,
+        help=(
+            "Max cross-span queries per layer in the Sharer pool (k). Output "
+            "soft-token count = k*L_s; k>1 keeps k distinct summaries per layer "
+            "(k=1 = paper-exact pool)"
+        ),
+    )
+    parser.add_argument(
+        "--adaptive-k-tokens",
+        type=int,
+        default=0,
+        help=(
+            "w>0: scale the ACTIVE queries per layer with the Sharer's context "
+            "length — k(N_s)=clamp(ceil(N_s/w),1,--queries-per-layer), resolved "
+            "per batch from its longest example (soft tokens = k*L_s, so short "
+            "contexts emit fewer, long ones cap at the max; e.g. "
+            "--queries-per-layer 8 --adaptive-k-tokens 256). 0 = fixed budget"
+        ),
+    )
+    parser.add_argument(
+        "--num-blocks",
+        type=int,
+        default=1,
+        help=(
+            "Self-attn + cross-attn + MLP blocks (the fusion depth); each "
+            "block is ~16*d_model^2 params, so the default stays lean"
+        ),
+    )
+    parser.add_argument(
+        "--d-model",
+        default=512,
+        help=(
+            "Translator width: an integer (default 512, fixed and "
+            "receiver-independent — the old 'half' rule scaled params "
+            "quadratically with the Receiver's width); 'half' "
+            "(receiver_hidden//2) and 'hidden' remain as sweep options"
+        ),
+    )
     parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--batch-size", type=int, default=16, help="Per-step micro-batch")
-    parser.add_argument("--grad-accum", type=int, default=16, help="Micro-batches per opt step (eff. batch 256)")
+    # EIYW's generation forward is grad-enabled end to end, so it holds ~2x
+    # LCF-X's activations at the same batch: default to half LCF-X's batch and
+    # double the accumulation (same effective batch 256).
+    parser.add_argument("--batch-size", type=int, default=8, help="Per-step micro-batch (half LCF-X's; EIYW's forward is grad-enabled end to end)")
+    parser.add_argument("--grad-accum", type=int, default=32, help="Micro-batches per opt step (eff. batch 256)")
     parser.add_argument("--warmup", type=int, default=200, help="Linear LR warmup steps")
     parser.add_argument("--max-steps", type=int, default=None, help="Cap on optimizer steps")
     parser.add_argument(
@@ -134,11 +189,10 @@ def main() -> None:
     translator = EIYWTranslator.from_specs(
         pair.sharer_spec,
         pair.receiver_spec,
-        num_soft_tokens=args.num_soft_tokens,
-        bottleneck_dim=args.bottleneck_dim,
-        stage1_num_heads=args.stage1_num_heads,
-        stage2_num_heads=args.stage2_num_heads,
-        stage2_head_dim=args.stage2_head_dim,
+        d_model=args.d_model,
+        queries_per_layer=args.queries_per_layer,
+        adaptive_k_tokens=args.adaptive_k_tokens,
+        num_blocks=args.num_blocks,
         zero_init=True,
     ).to(pair.device)
 
@@ -148,6 +202,7 @@ def main() -> None:
         train_rows,
         eval_data=eval_rows,
         num_spans=args.num_spans,
+        span_scheme=args.span_scheme,
         lr=args.lr,
         epochs=args.epochs,
         batch_size=args.batch_size,

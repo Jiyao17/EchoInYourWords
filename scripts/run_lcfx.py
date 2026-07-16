@@ -8,8 +8,8 @@ Example (cross-context HotpotQA-bridge, zero-init fuser == receiver baseline):
 
     python scripts/run_lcfx.py \
         --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
-        --sharer-model Qwen/Qwen2.5-0.5B-Instruct \
-        --receiver-model Qwen/Qwen2.5-0.5B-Instruct \
+        --sharer-model Qwen/Qwen3-0.6B \
+        --receiver-model Qwen/Qwen3-0.6B \
         --output-dir results/lcfx_hotpotqa_zeroinit
 
 With no ``--fuser-checkpoint`` the fuser is zero-initialized, so LCF-X reproduces
@@ -81,10 +81,22 @@ def main() -> None:
         help="Latent dim; must match the trained --fuser-checkpoint (paper: 128)",
     )
     parser.add_argument(
+        "--span-scheme",
+        choices=["paragraphs", "fixed"],
+        default="paragraphs",
+        help=(
+            "How the Sharer text is divided into pooling spans: 'paragraphs' uses "
+            "the natural blank-line blocks (the paper's scheme; P varies per "
+            "example), 'fixed' uses --num-spans near-equal token chunks. The pool "
+            "has no P-dependent parameters, so any trained checkpoint accepts "
+            "either (paper Appendix E.4)."
+        ),
+    )
+    parser.add_argument(
         "--num-spans",
         type=int,
         default=5,
-        help="Sharer pooling spans; must match the trained --fuser-checkpoint (paper: 5)",
+        help="Span count for --span-scheme fixed (paper trains with P=5 paragraphs)",
     )
     parser.add_argument(
         "--allow-model-mismatch",
@@ -144,7 +156,7 @@ def main() -> None:
             zero_init=True,
         ).to(pair.device)
         print("No checkpoint: using ZERO-INIT fuser (== single-model floor)")
-    fuser.eval()  # deterministic gating (plain sigmoid, no Gumbel noise)
+    fuser.eval()  # hard layer gates (g in {0,1}, no Gumbel noise) — paper's inference mode
     print(f"Fuser trainable params: {fuser.trainable_parameters()}")
 
     # Persistent eval progress (long runs survive the session); flushed per record.
@@ -172,6 +184,7 @@ def main() -> None:
             pair,
             fuser,
             num_spans=args.num_spans,
+            span_scheme=args.span_scheme,
             max_new_tokens=args.max_new_tokens,
             score_fn=score_fn,
         )
@@ -192,6 +205,7 @@ def main() -> None:
         "num_examples": len(examples),
         "max_new_tokens": args.max_new_tokens,
         "num_spans": args.num_spans,
+        "span_scheme": args.span_scheme,
         "bottleneck_dim": args.bottleneck_dim,
         "fuser_checkpoint": (
             str(args.fuser_checkpoint) if args.fuser_checkpoint else None

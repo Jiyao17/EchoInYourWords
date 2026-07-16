@@ -1,0 +1,176 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1560" height="1420" viewBox="0 0 1560 1420" font-family="'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrowRose" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#e11d48"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1560" height="1420" fill="#ffffff"/>
+
+  <!-- ================= TITLE ================= -->
+  <text x="780" y="30" text-anchor="middle" font-size="21" font-weight="700" fill="#0f172a">KVTok v2 — Sharer-only KV pooling with Receiver-embedding-aware translation</text>
+  <text x="780" y="52" text-anchor="middle" font-size="12.5" fill="#475569">Initial handoff: one Sharer prefill provides KV; the Receiver provides embedding vectors only — never a Receiver KV cache.</text>
+  <text x="780" y="68" text-anchor="middle" font-size="12.5" fill="#475569">B batch · Lₛ Sharer layers · Hₛ/Dₛ Sharer KV heads/head dim · Nₛ/Nᵣ context lengths · P spans · T output tokens · d translator width · d_hidden Receiver width.</text>
+
+  <!-- ================= COLUMN HEADERS ================= -->
+  <rect x="60" y="92" width="340" height="28" rx="7" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="230" y="111" text-anchor="middle" font-size="13" font-weight="700" fill="#1d4ed8">SHARER PATH — the only initial LM prefill</text>
+
+  <rect x="1040" y="92" width="340" height="28" rx="7" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="1210" y="111" text-anchor="middle" font-size="13" font-weight="700" fill="#15803d">RECEIVER PATH — embedding lookup only</text>
+
+  <!-- ======================================================================= -->
+  <!-- SHARER COLUMN                                                           -->
+  <!-- ======================================================================= -->
+  <text x="230" y="150" text-anchor="middle" font-size="11.5" fill="#334155">Sharer context (Nₛ tokens)</text>
+  <line x1="230" y1="156" x2="230" y2="172" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="130" y="174" width="200" height="62" rx="9" fill="#dbeafe" stroke="#2563eb" stroke-width="1.6"/>
+  <text x="230" y="198" text-anchor="middle" font-size="12.5" font-weight="600" fill="#0f172a">Sharer LM</text>
+  <text x="230" y="216" text-anchor="middle" font-size="10" fill="#1d4ed8">❄ frozen · prefill once · use_cache</text>
+  <text x="230" y="229" text-anchor="middle" font-size="9.5" fill="#475569">the only model forward before translation</text>
+
+  <line x1="230" y1="236" x2="230" y2="268" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="242" y="250" text-anchor="start" font-size="9.5" fill="#64748b">raw Sharer KV, per layer ×Lₛ:</text>
+  <text x="242" y="263" text-anchor="start" font-size="9.5" font-weight="600" fill="#475569">K, V [B, Hₛ, Nₛ, Dₛ]</text>
+
+  <rect x="60" y="270" width="340" height="160" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.8"/>
+  <text x="230" y="292" text-anchor="middle" font-size="12" font-weight="700" fill="#7c2d12">KVTok Stage 1 pool — Sharer only</text>
+  <text x="230" y="312" text-anchor="middle" font-size="10" fill="#334155">one learned q_base⁽ˡ⁾ per Sharer layer</text>
+  <text x="230" y="330" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">[B, Hₛ, Nₛ, Dₛ] → [B, Hₛ, P, Dₛ]</text>
+  <text x="230" y="349" text-anchor="middle" font-size="10" fill="#334155">concatenate all Lₛ layers (no Stage 2)</text>
+  <text x="230" y="367" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">K*, V* [B, Hₛ, Lₛ·P, Dₛ]</text>
+  <text x="230" y="386" text-anchor="middle" font-size="10" fill="#334155">flatten heads + K/V; preserve layer/span positions</text>
+  <text x="230" y="404" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">Zₛ [B, Lₛ·P, 2·Hₛ·Dₛ]</text>
+  <text x="230" y="420" text-anchor="middle" font-size="9.5" font-style="italic" fill="#92400e">trainable: q_base [Lₛ, Hₛ, Dₛ]</text>
+
+  <line x1="230" y1="430" x2="230" y2="462" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="75" y="464" width="310" height="102" rx="9" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.6"/>
+  <text x="230" y="486" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f172a">Factorized KVTok slot projection</text>
+  <text x="230" y="504" text-anchor="middle" font-size="10" fill="#334155">W_feat : 2·Hₛ·Dₛ → d (shared over Lₛ·P)</text>
+  <text x="230" y="522" text-anchor="middle" font-size="10" fill="#334155">W_tok : Lₛ·P → T (shared over d)</text>
+  <text x="230" y="540" text-anchor="middle" font-size="10" fill="#334155">LayerNorm (norm_slots)</text>
+  <text x="230" y="557" text-anchor="middle" font-size="10" font-weight="600" fill="#7e22ce">slot queries Q₀ [B, T, d]</text>
+
+  <polyline points="230,566 230,590 680,590 680,620" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="455" y="584" text-anchor="middle" font-size="10.5" font-weight="600" fill="#475569">Q₀ [B, T, d] — derived from Sharer KV only</text>
+
+  <!-- ======================================================================= -->
+  <!-- RECEIVER COLUMN                                                         -->
+  <!-- ======================================================================= -->
+  <text x="1210" y="150" text-anchor="middle" font-size="11.5" fill="#334155">Receiver context token IDs (Nᵣ tokens)</text>
+  <line x1="1210" y1="156" x2="1210" y2="172" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="1085" y="174" width="250" height="66" rx="9" fill="#dcfce7" stroke="#16a34a" stroke-width="1.6"/>
+  <text x="1210" y="196" text-anchor="middle" font-size="12.5" font-weight="600" fill="#0f172a">Receiver embedding lookup</text>
+  <text x="1210" y="214" text-anchor="middle" font-size="10" fill="#15803d">❄ frozen input-embedding table</text>
+  <text x="1210" y="230" text-anchor="middle" font-size="9.5" fill="#475569">Eᵣ [B, Nᵣ, d_hidden]</text>
+
+  <rect x="1050" y="252" width="320" height="64" rx="10" fill="#fff1f2" stroke="#e11d48" stroke-width="1.8" stroke-dasharray="6 4"/>
+  <text x="1210" y="275" text-anchor="middle" font-size="12" font-weight="700" fill="#be123c">No Receiver LM prefill here</text>
+  <text x="1210" y="294" text-anchor="middle" font-size="10" fill="#334155">no Receiver layers run · no Receiver KV is created or shared</text>
+  <text x="1210" y="308" text-anchor="middle" font-size="9.5" fill="#be123c">translator input from Receiver = Eᵣ only</text>
+
+  <line x1="1210" y1="316" x2="1210" y2="342" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="1095" y="344" width="230" height="52" rx="9" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.6"/>
+  <text x="1210" y="365" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f172a">W_R : d_hidden → d</text>
+  <text x="1210" y="384" text-anchor="middle" font-size="10" font-weight="600" fill="#7e22ce">[B, Nᵣ, d]</text>
+
+  <line x1="1210" y1="396" x2="1210" y2="420" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="1050" y="422" width="320" height="80" rx="10" fill="#fff1f2" stroke="#e11d48" stroke-width="2.2"/>
+  <text x="1210" y="445" text-anchor="middle" font-size="12.5" font-weight="700" fill="#be123c">⊕ sinusoidal positional encoding</text>
+  <text x="1210" y="464" text-anchor="middle" font-size="10" fill="#334155">PE[Nᵣ, d] adds token order to raw lookup vectors</text>
+  <text x="1210" y="483" text-anchor="middle" font-size="10" font-weight="600" fill="#be123c">[B, Nᵣ, d] — length-agnostic at inference</text>
+
+  <line x1="1210" y1="502" x2="1210" y2="526" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="1095" y="528" width="230" height="52" rx="9" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.6"/>
+  <text x="1210" y="549" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f172a">LayerNorm (norm_mem)</text>
+  <text x="1210" y="568" text-anchor="middle" font-size="10" font-weight="600" fill="#7e22ce">memory M [B, Nᵣ, d]</text>
+
+  <polyline points="1210,580 1210,782 866,782" fill="none" stroke="#e11d48" stroke-width="1.8" marker-end="url(#arrowRose)"/>
+  <text x="1222" y="620" text-anchor="start" font-size="10.5" font-weight="600" fill="#be123c">M [B, Nᵣ, d]</text>
+  <text x="1222" y="637" text-anchor="start" font-size="9.5" fill="#64748b">K and V for translator</text>
+  <text x="1222" y="652" text-anchor="start" font-size="9.5" fill="#64748b">cross-attention; pad mask</text>
+  <text x="1222" y="667" text-anchor="start" font-size="9.5" fill="#64748b">comes from receiver_lengths</text>
+
+  <!-- ======================================================================= -->
+  <!-- TRANSLATOR CORE                                                         -->
+  <!-- ======================================================================= -->
+  <rect x="440" y="622" width="480" height="354" rx="12" fill="#faf5ff" stroke="#9333ea" stroke-width="2"/>
+  <text x="680" y="648" text-anchor="middle" font-size="13" font-weight="700" fill="#6b21a8">KVTok v2 translator core (trainable)</text>
+  <text x="680" y="667" text-anchor="middle" font-size="10" fill="#7e22ce">fixed T slot seeds preserve KVTok's compact output-token budget</text>
+
+  <rect x="500" y="688" width="360" height="68" rx="8" fill="#ffffff" stroke="#9333ea" stroke-width="1.4"/>
+  <text x="680" y="711" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f172a">slot input Q₀ [B, T, d]</text>
+  <text x="680" y="730" text-anchor="middle" font-size="10" fill="#64748b">LN (norm_cross) → normalized queries Q</text>
+  <text x="680" y="746" text-anchor="middle" font-size="9.5" fill="#334155">Receiver memory does not seed slots; it conditions them</text>
+
+  <line x1="680" y1="756" x2="680" y2="774" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="495" y="776" width="370" height="104" rx="8" fill="#ffffff" stroke="#9333ea" stroke-width="1.4"/>
+  <text x="680" y="799" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f172a">cross-attn(Q, K = M, V = M)</text>
+  <text x="680" y="819" text-anchor="middle" font-size="9.5" fill="#64748b">scores [B, heads, T, Nᵣ] — padded positions masked</text>
+  <text x="680" y="837" text-anchor="middle" font-size="9.5" fill="#64748b">attn [B, T, d] reads Receiver token identity + position</text>
+  <text x="680" y="856" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">x ← Q₀ + attn ⇒ [B, T, d]</text>
+  <text x="680" y="872" text-anchor="middle" font-size="9.5" font-style="italic" fill="#7e22ce">one lightweight receiver-aware refinement step</text>
+
+  <line x1="680" y1="880" x2="680" y2="898" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="500" y="900" width="360" height="58" rx="8" fill="#ffffff" stroke="#9333ea" stroke-width="1.4"/>
+  <text x="680" y="923" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f172a">refined KVTok slots</text>
+  <text x="680" y="943" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">x [B, T, d]</text>
+
+  <line x1="680" y1="976" x2="680" y2="998" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <!-- ================= OUTPUT HEAD ================= -->
+  <rect x="455" y="1000" width="450" height="104" rx="10" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.8"/>
+  <text x="680" y="1023" text-anchor="middle" font-size="12" font-weight="700" fill="#0f172a">EIYW-v2-style Receiver-compatible output head</text>
+  <text x="680" y="1043" text-anchor="middle" font-size="10" fill="#334155">LayerNorm (norm_out): [B, T, d]</text>
+  <text x="680" y="1061" text-anchor="middle" font-size="10" fill="#334155">W_out : d → d_hidden ⇒ [B, T, d_hidden]</text>
+  <text x="680" y="1079" text-anchor="middle" font-size="10" fill="#334155">× embed_scale · out_gain ⇒ Receiver-scale soft tokens</text>
+  <text x="680" y="1095" text-anchor="middle" font-size="9.5" font-style="italic" fill="#0f766e">initial magnitude ≈ 5% of measured Receiver embedding RMS</text>
+
+  <line x1="680" y1="1104" x2="680" y2="1130" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="692" y="1122" text-anchor="start" font-size="10.5" font-weight="600" fill="#0d9488">soft tokens S [B, T, d_hidden]</text>
+
+  <!-- ================= RECEIVER GENERATION PREFILL ================= -->
+  <rect x="280" y="1132" width="410" height="70" rx="9" fill="#f1f5f9" stroke="#475569" stroke-width="1.5"/>
+  <text x="485" y="1156" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f172a">concat along the sequence axis</text>
+  <text x="485" y="1176" text-anchor="middle" font-size="10" fill="#334155">[ S ; embed(generation prompt) ]</text>
+  <text x="485" y="1192" text-anchor="middle" font-size="9.5" fill="#64748b">[B, T + N_prompt, d_hidden]</text>
+
+  <line x1="690" y1="1167" x2="758" y2="1167" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="760" y="1132" width="300" height="70" rx="9" fill="#dbeafe" stroke="#2563eb" stroke-width="1.6"/>
+  <text x="910" y="1154" text-anchor="middle" font-size="12" font-weight="600" fill="#0f172a">Receiver LM ❄</text>
+  <text x="910" y="1173" text-anchor="middle" font-size="10" fill="#1d4ed8">first Receiver forward: generation prefill</text>
+  <text x="910" y="1191" text-anchor="middle" font-size="9.5" fill="#475569">creates private generation KV → autoregressive decode</text>
+
+  <line x1="1060" y1="1167" x2="1118" y2="1167" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="1130" y="1172" text-anchor="start" font-size="12.5" font-weight="700" fill="#0f172a">answer</text>
+
+  <!-- ================= NOTE PANELS ================= -->
+  <rect x="60" y="1240" width="710" height="134" rx="10" fill="#fff1f2" stroke="#e11d48" stroke-width="1.5"/>
+  <text x="76" y="1263" text-anchor="start" font-size="12.5" font-weight="700" fill="#be123c">Prefill and cache ownership</text>
+  <text x="76" y="1286" text-anchor="start" font-size="10.5" fill="#334155">• Before translation, only the Sharer LM runs a prefill; its raw cache is the sole KV input.</text>
+  <text x="76" y="1305" text-anchor="start" font-size="10.5" fill="#334155">• The Receiver contributes only embedding-table outputs; no Receiver cache exists at this boundary.</text>
+  <text x="76" y="1324" text-anchor="start" font-size="10.5" fill="#334155">• After translation, the Receiver runs its normal generation prefill over [soft ; prompt].</text>
+  <text x="76" y="1343" text-anchor="start" font-size="10.5" fill="#334155">• That generation cache remains private to the Receiver and is never sent back to the translator.</text>
+  <text x="76" y="1362" text-anchor="start" font-size="10.5" fill="#334155">• Therefore there is no duplicated Receiver context forward solely for communication.</text>
+
+  <rect x="790" y="1240" width="710" height="152" rx="10" fill="#f8fafc" stroke="#64748b" stroke-width="1.5"/>
+  <text x="806" y="1263" text-anchor="start" font-size="12.5" font-weight="700" fill="#0f172a">What changes from the current KVTok baseline</text>
+  <text x="806" y="1286" text-anchor="start" font-size="10.5" fill="#334155">• Delete Receiver Stage-1 pooling, Receiver q_base, and Receiver-cache flattening.</text>
+  <text x="806" y="1305" text-anchor="start" font-size="10.5" fill="#334155">• Replace giant W_seed with W_feat + W_tok: O(2HD·d + LP·T), not O(2LPHD·Td).</text>
+  <text x="806" y="1324" text-anchor="start" font-size="10.5" fill="#334155">• Add Receiver W_R, sinusoidal PE, and norm_mem to construct ordered memory M.</text>
+  <text x="806" y="1343" text-anchor="start" font-size="10.5" fill="#334155">• Add slot→memory cross-attention so each output token adapts to Receiver tokens.</text>
+  <text x="806" y="1362" text-anchor="start" font-size="10.5" fill="#334155">• Add norm_out, d→d_hidden projection, and embedding-RMS output calibration.</text>
+  <text x="806" y="1381" text-anchor="start" font-size="10.5" fill="#334155">• Soft tokens use the Receiver's own RoPE positions when consumed during generation prefill.</text>
+</svg>

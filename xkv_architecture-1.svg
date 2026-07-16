@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1560" height="1080" viewBox="0 0 1560 1080" font-family="'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrowPurple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7e22ce"/>
+    </marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#64748b" flood-opacity="0.16"/>
+    </filter>
+  </defs>
+
+  <rect width="1560" height="1080" fill="#ffffff"/>
+
+  <text x="780" y="34" text-anchor="middle" font-size="24" font-weight="700" fill="#0f172a">XKV — dual-cache attention translation into Receiver KV updates</text>
+  <text x="780" y="58" text-anchor="middle" font-size="12.5" fill="#475569">Both frozen models prefill once · expanded LCF-X pooling keeps Q=2 summaries per layer and side · only XKV is trained</text>
+  <text x="780" y="77" text-anchor="middle" font-size="11.5" fill="#64748b">B batch · L layers · H KV heads · N tokens · D head dimension · Q=2 slots · d=Receiver hidden/8 · n=1 block</text>
+
+  <!-- Input paths -->
+  <rect x="55" y="103" width="640" height="34" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="375" y="125" text-anchor="middle" font-size="13" font-weight="700" fill="#1d4ed8">SHARER PATH</text>
+  <rect x="865" y="103" width="640" height="34" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="1185" y="125" text-anchor="middle" font-size="13" font-weight="700" fill="#15803d">RECEIVER PREFIX PATH</text>
+
+  <text x="375" y="163" text-anchor="middle" font-size="11.5" fill="#334155">private Sharer context · Nₛ tokens</text>
+  <line x1="375" y1="169" x2="375" y2="189" stroke="#2563eb" stroke-width="1.7" marker-end="url(#arrowBlue)"/>
+  <rect x="245" y="192" width="260" height="66" rx="10" fill="#dbeafe" stroke="#2563eb" stroke-width="1.7" filter="url(#shadow)"/>
+  <text x="375" y="217" text-anchor="middle" font-size="13" font-weight="650" fill="#0f172a">Frozen Sharer LM</text>
+  <text x="375" y="238" text-anchor="middle" font-size="10.5" fill="#1d4ed8">one prefill · use_cache=True</text>
+  <text x="375" y="252" text-anchor="middle" font-size="9.5" fill="#475569">no gradients into base-model weights</text>
+
+  <text x="1185" y="163" text-anchor="middle" font-size="11.5" fill="#334155">private Receiver prompt prefix · first Nᵣ−1 tokens</text>
+  <line x1="1185" y1="169" x2="1185" y2="189" stroke="#16a34a" stroke-width="1.7" marker-end="url(#arrowGreen)"/>
+  <rect x="1055" y="192" width="260" height="66" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="1.7" filter="url(#shadow)"/>
+  <text x="1185" y="217" text-anchor="middle" font-size="13" font-weight="650" fill="#0f172a">Frozen Receiver LM</text>
+  <text x="1185" y="238" text-anchor="middle" font-size="10.5" fill="#15803d">one prefix prefill · cache reused for decode</text>
+  <text x="1185" y="252" text-anchor="middle" font-size="9.5" fill="#475569">held-out last prompt token preserves LCF-X boundary</text>
+
+  <line x1="375" y1="258" x2="375" y2="286" stroke="#2563eb" stroke-width="1.7" marker-end="url(#arrowBlue)"/>
+  <text x="390" y="276" font-size="10" font-weight="600" fill="#1d4ed8">Cₛ: Lₛ × (K,V) [B,Hₛ,Nₛ,Dₛ]</text>
+  <line x1="1185" y1="258" x2="1185" y2="286" stroke="#16a34a" stroke-width="1.7" marker-end="url(#arrowGreen)"/>
+  <text x="1200" y="276" font-size="10" font-weight="600" fill="#15803d">Cᵣ: Lᵣ × (K,V) [B,Hᵣ,Nᵣ,Dᵣ]</text>
+
+  <!-- Pools -->
+  <rect x="165" y="289" width="420" height="132" rx="11" fill="#fffbeb" stroke="#d97706" stroke-width="1.8" filter="url(#shadow)"/>
+  <text x="375" y="314" text-anchor="middle" font-size="12.5" font-weight="700" fill="#92400e">LCF-X two-stage Sharer pool</text>
+  <text x="375" y="337" text-anchor="middle" font-size="10.5" fill="#334155">1 · within-span attention: Nₛ → Pₛ</text>
+  <text x="375" y="357" text-anchor="middle" font-size="10.5" fill="#334155">2 · cross-span attention: Pₛ → Q=2</text>
+  <text x="375" y="380" text-anchor="middle" font-size="10.5" font-weight="600" fill="#7c2d12">per layer: Kₛ*,Vₛ* [B,Hₛ,2,Dₛ]</text>
+  <text x="375" y="401" text-anchor="middle" font-size="9.5" fill="#64748b">q_base,s + two independent learned q_layer,s queries</text>
+
+  <rect x="975" y="289" width="420" height="132" rx="11" fill="#fffbeb" stroke="#d97706" stroke-width="1.8" filter="url(#shadow)"/>
+  <text x="1185" y="314" text-anchor="middle" font-size="12.5" font-weight="700" fill="#92400e">LCF-X two-stage Receiver pool</text>
+  <text x="1185" y="337" text-anchor="middle" font-size="10.5" fill="#334155">1 · within-span attention: Nᵣ → Pᵣ</text>
+  <text x="1185" y="357" text-anchor="middle" font-size="10.5" fill="#334155">2 · cross-span attention: Pᵣ → Q=2</text>
+  <text x="1185" y="380" text-anchor="middle" font-size="10.5" font-weight="600" fill="#7c2d12">per layer: Kᵣ*,Vᵣ* [B,Hᵣ,2,Dᵣ]</text>
+  <text x="1185" y="401" text-anchor="middle" font-size="9.5" fill="#64748b">q_base,r + two independent learned q_layer,r queries</text>
+
+  <!-- Converge -->
+  <polyline points="375,421 375,453 695,453 695,471" fill="none" stroke="#2563eb" stroke-width="1.8" marker-end="url(#arrowBlue)"/>
+  <polyline points="1185,421 1185,453 865,453 865,471" fill="none" stroke="#16a34a" stroke-width="1.8" marker-end="url(#arrowGreen)"/>
+  <text x="471" y="446" font-size="9.5" fill="#64748b">layer-map Lₛ→Lᵣ if needed</text>
+
+  <rect x="530" y="474" width="500" height="104" rx="11" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.9" filter="url(#shadow)"/>
+  <text x="780" y="499" text-anchor="middle" font-size="13" font-weight="700" fill="#6b21a8">Per-layer concatenate + heterogeneous bottleneck</text>
+  <text x="780" y="522" text-anchor="middle" font-size="10.5" fill="#334155">xₗ = [flat(Kₛ*), flat(Vₛ*), flat(Kᵣ*), flat(Vᵣ*)]</text>
+  <text x="780" y="543" text-anchor="middle" font-size="10.5" fill="#334155">W_down → MLP → LayerNorm · width 2×(2HₛDₛ+2HᵣDᵣ) → d=hiddenᵣ/8</text>
+  <text x="780" y="564" text-anchor="middle" font-size="10.5" font-weight="600" fill="#7e22ce">joint layer memory Z₀ [B,Lᵣ,d]</text>
+
+  <line x1="780" y1="578" x2="780" y2="602" stroke="#7e22ce" stroke-width="1.9" marker-end="url(#arrowPurple)"/>
+
+  <!-- Translator -->
+  <rect x="510" y="605" width="540" height="124" rx="12" fill="#faf5ff" stroke="#7e22ce" stroke-width="2.1" filter="url(#shadow)"/>
+  <text x="780" y="631" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b21a8">Attention translator</text>
+  <text x="780" y="655" text-anchor="middle" font-size="10.5" fill="#334155">n repeated pre-norm Transformer blocks · default n=1</text>
+  <text x="780" y="677" text-anchor="middle" font-size="10.5" font-weight="600" fill="#334155">self-attention across all Lᵣ joint layer tokens</text>
+  <text x="780" y="699" text-anchor="middle" font-size="10" fill="#64748b">Z ← Z + MHA(LN(Z)); Z ← Z + FFN(LN(Z)) · repeat ×n</text>
+  <text x="780" y="718" text-anchor="middle" font-size="10.5" font-weight="600" fill="#7e22ce">translated memory Z [B,Lᵣ,d]</text>
+
+  <!-- Raw Receiver positions query the shared translated memory -->
+  <polyline points="1185,286 1460,286 1460,780 1140,780" fill="none" stroke="#16a34a" stroke-width="1.7" stroke-dasharray="7 5" marker-end="url(#arrowGreen)"/>
+  <text x="1472" y="535" text-anchor="middle" font-size="9.5" fill="#15803d" transform="rotate(90 1472 535)">raw Receiver K/V positions · cross-attention queries</text>
+
+  <line x1="780" y1="729" x2="780" y2="751" stroke="#7e22ce" stroke-width="1.9" marker-end="url(#arrowPurple)"/>
+  <rect x="420" y="754" width="720" height="112" rx="12" fill="#ecfeff" stroke="#0891b2" stroke-width="1.9" filter="url(#shadow)"/>
+  <text x="780" y="779" text-anchor="middle" font-size="13" font-weight="700" fill="#0e7490">Receiver-position cross-attention decoder</text>
+  <text x="780" y="802" text-anchor="middle" font-size="10.5" fill="#334155">Qₗ = W_q [flat(Kᵣˡ); flat(Vᵣˡ)] + layer embedding · [B,Nᵣ,d]</text>
+  <text x="780" y="824" text-anchor="middle" font-size="10.5" fill="#334155">Uₗ = Qₗ + CrossAttn(Qₗ, K=Z, V=Z) · shared weights across layers</text>
+  <text x="780" y="847" text-anchor="middle" font-size="10.5" font-weight="600" fill="#0e7490">position-aware update latents U: Lᵣ × [B,Nᵣ,d]</text>
+
+  <line x1="780" y1="866" x2="780" y2="889" stroke="#0891b2" stroke-width="1.9" marker-end="url(#arrow)"/>
+
+  <!-- Output -->
+  <rect x="385" y="892" width="790" height="104" rx="12" fill="#fff1f2" stroke="#e11d48" stroke-width="2" filter="url(#shadow)"/>
+  <text x="780" y="917" text-anchor="middle" font-size="13" font-weight="700" fill="#be123c">Shared gated K/V update head</text>
+  <text x="780" y="940" text-anchor="middle" font-size="10.5" fill="#334155">ΔK=W_up,K U · ΔV=W_up,V U · per-head αK/αV · per-layer/type gates</text>
+  <text x="780" y="963" text-anchor="middle" font-size="10.5" font-weight="600" fill="#be123c">ΔK,ΔV: Lᵣ × [B,Hᵣ,Nᵣ,Dᵣ] · padded/older Gemma positions stay zero</text>
+  <text x="780" y="983" text-anchor="middle" font-size="10" fill="#64748b">Cᵣ′ = Cᵣ + gated(ΔCᵣ) · zero-initialized up-projections</text>
+
+  <line x1="1175" y1="944" x2="1260" y2="944" stroke="#e11d48" stroke-width="1.9" marker-end="url(#arrow)"/>
+  <rect x="1263" y="897" width="240" height="94" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="1.7" filter="url(#shadow)"/>
+  <text x="1383" y="922" text-anchor="middle" font-size="12.5" font-weight="700" fill="#15803d">Continue Receiver decode</text>
+  <text x="1383" y="945" text-anchor="middle" font-size="10" fill="#334155">feed held-out last prompt token</text>
+  <text x="1383" y="965" text-anchor="middle" font-size="10" fill="#334155">append generated KV normally</text>
+  <text x="1383" y="982" text-anchor="middle" font-size="10.5" font-weight="700" fill="#0f172a">→ answer</text>
+
+  <!-- Footer -->
+  <rect x="55" y="1022" width="1450" height="38" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
+  <text x="780" y="1046" text-anchor="middle" font-size="11" fill="#334155">Key invariant: the update is computed once at the prompt boundary; generated-token cache entries are never retroactively rewritten.</text>
+</svg>

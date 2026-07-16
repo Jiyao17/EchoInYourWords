@@ -43,7 +43,17 @@ def main() -> None:
     # Defaults follow the LCF-X paper. On a smaller GPU, lower --batch-size and
     # raise --grad-accum to keep the effective batch (B*A) at 256 (see README).
     parser.add_argument("--bottleneck-dim", type=int, default=128, help="Latent dim (paper: 128)")
-    parser.add_argument("--num-spans", type=int, default=5, help="Sharer pooling spans (paper: 5, HotpotQA's 5-paragraph partition)")
+    parser.add_argument(
+        "--span-scheme",
+        choices=["paragraphs", "fixed"],
+        default="paragraphs",
+        help=(
+            "Pooling span partition: 'paragraphs' uses the sharer text's blank-line "
+            "blocks (paper: HotpotQA's 5-paragraph structure => P=5 in training), "
+            "'fixed' uses --num-spans near-equal token chunks"
+        ),
+    )
+    parser.add_argument("--num-spans", type=int, default=5, help="Span count for --span-scheme fixed")
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--batch-size", type=int, default=16, help="Per-step micro-batch (paper: 16)")
     parser.add_argument("--grad-accum", type=int, default=16, help="Micro-batches per optimizer step (paper: 16 -> eff. batch 256)")
@@ -139,6 +149,7 @@ def main() -> None:
         train_rows,
         eval_data=eval_rows,
         num_spans=args.num_spans,
+        span_scheme=args.span_scheme,
         lr=args.lr,
         epochs=args.epochs,
         batch_size=args.batch_size,

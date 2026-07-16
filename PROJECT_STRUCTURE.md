@@ -11,9 +11,24 @@ standardized experiment/output contract:
 - **LCF-X (cross-context Latent Cache Flow)** — position-free latent cache
   communication; the existing-paper precedent for different-context agents
   (*implemented*).
-- **EIYW (receiver-anchored, `methods/eiyw/`)** — our contribution: the Sharer
-  cache is translated into K soft pseudo-tokens, conditioned on the Receiver's
-  question, prepended to the Receiver's input (*implemented*).
+- **EIYW (`methods/eiyw/`)** — our contribution: reuses LCF-X's pooling design
+  unmodified on the Sharer (up to `k` slots per layer, optionally adaptive in
+  the context length); the slots then cross-attend into the Receiver's raw
+  context *embeddings* (a table lookup + sinusoidal PE — no Receiver forward
+  pass) and become `k·L_s` soft tokens in the Receiver's embedding space,
+  prepended to its input (*implemented*).
+- **KVTok (`methods/kvtok/`)** — reuses only LCF-X's Stage 1 (within-span
+  attention) on the Sharer, then uses factorized feature-axis and token-axis
+  linear projections to produce `--num-tokens` slots. Processed Receiver
+  embeddings condition those slots without an initial Receiver prefill/cache;
+  an EIYW-v2-style head emits prepended soft tokens (*implemented*).
+- **XKV (`methods/xkv/`)** — pools both raw caches with an expanded LCF-X
+  two-stage pool (`N → P → 2` by default), applies the current learned
+  `L_s → L_r` layer-axis map, translates the doubled-width concatenated layer
+  summaries with configurable attention blocks, then uses
+  raw Receiver positions as queries in a shared cross-attention decoder and
+  emits a gated, position-specific Receiver-native KV residual through two
+  shared K/V up-projections (*implemented*).
 
 **Scope decision:** shared-context, token-position-aligned cache-transfer methods
 (**C2C** and the original shared-context **LCF**) are **out of scope**. They
@@ -56,7 +71,9 @@ EchoInYourWords/
 │   ├── common/                   # SHARED experiment layer (contract, scoring, IO)
 │   ├── t2t/                      # text-to-text baseline (implemented)
 │   ├── lcfx/                     # cross-context Latent Cache Flow (implemented)
-│   └── eiyw/                     # receiver-anchored soft-token method (implemented)
+│   ├── eiyw/                     # symmetric-pool, multi-soft-token method (implemented)
+│   ├── kvtok/                    # Stage-1-only-pooling baseline (implemented)
+│   └── xkv/                      # dual-cache KV-update translator (implemented)
 ├── scripts/                  # RUNNABLE ENTRYPOINTS + cache config
 │   ├── README.md                 # how to run each test/experiment (commands)
 │   ├── _hf_cache.py              # points HF_HOME at data/hf_cache
@@ -64,6 +81,8 @@ EchoInYourWords/
 │   ├── run_text_to_text.py       # runs the T2T Sharer→Receiver pipeline
 │   ├── run_lcfx.py / train_lcfx_fuser.py   # LCF-X eval / fuser training
 │   ├── run_eiyw.py / train_eiyw.py         # EIYW eval / translator training
+│   ├── run_kvtok.py / train_kvtok.py       # KVTok eval / translator training
+│   ├── run_xkv.py / train_xkv.py             # XKV eval / translator training
 │   └── run_single_model.py       # single-model inference baseline (full context)
 ├── data/
 │   ├── hf_cache/                 # HuggingFace cache (its native single-root layout)
@@ -90,7 +109,7 @@ another). Import-light — no `torch`.
 | [schema.py](methods/common/schema.py) | `Example` — the normalized cross-method data contract. Each method re-exports it under a local alias (`T2TExample` / `LCFXExample` / `EIYWExample`). |
 | [scoring.py](methods/common/scoring.py) | HotpotQA/SQuAD `normalize_answer`, `exact_match`, `f1_score`, `score_free_form` (EM/F1). |
 | [parsing.py](methods/common/parsing.py) | `parse_choice_answer` — extract a multiple-choice letter (returns raw text for free-form). |
-| [prompts.py](methods/common/prompts.py) | **All** prompt builders: T2T's `build_sharer_prompt` / `build_receiver_message_prompt`, the latent methods' `build_sharer_encode_text` / `build_receiver_prompt` (shared by LCF-X & EIYW), the dedicated `build_single_model_prompt` (single-model baseline), and `format_choices`. |
+| [prompts.py](methods/common/prompts.py) | **All** prompt builders: T2T's `build_sharer_prompt` / `build_receiver_message_prompt`, the latent methods' `build_sharer_encode_text` / `build_receiver_prompt` plus `build_receiver_encode_text` (used by EIYW/KVTok for Receiver embedding memory), the dedicated `build_single_model_prompt` (single-model baseline), and `format_choices`. |
 | [io.py](methods/common/io.py) | Aggregate metrics/latency/tokens, `write_predictions_brief`, and the single `write_run_outputs(...)` used by every method (each binds its own `method=` default). |
 | [progress.py](methods/common/progress.py) | `ProgressLogger` — persists training **and eval** progress to JSONL (`training_log.jsonl` beside the checkpoint; `eval_log.jsonl` in the run's output dir) so long runs survive the session. `eval_progress_fields` computes counts / ETA / running accuracy-EM-F1. |
 
@@ -163,30 +182,68 @@ Every run writes four files into its `--output-dir` (under `results/`):
 | `run_metadata.json` | method, models, dataset, budgets, scoring mode, timestamp. |
 
 Comparison/analysis depends only on these files, never on internal method
-classes — so T2T, the receiver baselines, and the latent methods (LCF-X and the
-new receiver-anchored method) are compared apples-to-apples.
+classes — so T2T, the receiver baselines, and the latent methods (LCF-X and
+EIYW) are compared apples-to-apples.
 
 ## The LCF-X and EIYW packages (`methods/lcfx/`, `methods/eiyw/`)
 
 Both mirror the T2T package shape (core import-light; only `model.py` /
 `fuser.py` / `translator.py` touch torch, via deferred imports) and consume the
 shared `methods.common` layer (the `Example` contract, scoring, parsing, prompt
-primitives, IO). They differ only in how the Sharer's information reaches the
+primitives, IO). Both pool a KV cache with the same paper-exact per-layer
+within-span / cross-span learned attention (Fig. 3; self-contained copies per
+package); they differ in what gets pooled and how the result reaches the
 Receiver:
 
-- **LCF-X** (`fuser.py`, `cache.py`): pools the Sharer KV into one position-free
-  summary per layer and fuses it as a **gated KV residual broadcast to every
-  Receiver position**. Architecture/training detail:
-  [prompt/LCF_X_IMPLEMENTATION_PLAN.md](prompt/LCF_X_IMPLEMENTATION_PLAN.md).
-- **EIYW** (`translator.py`, `model.py`): translates the Sharer KV into **K soft
-  pseudo-tokens, conditioned on the Receiver's question (the anchor)**, and
-  **prepends them to the Receiver's input embeddings** (`inputs_embeds`).
+- **LCF-X** (`fuser.py`, `cache.py`, `spans.py`): pools each Sharer layer's KV
+  independently (within-span then cross-span attention, two learned queries per
+  layer) into one position-free `[B,H,1,D]` summary per layer, layer-aligned to
+  the Receiver (a linear layer-axis bridge only when `L_s ≠ L_r`), concatenates
+  it with the Receiver's own real per-position KV, and fuses the result as a
+  **gated KV residual added into the Receiver's own cache** (per-layer K/V
+  gates: Gumbel-sigmoid in training, hard `{0,1}` at inference).
   Architecture/training detail:
-  [prompt/EIYW_IMPLEMENTATION_PLAN.md](prompt/EIYW_IMPLEMENTATION_PLAN.md).
+  [prompt/LCF_X_IMPLEMENTATION_PLAN.md](prompt/LCF_X_IMPLEMENTATION_PLAN.md).
+- **EIYW** (`translator.py`, `model.py`, `spans.py`): pools only the
+  **Sharer's** context per layer (up to `--queries-per-layer` k position-free
+  `[B,H,1,D]` slots per layer, Sharer geometry — the identical pool to
+  LCF-X's, so any gain over LCF-X is attributable to the translator, not a
+  richer pool; `--adaptive-k-tokens w` scales the *active* k with the
+  Sharer's length, `clamp(ceil(N_s/w), 1, k)`). A `Linear` projects the
+  flattened `K*‖V*` slots to `--d-model` width with learned layer/query
+  tags; the Receiver's own context enters as raw input **embeddings** (a
+  table lookup — no Receiver forward pass) projected to the same width plus
+  **sinusoidal PE** (raw embeddings carry no order; the pooled slots are
+  position-free and need none). `--num-blocks` decoder-shaped pre-LN blocks
+  — self-attention over the slots, **cross-attention into the Receiver
+  memory** (cost `k·L_s × N_r`, no `N_r²` term), MLP — refine the slots, and
+  an RMS-calibrated head emits them as `k·L_s` **soft tokens prepended to
+  the Receiver's input embeddings** (`inputs_embeds`), not a KV delta.
+  Architecture/training detail:
+  [prompt/EIYW_IMPLEMENTATION_PLAN.md](prompt/EIYW_IMPLEMENTATION_PLAN.md) (the
+  original receiver-anchored design; the current iteration — see
+  [README.md](README.md#run-eiyw-our-method)).
 
 Both train only their adapter (fuser / translator) with frozen base models,
 write **model-stamped** checkpoints (hard-error on a pair mismatch unless
 `--allow-model-mismatch`), and support heterogeneous Sharer/Receiver pairs.
+
+## The KVTok package (`methods/kvtok/`)
+
+A third baseline against LCF-X/EIYW, following the same
+per-package self-containment convention (own `model.py`/`cache.py`/etc. rather
+than importing across method packages). It reuses LCF-X's Stage 1
+(within-span attention) *only* — Stage 2 (across-span attention) is deleted
+entirely — and is applied only to the Sharer's cache. It preserves the
+`layers*spans` summary axis, projects each `K‖V` feature row into `d_model`
+with shared weights, then linearly downsamples that position axis to
+`--num-tokens`. The Receiver contributes only embedding-table outputs (plus
+sinusoidal PE and LayerNorm), never an initial KV cache. Cross-attention and a
+calibrated output head produce soft tokens prepended to `inputs_embeds`, the
+same consumption mechanism as EIYW. `--num-spans`, `--num-tokens`,
+`--d-model`, and the resolved `--num-heads` are part of
+`arch_config()` and enforced by `load_translator`'s mismatch check. See
+[README.md](README.md#run-kvtok-baseline).
 
 ## Environment
 

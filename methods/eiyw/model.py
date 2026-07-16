@@ -1,15 +1,16 @@
 """Hugging Face model backend for EIYW.
 
 Loads a frozen Sharer + Receiver pair and exposes the primitives the runner
-needs: encode the Sharer context into a raw KV cache, compute the Receiver
-question *anchor*, and greedily decode the Receiver with optional soft pseudo-
-tokens prepended to its input. This is the only EIYW module that loads models;
-``torch``/``transformers`` are imported lazily.
+needs: encode the Sharer's own context (full forward, raw KV cache), look up
+the Receiver's own context *embeddings* (table read only — v2 needs no
+Receiver forward pass for its context), and greedily decode the Receiver with
+an optional soft token prepended to its input. This is the only EIYW module
+that loads models; ``torch``/``transformers`` are imported lazily.
 
-Decoding differs from LCF-X: EIYW prepends the translated soft tokens to the
-Receiver's input *embeddings*, so prefill uses ``inputs_embeds`` (LCF-X prefilled
-``input_ids`` and injected a KV residual). With no soft tokens this reduces to
-ordinary greedy decoding (the Receiver answering from its own context alone).
+Decoding prepends the translated token to the Receiver's input *embeddings*,
+so prefill uses ``inputs_embeds`` (not ``input_ids`` + a KV residual, unlike
+LCF-X). With no soft token this reduces to ordinary greedy decoding (the
+Receiver answering from its own context alone).
 """
 
 from __future__ import annotations
@@ -32,6 +33,26 @@ class ModelSpec:
     head_dim: int
     n_heads: int
     hidden: int
+    # RMS of the model's real input embeddings, measured through the embedding
+    # *module* (not the raw weight table) so families that rescale inside the
+    # module -- Gemma multiplies by sqrt(hidden) there -- report what the
+    # decoder layers actually see. The translator calibrates its soft-token
+    # magnitude against this: embedding scales differ ~100x across families
+    # (Llama-3.2 ~0.01 raw vs Gemma-3 ~1.0 post-scale), so any fixed init is
+    # simultaneously too loud for one receiver and too quiet for another.
+    embed_rms: float = 1.0
+
+
+def _embed_rms(model: Any) -> float:
+    """RMS of the input-embedding module's output over a vocabulary sample."""
+
+    import torch
+
+    embed = model.get_input_embeddings()
+    weight = embed.weight
+    with torch.no_grad():
+        ids = torch.arange(min(4096, weight.shape[0]), device=weight.device)
+        return float(embed(ids).float().pow(2).mean().sqrt())
 
 
 def _spec_from_model(name: str, model: Any) -> ModelSpec:
@@ -50,6 +71,7 @@ def _spec_from_model(name: str, model: Any) -> ModelSpec:
         head_dim=head_dim,
         n_heads=n_heads,
         hidden=cfg.hidden_size,
+        embed_rms=_embed_rms(model),
     )
 
 
@@ -122,8 +144,8 @@ class EIYWPair:
         """Encode Sharer text and return its raw per-layer KV cache.
 
         Returns ``(summary, input_tokens)`` where ``summary`` is per layer
-        ``(K, V)`` of shape ``[B, H_s, N_S, D_s]``. The translator pools these
-        into K receiver-anchored soft tokens.
+        ``(K, V)`` of shape ``[B, H_s, N_S, D_s]``. The translator's pool turns
+        this into a single position-free Sharer summary.
         """
 
         import torch
@@ -133,32 +155,36 @@ class EIYWPair:
             out = self.sharer(input_ids=ids, use_cache=True)
         return extract_kv(out.past_key_values), int(ids.shape[1])
 
-    # -- receiver side ------------------------------------------------------
-    def receiver_anchor(self, text: str) -> Any:
-        """Mean-pooled embedding of the Receiver prompt — the receiver-anchoring signal.
+    # -- receiver side --------------------------------------------------------
+    def receiver_context_embeds(self, text: str) -> tuple[Any, int]:
+        """Raw input embeddings of the Receiver's own context: ``[1, N_r, hidden]``.
 
-        Returns ``[1, hidden_r]``. This is what the translator's query bank is
-        conditioned on, so *what the Sharer communicates depends on the Receiver's
-        own task representation*. Uses the frozen embedding table (no grad).
+        A pure embedding-table lookup (plain encode, ``no_grad``) — no decoder
+        forward pass, unlike the Sharer side. The translator cross-attends its
+        pooled Sharer slots into these embeddings (adding its own sinusoidal
+        PE; raw embeddings carry no order). Build the text with
+        ``methods.common.prompts.build_receiver_encode_text``; this is separate
+        from :meth:`decode_receiver`'s chat-templated generation prompt.
         """
 
         import torch
 
-        ids = self._encode_chat(self.receiver_tok, text)
+        ids = self._encode_plain(self.receiver_tok, text)
         with torch.no_grad():
-            emb = self._receiver_embed()(ids)  # [1, T, H]
-        return emb.mean(dim=1)  # [1, H]
+            embeds = self._receiver_embed()(ids)  # [1, N_r, hidden]
+        return embeds, int(ids.shape[1])
 
     def decode_receiver(
         self,
         text: str,
-        soft_tokens: "Any | None" = None,
+        soft_token: "Any | None" = None,
         max_new_tokens: int = 64,
     ) -> tuple[str, int, int, "float | None", "float | None"]:
         """Greedy-decode the Receiver, optionally prepending soft tokens to its input.
 
-        ``soft_tokens`` is ``[1, K, hidden_r]`` (or ``None`` for the Receiver-only
-        floor). Prefill uses ``inputs_embeds`` = ``[soft_tokens ; embed(prompt)]``;
+        ``soft_token`` is ``[1, T, hidden_r]`` (``T`` = the translator's
+        ``k·L_s`` token count, or ``None``/empty for the Receiver-only floor).
+        Prefill uses ``inputs_embeds`` = ``[soft_token ; embed(prompt)]``;
         subsequent steps feed new ``input_ids`` against the growing cache.
 
         Returns ``(output_text, input_tokens, output_tokens, first_token_ms,
@@ -181,8 +207,8 @@ class EIYWPair:
 
         with torch.no_grad():
             prompt_embeds = embed(ids)  # [1, T, H]
-            if soft_tokens is not None and soft_tokens.shape[1] > 0:
-                st = soft_tokens.to(prompt_embeds.dtype)
+            if soft_token is not None and soft_token.shape[1] > 0:
+                st = soft_token.to(prompt_embeds.dtype)
                 prefill = torch.cat([st, prompt_embeds], dim=1)
             else:
                 prefill = prompt_embeds
@@ -213,7 +239,8 @@ def check_pair_compatible(pair: EIYWPair) -> dict[str, Any]:
     s, r = pair.sharer_spec, pair.receiver_spec
     return {
         "sharer": {"layers": s.layers, "kv_heads": s.kv_heads, "head_dim": s.head_dim},
-        "receiver": {"layers": r.layers, "hidden": r.hidden},
+        "receiver": {"layers": r.layers, "kv_heads": r.kv_heads, "head_dim": r.head_dim},
+        "same_layers": s.layers == r.layers,
         "same_kv_heads": s.kv_heads == r.kv_heads,
         "same_head_dim": s.head_dim == r.head_dim,
     }

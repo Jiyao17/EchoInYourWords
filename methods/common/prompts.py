@@ -122,6 +122,22 @@ def build_sharer_encode_text(example: Example) -> str:
     return text
 
 
+def build_receiver_encode_text(example: Example) -> str:
+    """Text the Receiver encodes into its own KV cache (its context + the question).
+
+    EIYW-only: mirrors ``build_sharer_encode_text`` but for the Receiver's own
+    context, so the translator can pool the Receiver's cache the same way it
+    pools the Sharer's (symmetric, position-free) before concatenating the two.
+    Plain text, not chat-templated -- this cache is pooled, never generated from.
+    """
+
+    context = example.receiver_context.strip() or "(no additional information)"
+    text = f"Information:\n{context}\n\nQuestion:\n{example.question}"
+    if example.choices:
+        text += "\n\nChoices:\n" + format_choices(tuple(example.choices))
+    return text
+
+
 def build_receiver_prompt(example: Example) -> str:
     """Latent-method Receiver prompt: the Receiver answers from its own context.
 
@@ -207,6 +223,7 @@ __all__ = [
     "build_sharer_prompt",
     "build_receiver_message_prompt",
     "build_sharer_encode_text",
+    "build_receiver_encode_text",
     "build_receiver_prompt",
     "build_single_model_prompt",
 ]

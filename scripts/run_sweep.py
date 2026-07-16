@@ -3,20 +3,24 @@
 dataset at a time (the Makefile's ``exp`` target loops over methods and
 datasets the same way it already does for ``data``/``model``).
 
-Implements the **smoke** stage in full: reduced training/eval budget, a
-resumable JSONL manifest (skip cells already ``ok`` unless ``--force`` /
-``--rerun-failed``), and a fixed-size GPU worker pool via
+Implements the **smoke** stage in full: reduced training/eval budget, a JSONL
+manifest recording every run (every launch reruns every selected cell by
+default — pass ``--resume`` to skip cells already ``ok``, e.g. to continue a
+crashed sweep), and a fixed-size GPU worker pool via
 ``CUDA_VISIBLE_DEVICES``. The **full** stage uses the Makefile's paper-scale
 defaults (full train split, full val EM/F1) except for BATCH_SIZE/GRAD_ACCUM,
-which are picked per Sharer/Receiver pair (see ``pick_batch_grad_accum``) so
-larger pairs don't OOM, always keeping the effective batch
-(BATCH_SIZE x GRAD_ACCUM) at 256. Stage 2's priority-tiering (symmetric pairs
+which are picked per (method, Sharer/Receiver pair, dataset) (see
+``pick_batch_grad_accum``; LCF-X defaults to batch16/accum16 while EIYW/KVTok
+use the soft-token batch tiers, and all halve the batch as pair size grows;
+qasc's short contexts get an 8x batch multiplier on top — 128/2 for the LCF-X
+reference pair) so larger pairs don't OOM, always
+keeping the effective batch (BATCH_SIZE x GRAD_ACCUM) at 256. Stage 2's priority-tiering (symmetric pairs
 first, etc.) is not implemented yet -- run it manually via
 ``--sharer``/``--receiver`` filters for now.
 
     python scripts/run_sweep.py --dataset hotpotqa_bridge --gpus 1,2,3
     python scripts/run_sweep.py --dataset hotpotqa_bridge --dry-run
-    python scripts/run_sweep.py --dataset hotpotqa_bridge --rerun-failed --gpus 1,2,3
+    python scripts/run_sweep.py --dataset hotpotqa_bridge --resume --gpus 1,2,3
 """
 
 from __future__ import annotations
@@ -34,26 +38,35 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# Primary experiment model roster (one flat tier, no sub-tiers): the two
-# small Qwen models LCF-X was developed against, plus one model per size at
-# 1B/4B/8B, different families.
+# Primary experiment model roster (one flat tier, no sub-tiers): the small
+# Qwen model LCF-X was developed against, plus one model per size at
+# 1B/3B, different families -- 3x3 = 9 pairs by default. (The former
+# Llama-1B / gemma-4b roster members remain available as pair-testing
+# extras for manual SHARER=/RECEIVER= runs.)
 PRIMARY_MODELS = [
-    "Qwen/Qwen2.5-0.5B-Instruct",
     "Qwen/Qwen3-0.6B",
-    "unsloth/Llama-3.2-1B-Instruct",
-    "unsloth/gemma-3-4b-it",
+    "unsloth/gemma-3-1b-it",
+    "unsloth/Llama-3.2-3B-Instruct",
+]
+# Opt-in large tier: --extra-models (Makefile: EXTRA_MODELS=TRUE) appends these
+# to the grid on both axes, growing it to 4x4 = 16 pairs.
+EXTRA_MODELS = [
     "Qwen/Qwen3-8B",
 ]
-METHODS = ["t2t", "lcfx", "eiyw"]
+METHODS = ["t2t", "lcfx", "eiyw", "kvtok", "xkv"]
+SOFT_TOKEN_METHODS = {"eiyw", "kvtok"}
 
 # Approx parameter count (billions) per roster model, used only to size
 # BATCH_SIZE/GRAD_ACCUM for the full stage (see pick_batch_grad_accum below).
 MODEL_PARAMS_B = {
-    "Qwen/Qwen2.5-0.5B-Instruct": 0.5,
     "Qwen/Qwen3-0.6B": 0.6,
+    "unsloth/gemma-3-1b-it": 1.0,
+    "unsloth/Llama-3.2-3B-Instruct": 3.2,
+    "Qwen/Qwen3-8B": 8.0,
+    # Pair-testing extras (manual --sharer/--receiver runs):
     "unsloth/Llama-3.2-1B-Instruct": 1.0,
     "unsloth/gemma-3-4b-it": 4.0,
-    "Qwen/Qwen3-8B": 8.0,
+    "Qwen/Qwen3-4B": 4.0,
 }
 
 # Budget overrides passed to `make <method> ...` as command-line variables.
@@ -76,8 +89,8 @@ STAGE_OVERRIDES = {
 }
 
 # Sized for an ~80GB GPU (the paper's own hardware -- see README.md's
-# "Smaller GPUs" table): the paper's reference pair (Qwen2.5-0.5B Sharer +
-# Qwen3-0.6B Receiver, combined 1.1B) fits the paper's batch16/accum16
+# "Smaller GPUs" table): the paper's reference pair (Qwen3-0.6B Sharer +
+# Qwen3-0.6B Receiver, combined 1.2B) fits the paper's batch16/accum16
 # default there. Larger Sharer/Receiver combos hold more frozen-model
 # activations for the same projector, so batch halves (and grad-accum
 # doubles) as combined pair size grows, keeping BATCH_SIZE x GRAD_ACCUM =
@@ -86,35 +99,78 @@ STAGE_OVERRIDES = {
 # (threshold_billions, batch_size, grad_accum), first match wins:
 BATCH_ACCUM_TIERS = [
     (2.5, 16, 16),   # up to 1B+1B
-    (5.5, 8, 32),    # up to 1B+4B
-    (9.5, 4, 64),    # up to 4B+4B / 1B+8B
-    (13.0, 2, 128),  # up to 4B+8B
+    (5.5, 8, 32),    # up to 1B+3B / 0.6B+4B
+    (9.5, 4, 64),    # up to 3B+3B / 1B+8B
+    (13.0, 2, 128),  # up to 3B+8B / 4B+8B
     (float("inf"), 1, 256),  # 8B+8B
 ]
 
+# EIYW/KVTok generation forwards are grad-enabled end to end (the soft tokens
+# lead the sequence, so every prompt/answer activation carries gradient --
+# unlike LCF-X's no_grad prompt prefill), plus translator activations and
+# AdamW state. With gradient checkpointing on they still target effective
+# batch 256: default batch16/accum16 for the reference pair, then halve the
+# batch and double the accumulation as combined pair size grows. Important for
+# unattended overnight `make exp` runs: an OOM kills the whole cell (the
+# run_cell auto-retry halves the batch once more on OOM as a backstop).
+EIYW_BATCH_ACCUM_TIERS = [
+    (2.5, 16, 16),   # up to 1B+1B
+    (5.5, 8, 32),    # up to 1B+3B / 0.6B+4B
+    (9.5, 4, 64),    # up to 3B+3B / 1B+8B
+    (float("inf"), 2, 128),  # 3B+8B and up
+]
 
-def pick_batch_grad_accum(sharer: str, receiver: str) -> tuple[int, int]:
-    """BATCH_SIZE/GRAD_ACCUM for a pair, keeping effective batch at 256."""
 
+# Per-dataset batch multiplier on top of the pair-size tiers. Memory scales
+# with batch x sequence length, and the tiers above are sized for
+# hotpotqa-length contexts (~750 prompt tokens); qasc's contexts are a few
+# times shorter, so its per-device batch starts 8x higher (128 for the
+# reference pair, verified against real memory usage) and still halves/
+# doubles through the same tiers. accum shrinks by the same factor, keeping
+# the effective batch at 256.
+DATASET_BATCH_MULT = {"qasc": 8}
+
+
+def pick_batch_grad_accum(
+    method: str, sharer: str, receiver: str, dataset: str = ""
+) -> tuple[int, int]:
+    """BATCH_SIZE/GRAD_ACCUM for a (method, pair, dataset), keeping effective batch at 256."""
+
+    tiers = EIYW_BATCH_ACCUM_TIERS if method in SOFT_TOKEN_METHODS else BATCH_ACCUM_TIERS
     combined = MODEL_PARAMS_B.get(sharer, 0.0) + MODEL_PARAMS_B.get(receiver, 0.0)
-    for threshold, batch, accum in BATCH_ACCUM_TIERS:
+    batch, accum = tiers[-1][1], tiers[-1][2]
+    for threshold, tier_batch, tier_accum in tiers:
         if combined <= threshold:
-            return batch, accum
-    return BATCH_ACCUM_TIERS[-1][1], BATCH_ACCUM_TIERS[-1][2]
+            batch, accum = tier_batch, tier_accum
+            break
+    # XKV's no-grad dual-prefix path fits twice the reference micro-batch on
+    # ROPES. Keep the same effective batch and the same pair-size progression:
+    # 32/8 -> 16/16 -> 8/32 -> 4/64 -> 2/128.
+    if method == "xkv" and dataset == "ropes":
+        batch *= 2
+        accum = max(1, accum // 2)
+    mult = DATASET_BATCH_MULT.get(dataset, 1)
+    return batch * mult, max(1, accum // mult)
 
 
-def resolve_overrides(stage: str, method: str, sharer: str, receiver: str) -> dict[str, str]:
+def resolve_overrides(
+    stage: str, method: str, sharer: str, receiver: str, dataset: str = ""
+) -> dict[str, str]:
     """Per-cell `make <method> ...` overrides.
 
-    smoke keeps its fixed reduced-budget knobs regardless of pair. full
-    leaves data/step budgets at the Makefile's paper defaults but still
-    needs pair-size-aware BATCH_SIZE/GRAD_ACCUM (t2t has no batch knob, so
-    it's skipped there) so larger pairs don't OOM.
+    smoke keeps its fixed reduced-budget knobs regardless of pair (halved for
+    EIYW/KVTok, whose grad-enabled forwards are ~2x heavier). full leaves data/step
+    budgets at the Makefile's paper defaults but still needs pair-size-aware
+    BATCH_SIZE/GRAD_ACCUM (t2t has no batch knob, so it's skipped there) so
+    larger pairs don't OOM.
     """
 
     overrides = dict(STAGE_OVERRIDES[stage])
+    if stage == "smoke" and method in SOFT_TOKEN_METHODS:
+        overrides["BATCH_SIZE"] = "2"
+        overrides["GRAD_ACCUM"] = "16"
     if stage == "full" and method != "t2t":
-        batch, accum = pick_batch_grad_accum(sharer, receiver)
+        batch, accum = pick_batch_grad_accum(method, sharer, receiver, dataset)
         overrides["BATCH_SIZE"] = str(batch)
         overrides["GRAD_ACCUM"] = str(accum)
     return overrides
@@ -128,10 +184,11 @@ def _slug(model_id: str) -> str:
     return model_id.replace("/", "--")
 
 
-def resolve_pairs() -> list[tuple[str, str]]:
-    """Return every Sharer/Receiver pair in the primary model roster."""
+def resolve_pairs(extra_models: bool = False) -> list[tuple[str, str]]:
+    """Return every Sharer/Receiver pair in the roster (3x3, or 4x4 with extras)."""
 
-    return [(s, r) for s in PRIMARY_MODELS for r in PRIMARY_MODELS]
+    roster = PRIMARY_MODELS + (EXTRA_MODELS if extra_models else [])
+    return [(s, r) for s in roster for r in roster]
 
 
 def load_manifest(path: Path) -> dict[tuple[str, str, str, str, str], dict]:
@@ -163,14 +220,15 @@ def append_manifest(path: Path, record: dict, lock: threading.Lock) -> None:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def should_run(prev_status: str | None, force: bool, rerun_failed: bool) -> bool:
-    if force:
+def should_run(prev_status: str | None, resume: bool) -> bool:
+    """Every launch reruns every selected cell by default (a launch means "give
+    me a fresh set of results"). ``--resume`` opts into skipping cells whose
+    latest manifest status is ``ok`` — for continuing a crashed/interrupted
+    sweep — while still rerunning failed/oom/stale-running cells."""
+
+    if not resume:
         return True
-    if prev_status is None:
-        return True
-    if prev_status == "ok":
-        return False
-    return rerun_failed  # covers "failed" / "oom" / a stale "running"
+    return prev_status != "ok"
 
 
 def classify_failure(log_tail: str) -> str:
@@ -192,60 +250,82 @@ def run_cell(
     manifest_lock: threading.Lock,
     log_dir: Path,
 ) -> None:
-    overrides = resolve_overrides(stage, method, sharer, receiver)
-    cmd = ["make", method, f"DATASET={dataset}", f"SHARER={sharer}", f"RECEIVER={receiver}"]
-    cmd += [f"{key}={value}" for key, value in overrides.items()]
+    overrides = resolve_overrides(stage, method, sharer, receiver, dataset)
 
     env = None
     if gpu is not None:
         env = os.environ.copy()
         env["CUDA_VISIBLE_DEVICES"] = gpu
 
-    log_path = log_dir / stage / method / dataset / f"{_slug(sharer)}__{_slug(receiver)}.log"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    base_log = log_dir / stage / method / dataset / f"{_slug(sharer)}__{_slug(receiver)}.log"
+    base_log.parent.mkdir(parents=True, exist_ok=True)
 
-    label = f"[{stage}/{method}] {dataset} {sharer} -> {receiver}"
-    if "BATCH_SIZE" in overrides:
-        label += f" (batch={overrides['BATCH_SIZE']} accum={overrides['GRAD_ACCUM']})"
-    if gpu is not None:
-        label += f" (gpu {gpu})"
-    print(f"START {label}", flush=True)
-
-    started = datetime.now(timezone.utc)
-    t0 = time.time()
-    with log_path.open("w", encoding="utf-8") as log_file:
-        proc = subprocess.run(
-            cmd, cwd=REPO_ROOT, env=env, stdout=log_file, stderr=subprocess.STDOUT
+    # Unattended-run resilience: one automatic retry at half batch / double
+    # accum on OOM (same effective batch), instead of losing the cell until a
+    # manual relaunch. Each attempt gets its own log + manifest record; the
+    # --resume skip logic reads the latest record per cell, so a successful
+    # retry marks the cell ok.
+    attempt = 0
+    while True:
+        cmd = ["make", method, f"DATASET={dataset}", f"SHARER={sharer}", f"RECEIVER={receiver}"]
+        cmd += [f"{key}={value}" for key, value in overrides.items()]
+        log_path = (
+            base_log if attempt == 0 else base_log.with_suffix(f".retry{attempt}.log")
         )
-    wall_s = time.time() - t0
-    finished = datetime.now(timezone.utc)
 
-    log_tail = ""
-    try:
-        log_tail = log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
-    except OSError:
-        pass
+        label = f"[{stage}/{method}] {dataset} {sharer} -> {receiver}"
+        if "BATCH_SIZE" in overrides:
+            label += f" (batch={overrides['BATCH_SIZE']} accum={overrides['GRAD_ACCUM']})"
+        if gpu is not None:
+            label += f" (gpu {gpu})"
+        if attempt:
+            label += f" (oom retry {attempt})"
+        print(f"START {label}", flush=True)
 
-    status = "ok" if proc.returncode == 0 else classify_failure(log_tail)
-    print(f"{status.upper():6s} {label} ({wall_s:.0f}s)", flush=True)
+        started = datetime.now(timezone.utc)
+        t0 = time.time()
+        with log_path.open("w", encoding="utf-8") as log_file:
+            proc = subprocess.run(
+                cmd, cwd=REPO_ROOT, env=env, stdout=log_file, stderr=subprocess.STDOUT
+            )
+        wall_s = time.time() - t0
+        finished = datetime.now(timezone.utc)
 
-    record = {
-        "stage": stage,
-        "method": method,
-        "dataset": dataset,
-        "sharer": sharer,
-        "receiver": receiver,
-        "status": status,
-        "batch_size": overrides.get("BATCH_SIZE"),
-        "grad_accum": overrides.get("GRAD_ACCUM"),
-        "started_at": started.isoformat(),
-        "finished_at": finished.isoformat(),
-        "wall_s": round(wall_s, 1),
-        "returncode": proc.returncode,
-        "log_path": str(log_path.relative_to(REPO_ROOT)),
-        "error_tail": log_tail[-500:] if status != "ok" else "",
-    }
-    append_manifest(manifest_path, record, manifest_lock)
+        log_tail = ""
+        try:
+            log_tail = log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
+        except OSError:
+            pass
+
+        status = "ok" if proc.returncode == 0 else classify_failure(log_tail)
+        print(f"{status.upper():6s} {label} ({wall_s:.0f}s)", flush=True)
+
+        record = {
+            "stage": stage,
+            "method": method,
+            "dataset": dataset,
+            "sharer": sharer,
+            "receiver": receiver,
+            "status": status,
+            "batch_size": overrides.get("BATCH_SIZE"),
+            "grad_accum": overrides.get("GRAD_ACCUM"),
+            "attempt": attempt,
+            "started_at": started.isoformat(),
+            "finished_at": finished.isoformat(),
+            "wall_s": round(wall_s, 1),
+            "returncode": proc.returncode,
+            "log_path": str(log_path.relative_to(REPO_ROOT)),
+            "error_tail": log_tail[-500:] if status != "ok" else "",
+        }
+        append_manifest(manifest_path, record, manifest_lock)
+
+        batch = int(overrides.get("BATCH_SIZE", 0) or 0)
+        if status == "oom" and attempt == 0 and batch > 1:
+            overrides["BATCH_SIZE"] = str(batch // 2)
+            overrides["GRAD_ACCUM"] = str(int(overrides["GRAD_ACCUM"]) * 2)
+            attempt += 1
+            continue
+        return
 
 
 def worker_loop(gpu: str | None, cell_queue: "queue.Queue", run_kwargs: dict) -> None:
@@ -265,7 +345,7 @@ def main() -> None:
     parser.add_argument("--dataset", required=True, help="Single dataset name, e.g. hotpotqa_bridge")
     parser.add_argument("--stage", default="smoke", choices=sorted(STAGE_OVERRIDES))
     parser.add_argument(
-        "--method", action="append", choices=METHODS, help="Repeatable; default all 3 (t2t, lcfx, eiyw)"
+        "--method", action="append", choices=METHODS, help="Repeatable; default all 5 (t2t, lcfx, eiyw, kvtok, xkv)"
     )
     parser.add_argument(
         "--sharer", action="append", help="Repeatable filter; default all models in PRIMARY_MODELS"
@@ -274,14 +354,21 @@ def main() -> None:
         "--receiver", action="append", help="Repeatable filter; default all models in PRIMARY_MODELS"
     )
     parser.add_argument(
+        "--extra-models",
+        action="store_true",
+        help="Also sweep the opt-in large tier (EXTRA_MODELS, i.e. Qwen3-8B): 4x4=16 pairs instead of 3x3=9",
+    )
+    parser.add_argument(
         "--gpus", default=None, help="Comma-separated GPU ids, e.g. 1,2,3 (default: no pinning, one worker)"
     )
     parser.add_argument("--concurrency-per-gpu", type=int, default=1)
     parser.add_argument(
-        "--rerun-failed", action="store_true", help="Also retry cells whose latest status is failed/oom"
-    )
-    parser.add_argument(
-        "--force", action="store_true", help="Rerun matching cells regardless of manifest status"
+        "--resume",
+        action="store_true",
+        help=(
+            "Skip cells whose latest manifest status is ok (continue a crashed/"
+            "interrupted sweep). Default: rerun every selected cell fresh."
+        ),
     )
     parser.add_argument("--dry-run", action="store_true", help="Print the resolved cell list and exit")
     parser.add_argument(
@@ -290,7 +377,7 @@ def main() -> None:
     parser.add_argument("--log-dir", type=Path, default=REPO_ROOT / "results" / "sweep_logs")
     args = parser.parse_args()
 
-    pairs = resolve_pairs()
+    pairs = resolve_pairs(args.extra_models)
     if args.sharer:
         pairs = [(s, r) for s, r in pairs if s in args.sharer]
     if args.receiver:
@@ -309,15 +396,25 @@ def main() -> None:
         key = (args.stage, method, dataset, sharer, receiver)
         prev = manifest_latest.get(key)
         prev_status = prev["status"] if prev else None
-        if should_run(prev_status, args.force, args.rerun_failed):
+        if should_run(prev_status, args.resume):
             to_run.append((method, dataset, sharer, receiver))
         else:
             skipped += 1
 
+    skip_note = f", {skipped} skipped (already ok; --resume)" if skipped else ""
     print(
         f"[{args.stage}] dataset={args.dataset}: "
-        f"{len(all_cells)} cells total, {len(to_run)} to run, {skipped} skipped (already ok)"
+        f"{len(all_cells)} cells total, {len(to_run)} to run{skip_note}"
     )
+
+    if args.concurrency_per_gpu < 1:
+        parser.error("--concurrency-per-gpu must be at least 1")
+    gpu_ids = [gpu.strip() for gpu in args.gpus.split(",") if gpu.strip()] if args.gpus else [None]
+    if not gpu_ids:
+        parser.error("--gpus must contain at least one GPU id")
+    slots = [gpu for gpu in gpu_ids for _ in range(args.concurrency_per_gpu)]
+    worker_names = [f"gpu:{gpu}" if gpu is not None else "unpinned" for gpu in slots]
+    print(f"Workers ({len(slots)}): {', '.join(worker_names)}")
 
     if args.dry_run:
         for method, dataset, sharer, receiver in to_run:
@@ -330,9 +427,6 @@ def main() -> None:
 
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest_lock = threading.Lock()
-
-    gpu_ids = args.gpus.split(",") if args.gpus else [None]
-    slots = [gpu for gpu in gpu_ids for _ in range(args.concurrency_per_gpu)]
 
     cell_queue: "queue.Queue" = queue.Queue()
     for cell in to_run:

@@ -1,20 +1,27 @@
 """EIYW translator training: frozen base models, gradients flow only into the translator.
 
 Objective: teacher-forced next-token cross-entropy on the gold answer tokens,
-with the Sharer's translated soft tokens prepended to the Receiver's input.
+with the translated soft tokens (``k·L_s`` pooled Sharer slots cross-attending
+into the Receiver's context embeddings, see ``translator.py``) prepended to
+the Receiver's input.
 
-Gradient flow (the key difference from LCF-X): the base models are frozen
-(``requires_grad_(False)``), but because the soft tokens sit at the *front* of the
-sequence, every prompt/answer activation depends on them. So — unlike LCF-X,
-which injected its residual *after* a ``no_grad`` prompt prefill — the Receiver
-forward over ``[soft ; prompt ; answer]`` is **grad-enabled end-to-end**, and
-gradients flow through the (frozen) Receiver into the soft tokens and back into
-the translator. This mirrors the inference decode path exactly.
+Gradient flow: the base models are frozen (``requires_grad_(False)``), but
+because the soft tokens sit at the *front* of the sequence, every prompt/answer
+activation depends on it. So the Receiver forward over
+``[soft ; prompt ; answer]`` is **grad-enabled end-to-end**, and gradients flow
+through the (frozen) Receiver into the soft token and back into the translator
+-- this mirrors the inference decode path exactly. The Sharer's context encode
+(whose raw KV the translator pools) runs under ``no_grad`` first, same as
+LCF-X's Sharer encode; the Receiver's own context is a ``no_grad`` embedding
+lookup (no forward pass). Only the *generation* forward (which the soft token
+leads) carries gradient.
+
+Because the generation prompt prefill is grad-enabled (more memory than a
+no_grad-prefill design), gradient checkpointing on the frozen Receiver is
+enabled when available.
 
 The loop is a complete trainer: materialized data, per-epoch shuffling, periodic
 validation, best-checkpointing by eval loss, gradient clipping, and a seed.
-Because the prompt prefill is grad-enabled (more memory than LCF-X), gradient
-checkpointing on the frozen Receiver is enabled when available.
 """
 
 from __future__ import annotations
@@ -26,11 +33,16 @@ from typing import Any, Iterable
 
 from methods.common.decoding import resolve_answer_stop_id
 from methods.common.progress import ProgressLogger
-from methods.common.prompts import build_receiver_prompt, build_sharer_encode_text
+from methods.common.prompts import (
+    build_receiver_encode_text,
+    build_receiver_prompt,
+    build_sharer_encode_text,
+)
 
 from .cache import extract_kv
 from .model import EIYWPair
 from .schema import EIYWExample
+from .spans import paragraph_span_starts
 from .translator import EIYWTranslator
 
 
@@ -44,12 +56,21 @@ def _as_example(raw: Any) -> EIYWExample:
     return raw if isinstance(raw, EIYWExample) else EIYWExample.from_mapping(raw)
 
 
+def _boundaries(tokenizer: Any, text: str, span_scheme: str) -> "list[int] | None":
+    """Span starts for one encode text: paragraph blocks or None (fixed chunks)."""
+
+    if span_scheme == "paragraphs":
+        return paragraph_span_starts(tokenizer, text)
+    return None
+
+
 def batched_example_loss(
     pair: EIYWPair,
     translator: EIYWTranslator,
     examples: list,
     num_spans: int,
     *,
+    span_scheme: str = "paragraphs",
     reduction: str = "mean",
 ) -> "Any | None":
     """Teacher-forced loss for a batch (the same fusion as inference).
@@ -57,12 +78,12 @@ def batched_example_loss(
     Each example's full sequence ``[soft ; prompt ; answer ; stop]`` (see the
     stop-token note below) is built with no internal padding, then the batch
     is **right-padded** for one grad-enabled Receiver forward. Right-padding
-    (vs LCF-X's left-padding) is required here: the whole forward carries
-    gradient — left-padded leading tokens would attend to nothing (softmax
-    over all ``-inf`` → NaN), whereas trailing pad tokens always attend
-    causally to real tokens. Each example's answer logits are gathered at its
-    own offset. ``reduction='none'`` returns a per-example loss vector ``[B]``
-    (used for the batched==unbatched check).
+    is required here: the whole forward carries gradient -- left-padded
+    leading tokens would attend to nothing (softmax over all ``-inf`` -> NaN),
+    whereas trailing pad tokens always attend causally to real tokens. Each
+    example's answer logits are gathered at its own offset. ``reduction='none'``
+    returns a per-example loss vector ``[B]`` (used for the batched==unbatched
+    check).
     """
 
     import torch
@@ -70,13 +91,8 @@ def batched_example_loss(
 
     # Append a resolved stop-token id to each example's answer *before*
     # embedding it, so it's fed as a real input token and supervised as a
-    # real target -- everything downstream (embedding length, each example's
-    # `lengths[i]`, the per-example logits slice `start:start+a_len`, and the
-    # target `answers[i]` itself) already generalizes to the wider tensor
-    # with no further changes. Without this, inference never learns to stop
-    # after the answer and instead runs to `max_new_tokens` (EM craters, F1
-    # only partially drops -- see ``prompt/EOS_STOP_TOKEN_FIX.md`` and the
-    # matching fix in ``methods/lcfx/training.py``).
+    # real target -- see prompt/EOS_STOP_TOKEN_FIX.md and the matching fix in
+    # methods/lcfx/training.py.
     stop_id = resolve_answer_stop_id(pair.receiver_tok, pair.receiver)
 
     exs = [_as_example(e) for e in examples]
@@ -91,23 +107,37 @@ def batched_example_loss(
         if stop_id is not None:
             stop_tensor = torch.tensor([stop_id], dtype=answer.dtype, device=pair.device)
             answer = torch.cat([answer, stop_tensor], dim=0)
-        sharer = pair.sharer_tok(
-            build_sharer_encode_text(ex), return_tensors="pt"
-        )["input_ids"][0].to(pair.device)
+        sharer_text = build_sharer_encode_text(ex)
+        receiver_text = build_receiver_encode_text(ex)
+        sharer = pair.sharer_tok(sharer_text, return_tensors="pt")["input_ids"][0].to(
+            pair.device
+        )
+        receiver_ctx = pair.receiver_tok(receiver_text, return_tensors="pt")["input_ids"][
+            0
+        ].to(pair.device)
         if prompt.numel() >= 2 and answer.numel() >= 1:
-            rows.append((prompt, answer, sharer))
+            rows.append(
+                (
+                    prompt,
+                    answer,
+                    sharer,
+                    receiver_ctx,
+                    _boundaries(pair.sharer_tok, sharer_text, span_scheme),
+                )
+            )
     if not rows:
         return None
 
-    prompts, answers, sharers = zip(*rows)
+    prompts, answers, sharers, receiver_ctxs, s_bounds = zip(*rows)
     s_pad = pair.sharer_tok.pad_token_id
+    r_pad = pair.receiver_tok.pad_token_id
     embed = pair._receiver_embed()
 
     # Sharer: batched forward; the translator pools over each example's real
-    # tokens (via lengths) -> per-example soft tokens, conditioned on the anchor.
-    length = max(int(s.numel()) for s in sharers)
-    sharer_ids = torch.full((len(sharers), length), s_pad, dtype=torch.long, device=pair.device)
-    sharer_mask = torch.zeros((len(sharers), length), dtype=torch.long, device=pair.device)
+    # tokens (via lengths) -> one position-free Sharer summary.
+    s_length = max(int(s.numel()) for s in sharers)
+    sharer_ids = torch.full((len(sharers), s_length), s_pad, dtype=torch.long, device=pair.device)
+    sharer_mask = torch.zeros((len(sharers), s_length), dtype=torch.long, device=pair.device)
     for i, seq in enumerate(sharers):  # right-pad (pooled over real tokens only)
         n = int(seq.numel())
         sharer_ids[i, :n] = seq
@@ -117,15 +147,32 @@ def batched_example_loss(
             input_ids=sharer_ids, attention_mask=sharer_mask, use_cache=True
         ).past_key_values
 
-    # Per-example anchor (mean-pooled prompt embedding) — the receiver-anchoring.
+    # Receiver's own context: right-padded batch of raw input embeddings — a
+    # no_grad table lookup, no forward pass. The translator cross-attends into
+    # these (pad positions masked out via receiver_lengths).
+    r_length = max(int(s.numel()) for s in receiver_ctxs)
+    receiver_ctx_ids = torch.full((len(receiver_ctxs), r_length), r_pad, dtype=torch.long, device=pair.device)
+    receiver_ctx_mask = torch.zeros((len(receiver_ctxs), r_length), dtype=torch.long, device=pair.device)
+    for i, seq in enumerate(receiver_ctxs):
+        n = int(seq.numel())
+        receiver_ctx_ids[i, :n] = seq
+        receiver_ctx_mask[i, :n] = 1
+
     with torch.no_grad():
+        receiver_ctx_embeds = embed(receiver_ctx_ids)  # [B, N_r, H]
         prompt_embeds = [embed(p.unsqueeze(0)) for p in prompts]  # each [1, P_i, H]
         answer_embeds = [embed(a.unsqueeze(0)) for a in answers]  # each [1, A_i, H]
-        anchor = torch.cat([pe.mean(dim=1) for pe in prompt_embeds], dim=0)  # [B, H]
 
-    # Translator (grad-enabled) -> soft tokens [B, K, H].
+    # Translator (grad-enabled) -> k*L_s soft tokens [B, T, H] per example
+    # (k resolved per batch from the longest real Sharer length when the
+    # adaptive token budget is on; uniform within the batch either way).
     soft = translator.translate(
-        extract_kv(sharer_cache), anchor, lengths=sharer_mask.sum(dim=1), num_spans=num_spans
+        extract_kv(sharer_cache),
+        receiver_ctx_embeds,
+        sharer_lengths=sharer_mask.sum(dim=1),
+        receiver_lengths=receiver_ctx_mask.sum(dim=1),
+        num_spans=num_spans,
+        sharer_span_boundaries=list(s_bounds),
     ).to(prompt_embeds[0].dtype)
     k = soft.shape[1]
     batch = soft.shape[0]
@@ -162,7 +209,11 @@ def batched_example_loss(
 
 
 def example_loss(
-    pair: EIYWPair, translator: EIYWTranslator, example: EIYWExample, num_spans: int
+    pair: EIYWPair,
+    translator: EIYWTranslator,
+    example: EIYWExample,
+    num_spans: int,
+    span_scheme: str = "paragraphs",
 ) -> "Any | None":
     """Teacher-forced next-token CE for one example (delegates to the batched path).
 
@@ -171,7 +222,7 @@ def example_loss(
     """
 
     return batched_example_loss(
-        pair, translator, [example], num_spans, reduction="mean"
+        pair, translator, [example], num_spans, span_scheme=span_scheme, reduction="mean"
     )
 
 
@@ -185,7 +236,8 @@ def evaluate(
     translator: EIYWTranslator,
     eval_data: list[Any],
     *,
-    num_spans: int = 4,
+    num_spans: int = 5,
+    span_scheme: str = "paragraphs",
     batch_size: int = 16,
     max_examples: int | None = None,
 ) -> float:
@@ -203,7 +255,7 @@ def evaluate(
     with torch.no_grad():
         for chunk in _chunks(items, batch_size):
             per_example = batched_example_loss(
-                pair, translator, chunk, num_spans, reduction="none"
+                pair, translator, chunk, num_spans, span_scheme=span_scheme, reduction="none"
             )
             if per_example is not None:
                 total += float(per_example.sum().item())
@@ -218,7 +270,8 @@ def evaluate_em_f1(
     translator: EIYWTranslator,
     eval_data: list[Any],
     *,
-    num_spans: int = 4,
+    num_spans: int = 5,
+    span_scheme: str = "paragraphs",
     max_new_tokens: int = 64,
     max_examples: int | None = None,
     brief_path: "str | Any | None" = None,
@@ -226,7 +279,7 @@ def evaluate_em_f1(
     """Generation-based EM/F1 over the eval set (the metric the paper reports).
 
     Unlike :func:`evaluate` (teacher-forced loss only), this runs **real greedy
-    decoding** with the soft tokens prepended, so it reflects EM/F1 — and surfaces
+    decoding** with the soft token prepended, so it reflects EM/F1 — and surfaces
     failures the loss hides (e.g. the model not stopping after the answer).
     Returns ``{"em", "f1", "n"}``. Slower than the loss eval, so cap it with
     ``max_examples``. With ``brief_path`` set, the per-example
@@ -255,7 +308,7 @@ def evaluate_em_f1(
             if not ex.answer:
                 continue
             result = run_eiyw_example(
-                ex, pair, translator, num_spans=num_spans,
+                ex, pair, translator, num_spans=num_spans, span_scheme=span_scheme,
                 max_new_tokens=max_new_tokens, score_fn=score_free_form,
             )
             results.append(result)
@@ -273,11 +326,22 @@ def evaluate_em_f1(
     }
 
 
-CHECKPOINT_FORMAT = 1
+# Format 9: the cross-attention (v2) redesign. The Receiver side is no longer
+# pooled KV (its pool, side embedding, and receiver-geometry projection are
+# gone); the Sharer's k·L_s slots cross-attend into the Receiver's raw context
+# embeddings (W_R: hidden -> d_model + sinusoidal PE) via per-block
+# self-attn + cross-attn. Soft-token count k·(L_s+L_r) -> k·L_s, optionally
+# adaptive in the Sharer length (`adaptive_k_tokens`). Format 8 (both-sides
+# pooled, self-attn only) has incompatible module names and shapes; retrain.
+CHECKPOINT_FORMAT = 9
 
 
 def _pair_arch(pair: EIYWPair) -> dict:
-    """Architecture the translator must have for this Sharer/Receiver pair (sans K/dim)."""
+    """Architecture the translator must have for this Sharer/Receiver pair.
+
+    The v2 translator touches the Receiver only through its embedding width
+    (its layer/head geometry no longer appears in any translator shape).
+    """
 
     s, r = pair.sharer_spec, pair.receiver_spec
     return {
@@ -289,7 +353,11 @@ def _pair_arch(pair: EIYWPair) -> dict:
 
 
 def save_translator(
-    translator: EIYWTranslator, path: str, pair: EIYWPair, num_spans: int | None = None
+    translator: EIYWTranslator,
+    path: str,
+    pair: EIYWPair,
+    num_spans: int | None = None,
+    span_scheme: str | None = None,
 ) -> None:
     """Save the translator stamped with the Sharer/Receiver it was trained for.
 
@@ -310,6 +378,7 @@ def save_translator(
         "sharer_model": pair.sharer_spec.name,
         "receiver_model": pair.receiver_spec.name,
         "num_spans": num_spans,
+        "span_scheme": span_scheme,
     }
     torch.save(payload, path)
 
@@ -320,18 +389,14 @@ def load_translator(
     *,
     device: Any = None,
     allow_model_mismatch: bool = False,
-    num_soft_tokens: int = 64,
-    bottleneck_dim: int = 256,
-    stage1_num_heads: int = 1,
-    stage2_num_heads: int = 8,
-    stage2_head_dim: int = 256,
 ) -> EIYWTranslator:
     """Load a trained translator, validating it matches the Sharer/Receiver ``pair``.
 
-    New-format checkpoints carry the model names and architecture (incl. K and the
-    bottleneck dim). By default any mismatch against ``pair`` raises ``ValueError``
-    -- pass ``allow_model_mismatch=True`` to downgrade to a warning. Legacy bare
-    ``state_dict`` checkpoints are rebuilt from the pair's specs + the passed dims.
+    New-format checkpoints carry the model names and architecture. By default
+    any mismatch against ``pair`` raises ``ValueError`` -- pass
+    ``allow_model_mismatch=True`` to downgrade to a warning. Checkpoints from
+    before the attention-translator redesign (format < 5, including legacy bare
+    ``state_dict`` files) have incompatible shapes and are rejected — retrain.
     """
 
     import torch
@@ -339,35 +404,22 @@ def load_translator(
     ckpt = torch.load(path, map_location=device)
 
     if not (isinstance(ckpt, dict) and "state_dict" in ckpt):
-        print(
-            f"[load_translator] {path}: legacy checkpoint (no model stamp) -- "
-            "cannot verify Sharer/Receiver; trusting the pair passed at eval time."
+        raise ValueError(
+            f"Translator checkpoint {path} is a legacy bare state_dict from before "
+            "the attention-translator redesign and cannot be loaded. Retrain with "
+            "scripts/train_eiyw.py."
         )
-        translator = EIYWTranslator.from_specs(
-            pair.sharer_spec,
-            pair.receiver_spec,
-            num_soft_tokens=num_soft_tokens,
-            bottleneck_dim=bottleneck_dim,
-            stage1_num_heads=stage1_num_heads,
-            stage2_num_heads=stage2_num_heads,
-            stage2_head_dim=stage2_head_dim,
-            zero_init=False,
+    if ckpt.get("format") != CHECKPOINT_FORMAT:
+        raise ValueError(
+            f"Translator checkpoint {path} has format {ckpt.get('format')}, expected "
+            f"{CHECKPOINT_FORMAT}. Format 8 and earlier predate the cross-attention "
+            "(v2) redesign — the Receiver side was pooled KV rather than raw context "
+            "embeddings, so the module names and shapes are incompatible. Retrain "
+            "with scripts/train_eiyw.py."
         )
-        translator.load_state_dict(ckpt)
-        return translator
 
-    expected_arch = {
-        **_pair_arch(pair),
-        "num_soft_tokens": num_soft_tokens,
-        "bottleneck_dim": bottleneck_dim,
-        "stage1_num_heads": stage1_num_heads,
-        "stage2_num_heads": stage2_num_heads,
-        "stage2_head_dim": stage2_head_dim,
-    }
+    expected_arch = _pair_arch(pair)
     ckpt_arch = dict(ckpt.get("arch", {}))
-    # Checkpoints saved before stage1_num_heads existed implicitly used the
-    # original single-query pooling -- treat a missing key as 1, not a mismatch.
-    ckpt_arch.setdefault("stage1_num_heads", 1)
     mismatches: list[str] = []
     if ckpt.get("sharer_model") != pair.sharer_spec.name:
         mismatches.append(
@@ -404,7 +456,8 @@ def train_translator(
     train_data: Iterable[Any],
     *,
     eval_data: Iterable[Any] | None = None,
-    num_spans: int = 4,
+    num_spans: int = 5,
+    span_scheme: str = "paragraphs",
     lr: float = 1e-4,
     epochs: int = 1,
     batch_size: int = 16,
@@ -443,8 +496,8 @@ def train_translator(
 
     _freeze(pair.sharer)
     _freeze(pair.receiver)
-    # Grad-enabled prompt prefill makes this heavier than LCF-X; gradient
-    # checkpointing on the frozen Receiver trades compute for memory.
+    # Grad-enabled generation prefill makes this heavier than a no_grad-prefill
+    # design; gradient checkpointing on the frozen Receiver trades compute for memory.
     try:
         pair.receiver.gradient_checkpointing_enable()
     except Exception:  # pragma: no cover - not all models support it
@@ -467,7 +520,11 @@ def train_translator(
             "sharer_model": pair.sharer_spec.name,
             "receiver_model": pair.receiver_spec.name,
             "trainable_params": translator.trainable_parameters(),
-            "num_soft_tokens": translator.num_soft_tokens,
+            "num_soft_tokens": translator.num_tokens,  # max; adaptive may emit fewer
+            "adaptive_k_tokens": translator.adaptive_k_tokens,
+            "d_model": translator.d_model,
+            "receiver_embed_rms": pair.receiver_spec.embed_rms,
+            "span_scheme": span_scheme,
             "epochs": epochs,
             "lr": lr,
             "batch_size": batch_size,
@@ -475,7 +532,6 @@ def train_translator(
             "effective_batch": batch_size * grad_accum,
             "warmup": max(0, int(warmup_steps)),
             "num_spans": num_spans,
-            "bottleneck_dim": translator.bottleneck_dim,
             "eval_em_examples": eval_em_examples,
             "checkpoint_path": checkpoint_path,
         },
@@ -495,7 +551,7 @@ def train_translator(
     print(
         f"Training translator: {len(train_list)} train"
         + (f" / {len(eval_list)} eval" if eval_list else "")
-        + f" | {translator.trainable_parameters()} params | K={translator.num_soft_tokens}"
+        + f" | {translator.trainable_parameters()} params | K={translator.num_tokens}"
         f" | epochs={epochs} lr={lr}"
         f" | batch={batch_size} x grad_accum={grad_accum}"
         f" (effective batch {batch_size * grad_accum}) warmup={warmup}"
@@ -517,6 +573,7 @@ def train_translator(
             translator,
             eval_list,
             num_spans=num_spans,
+            span_scheme=span_scheme,
             batch_size=batch_size,
             max_examples=eval_max_examples,
         )
@@ -527,7 +584,7 @@ def train_translator(
                 if checkpoint_path else None
             )
             scores = evaluate_em_f1(
-                pair, translator, eval_list, num_spans=num_spans,
+                pair, translator, eval_list, num_spans=num_spans, span_scheme=span_scheme,
                 max_examples=eval_em_examples, brief_path=brief_path,
             )
             em, f1 = scores["em"], scores["f1"]
@@ -536,7 +593,7 @@ def train_translator(
         if is_best:
             best_eval = eval_loss
             if checkpoint_path:
-                save_translator(translator, checkpoint_path, pair, num_spans)
+                save_translator(translator, checkpoint_path, pair, num_spans, span_scheme)
                 saved_best = True
                 marker = "  (new best -> saved)"
         em_str = f" | em {em:.4f} f1 {f1:.4f}" if em is not None else ""
@@ -555,7 +612,9 @@ def train_translator(
             rng.shuffle(order)
         for chunk in _chunks(order, batch_size):
             batch = [train_list[i] for i in chunk]
-            loss = batched_example_loss(pair, translator, batch, num_spans, reduction="mean")
+            loss = batched_example_loss(
+                pair, translator, batch, num_spans, span_scheme=span_scheme, reduction="mean"
+            )
             if loss is None:
                 continue
             (loss / grad_accum).backward()
@@ -589,7 +648,9 @@ def train_translator(
             if eval_every and opt_step % eval_every == 0:
                 _maybe_eval_and_save()
             if checkpoint_path and save_every and opt_step % save_every == 0:
-                save_translator(translator, checkpoint_path + ".latest", pair, num_spans)
+                save_translator(
+                    translator, checkpoint_path + ".latest", pair, num_spans, span_scheme
+                )
             if max_steps is not None and opt_step >= max_steps:
                 stop = True
                 break
@@ -598,7 +659,7 @@ def train_translator(
             break
 
     if checkpoint_path and not saved_best:
-        save_translator(translator, checkpoint_path, pair, num_spans)
+        save_translator(translator, checkpoint_path, pair, num_spans, span_scheme)
         print(f"Saved translator checkpoint -> {checkpoint_path}")
     elif checkpoint_path:
         print(f"Best translator checkpoint (eval_loss {best_eval:.4f}) -> {checkpoint_path}")

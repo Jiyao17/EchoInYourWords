@@ -6,10 +6,10 @@ Targets the transformers >= 5 ``DynamicCache`` layout, where a cache exposes
 count. Torch is imported lazily so the rest of the package stays importable
 without a GPU stack.
 
-This module only extracts raw KV and injects residuals. All pooling/alignment
-(``N_S -> P -> 1`` learned attention + cross-model ``H/D/L`` conversion) lives in
-``fuser.LCFXFuser.align``; by the time a residual reaches ``add_residual_inplace``
-it is already in Receiver shape (and broadcast over ``N_R`` inside ``fuser.project``).
+This module only extracts raw KV and injects residuals. All pooling (the paper's
+per-layer ``N_S -> P -> 1`` two-stage attention) lives in ``fuser.LCFXFuser.align``;
+by the time a residual reaches ``add_residual_inplace`` it is already in Receiver
+shape (broadcast over ``N_R`` inside ``fuser.project``).
 """
 
 from __future__ import annotations

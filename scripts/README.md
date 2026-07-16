@@ -36,10 +36,14 @@ The scripts:
 | `prepare_musique.py` / `prepare_qasc.py` / `prepare_2wikimultihop.py` / `prepare_ropes.py` / `prepare_strategyqa.py` | Same idea for the other 5 datasets (see [../README.md](../README.md#available-datasets-dataset) for how each splits). |
 | `run_text_to_text.py` | Run the T2T Sharer→Receiver pipeline. |
 | `run_lcfx.py` | Run the LCF-X latent cache communication method (Sharer cache → pooled summary → fused into Receiver). |
-| `run_eiyw.py` | Run EIYW, the receiver-anchored method (Sharer cache → K soft tokens conditioned on the Receiver's question → prepended to the Receiver input). |
+| `run_eiyw.py` | Run EIYW (Sharer context → LCF-X's pooling unmodified → k·L_s slots cross-attend into the Receiver's own context *embeddings* (lookup only, no Receiver forward) → soft tokens in the Receiver's embedding width → prepended to the Receiver's input). |
+| `run_kvtok.py` | Run KVTok (Sharer cache → Stage-1 pool → factorized feature/token-axis projection → Receiver embedding memory, with no initial Receiver forward/cache → `--num-tokens` soft tokens prepended to the Receiver's input). |
+| `run_xkv.py` | Run XKV (dual expanded LCF-X `N→P→2` cache pools → layer map → bottleneck/attention translation → Receiver KV residual). |
 | `run_single_model.py` | Run the single-model inference baseline (one model answers from the full context — no Sharer, no communication). |
 | `train_lcfx_fuser.py` | Train the LCF-X fuser (frozen Sharer/Receiver; only the fuser learns). |
 | `train_eiyw.py` | Train the EIYW translator (frozen Sharer/Receiver; only the translator learns). |
+| `train_kvtok.py` | Train the KVTok translator (frozen Sharer/Receiver; only the translator learns). |
+| `train_xkv.py` | Train the XKV translator (frozen Sharer/Receiver; only the translator learns). |
 | `_hf_cache.py` | Helper imported by the others; not run directly. |
 
 ---
@@ -83,7 +87,7 @@ context + that message.
 ```bash
 python scripts/run_text_to_text.py \
   --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
-  --sharer-model Qwen/Qwen2.5-0.5B-Instruct \
+  --sharer-model unsloth/Llama-3.2-1B-Instruct \
   --receiver-model Qwen/Qwen3-0.6B \
   --output-dir results/t2t_hotpotqa_bridge
 ```
@@ -117,7 +121,7 @@ the method receiver prompts.
 ```bash
 python scripts/run_single_model.py \
   --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
-  --model Qwen/Qwen2.5-0.5B-Instruct \
+  --model unsloth/Llama-3.2-1B-Instruct \
   --output-dir results/single_model
 ```
 
@@ -135,17 +139,17 @@ latent summary / soft tokens.
 
 ### Test C — LCF-X latent cache communication
 
-The Sharer encodes its own partition; its KV cache is pooled into a fixed-size,
-position-free summary, fused into the Receiver's cache (via the bottleneck
-fuser), and the Receiver answers from its own partition + that latent summary —
-no text message, no token-position alignment.
+The Sharer encodes its own partition; each layer of its KV cache is pooled
+(within-span then cross-span attention) into one position-free `[H,1,D]`
+summary, fused into the Receiver's cache (via the bottleneck fuser), and the
+Receiver answers from its own partition + that latent summary — no text
+message, no token-position alignment.
 
 ```bash
 python scripts/run_lcfx.py \
   --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
-  --sharer-model Qwen/Qwen2.5-0.5B-Instruct \
-  --receiver-model Qwen/Qwen2.5-0.5B-Instruct \
-  --num-spans 4 \
+  --sharer-model Qwen/Qwen3-0.6B \
+  --receiver-model Qwen/Qwen3-0.6B \
   --output-dir results/lcfx_hotpotqa_zeroinit
 ```
 
@@ -155,7 +159,8 @@ python scripts/run_lcfx.py \
 | `--fuser-checkpoint` | (none) | Trained fuser weights. **Omit → zero-init fuser.** |
 | `--allow-model-mismatch` | off | Load a checkpoint whose stamped Sharer/Receiver differ from the pair (otherwise a hard error). |
 | `--bottleneck-dim` | `128` | Joint KV bottleneck width (must match the checkpoint). |
-| `--num-spans` | `1` | Sharer pooling spans (position-free summary granularity). |
+| `--span-scheme` | `paragraphs` | Span partition: natural blank-line blocks (paper's scheme) or `fixed` token chunks. Any trained checkpoint accepts either (paper E.4). |
+| `--num-spans` | `5` | Span count for `--span-scheme fixed`. |
 | `--max-new-tokens` | `64` | Receiver answer budget. |
 
 **Plumbing-correctness check (MVP):** with no `--fuser-checkpoint` the fuser is
@@ -176,13 +181,13 @@ gold answer, with the Sharer summary fused into the Receiver's prompt cache).
 ```bash
 python scripts/train_lcfx_fuser.py \
   --train-data data/tasks/hotpotqa_bridge_cross.jsonl \
-  --num-spans 4 --epochs 3 --lr 1e-3 \
+  --epochs 3 --lr 1e-3 \
   --checkpoint-out data/checkpoints/lcfx/fuser.pt
 
 # then evaluate the trained fuser
 python scripts/run_lcfx.py \
   --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
-  --num-spans 4 --fuser-checkpoint data/checkpoints/lcfx/fuser.pt \
+  --fuser-checkpoint data/checkpoints/lcfx/fuser.pt \
   --output-dir results/lcfx_trained
 ```
 
@@ -206,7 +211,7 @@ python scripts/train_lcfx_fuser.py \
   --train-data data/tasks/hotpotqa_bridge_train.jsonl \
   --eval-data  data/tasks/hotpotqa_bridge_val.jsonl \
   --sharer-model Qwen/Qwen3-0.6B --receiver-model Qwen/Qwen3-0.6B \
-  --bottleneck-dim 128 --num-spans 4 \
+  --bottleneck-dim 128 \
   --max-train-examples 2000 --batch-size 8 --grad-accum 4 --warmup 50 \
   --eval-max-examples 200 --eval-every 20 --save-every 20 \
   --checkpoint-out data/checkpoints/lcfx/fuser_partial.pt
@@ -238,6 +243,7 @@ generation-based EM/F1 to each eval with `--eval-em-examples N` (Makefile
 ```bash
 make lcfx-train EVAL_EM=100   # report EM/F1 on 100 eval examples each eval
 make eiyw-train EVAL_EM=100
+make kvtok-train EVAL_EM=100
 ```
 
 With `EVAL_EM > 0`, each eval also writes an **`eval_predictions_brief.tsv`**
@@ -246,55 +252,156 @@ inference `predictions_brief.tsv`, but for the dev set, overwritten each eval so
 it always holds the latest snapshot. Handy for watching *what* the model predicts
 as training progresses (e.g. spotting answers that are correct but don't stop).
 
-### Test D — EIYW (our receiver-anchored method)
+### Test D — EIYW (our method)
 
-The Sharer encodes its own partition; its KV cache is translated into **K soft
-pseudo-tokens, conditioned on the Receiver's question**, and **prepended to the
-Receiver's input embeddings**. The Receiver then answers from its own partition
-plus those soft tokens — no text message, and (unlike LCF-X) the Sharer's
-information is added at the Receiver's *input* rather than broadcast into its KV
-cache. See [../prompt/EIYW_IMPLEMENTATION_PLAN.md](../prompt/EIYW_IMPLEMENTATION_PLAN.md).
+**Current iteration (v2): EIYW keeps LCF-X's paper-exact per-layer pooling on
+the Sharer and replaces everything after it with a cross-attention translator
+whose output is input tokens rather than a KV-cache residual.** The Sharer's
+context is pooled per layer (up to `--queries-per-layer` k position-free
+`[B,H,1,D]` slots per layer, Sharer geometry — the identical pool to LCF-X's,
+so any gain over LCF-X is attributable to the translator). A `Linear`
+projects the flattened `K*‖V*` slots to `--d-model` width with learned
+layer/query tags; the Receiver's own context enters as raw input *embeddings*
+(a table lookup — no Receiver forward pass) projected to the same width plus
+sinusoidal PE (raw embeddings carry no order). `--num-blocks` pre-LN blocks
+(self-attn over the slots, cross-attn into the Receiver memory, MLP) refine
+the slots, and an RMS-calibrated head emits `k·L_s` soft tokens — count
+independent of both context lengths, or adaptive in the Sharer's length with
+`--adaptive-k-tokens`. The tokens are prepended to the Receiver's input
+embeddings, so the Receiver attends to them like any other input position
+(not reshaped into a KV delta, unlike LCF-X). See
+[../prompt/EIYW_IMPLEMENTATION_PLAN.md](../prompt/EIYW_IMPLEMENTATION_PLAN.md)
+for the original receiver-anchored design.
 
 ```bash
 # Train the translator, then evaluate it.
 python scripts/train_eiyw.py \
   --train-data data/tasks/hotpotqa_bridge_train.jsonl \
-  --sharer-model Qwen/Qwen2.5-0.5B-Instruct --receiver-model Qwen/Qwen3-0.6B \
-  --num-soft-tokens 16 --num-spans 4 \
+  --sharer-model unsloth/Llama-3.2-1B-Instruct --receiver-model Qwen/Qwen3-0.6B \
+  --d-model 512 --queries-per-layer 1 --num-blocks 1 \
   --checkpoint-out data/checkpoints/eiyw/translator.pt
 
 python scripts/run_eiyw.py \
   --dataset data/tasks/hotpotqa_bridge_val.jsonl \
-  --sharer-model Qwen/Qwen2.5-0.5B-Instruct --receiver-model Qwen/Qwen3-0.6B \
-  --num-soft-tokens 16 --translator-checkpoint data/checkpoints/eiyw/translator.pt \
+  --sharer-model unsloth/Llama-3.2-1B-Instruct --receiver-model Qwen/Qwen3-0.6B \
+  --translator-checkpoint data/checkpoints/eiyw/translator.pt \
   --output-dir results/eiyw_trained
 ```
 
 | Flag | Default | Meaning |
 |------|---------|---------|
 | `--sharer-model` / `--receiver-model` | `Qwen/Qwen3-0.6B` each | Independent frozen pair (may differ in size/arch). |
-| `--translator-checkpoint` | (none) | Trained translator weights. **Omit → gentle-init translator (plumbing only).** |
-| `--num-soft-tokens` | `64` | K soft tokens prepended to the Receiver input (must match the checkpoint). |
-| `--bottleneck-dim` | `256` | Translator latent width (must match the checkpoint). |
-| `--stage1-num-heads` | `1` | Independent stage-1 span-pooling heads (must match the checkpoint); `1` = original single-query pooling. |
-| `--stage2-num-heads` | `8` | Multi-head count for the stage-2 soft-token cross-attention (must match the checkpoint). |
-| `--stage2-head-dim` | `256` | Per-head width for the stage-2 cross-attention (must match the checkpoint). |
-| `--num-spans` | `4` | Sharer pooling spans. |
+| `--translator-checkpoint` | (none) | Trained translator weights. **Omit → gentle-init translator (plumbing pass close to, but not guaranteed identical to, the Receiver-only floor).** |
+| `--span-scheme` | `paragraphs` | Sharer pooling span partition: natural blank-line blocks or `fixed` token chunks (same knob as LCF-X's; any checkpoint accepts either). |
+| `--num-spans` | `5` | Span count for `--span-scheme fixed`. |
+| `--queries-per-layer` | `1` | Max Sharer pool queries per layer k (soft tokens = k·L_s). Zero-init only — ignored with `--translator-checkpoint`, which uses its own stamped value. |
+| `--adaptive-k-tokens` | `0` (off) | w>0: active k = `clamp(ceil(N_s/w), 1, k)` — scales the token budget with the Sharer's context length. Zero-init only — the checkpoint's stamped value wins. |
+| `--num-blocks` | `1` | Fusion depth (self-attn + cross-attn + MLP blocks). Zero-init only — ignored with `--translator-checkpoint`. |
+| `--d-model` | `512` (receiver-independent) | Translator width (`half`/`hidden` as sweep options). Zero-init only — ignored with `--translator-checkpoint`. |
 | `--allow-model-mismatch` | off | Load a checkpoint whose stamped Sharer/Receiver differ (otherwise a hard error). |
 | `--max-new-tokens` | `64` | Receiver answer budget. |
 
-**Plumbing-correctness check.** EIYW has no zero-init==Receiver-only equality
-(zero-valued soft tokens are still extra positions, and exactly-zero embeddings
-are numerically degenerate — the init is therefore a *gentle* small-scale start).
-With no `--translator-checkpoint` the translator is gentle-initialized, so the run
-is a plumbing pass (soft tokens near zero), not the method.
+**Plumbing-correctness check.** EIYW has no zero-init==Receiver-only
+*equality* the way LCF-X's zero-init fuser does: an exact-zero soft embedding
+is a numerical degeneracy (it makes the frozen Receiver's backward pass
+non-finite, `0 * inf`), so the translator instead uses a *gentle* small-scale
+init. With no `--translator-checkpoint` the translator is gentle-initialized,
+so the run is a plumbing pass (soft tokens near zero), not an exact
+Receiver-only equality check.
 
-Memory note: EIYW's prompt forward is **grad-enabled** (the soft tokens lead the
-sequence, so every prompt activation depends on them) — heavier than LCF-X, which
-can prefill the prompt under `no_grad`. Gradient checkpointing on the frozen
-Receiver is enabled automatically; lower `--batch-size` / raise `--grad-accum` as
-needed. The same `MAX_TRAIN` / `MAX_STEPS` / `BATCH_SIZE` / `GRAD_ACCUM` knobs
-work via `make eiyw-train`.
+Memory note: EIYW's prompt forward is **grad-enabled** end to end (the soft
+tokens lead the sequence, so every prompt activation depends on them) —
+heavier than LCF-X, which can prefill the prompt under `no_grad`. Gradient
+checkpointing on the frozen Receiver is enabled automatically; lower
+`--batch-size` / raise `--grad-accum` as needed. The same `MAX_TRAIN` /
+`MAX_STEPS` / `BATCH_SIZE` / `GRAD_ACCUM` knobs work via `make eiyw-train`.
+
+### Test E — KVTok (baseline)
+
+**KVTok reuses LCF-X's Fig. 3 Stage 1 (within-span attention) on the Sharer
+only and drops Stage 2 (across-span attention).** It preserves the
+`layers * num_spans` position axis, projects each flattened K/V feature row
+with a shared `2·H·D → d_model` linear, then applies a shared token-axis
+`layers·spans → num_tokens` linear. This factorization avoids the incorrect
+billion-parameter dense Cartesian map. The Receiver supplies embedding-table
+outputs only — processed by projection, sinusoidal PE, and LayerNorm — with no
+initial Receiver forward/cache. One cross-attention step and the EIYW-v2
+calibrated head produce soft tokens prepended to the Receiver's generation
+prompt embeddings.
+
+```bash
+# Train the translator, then evaluate it.
+python scripts/train_kvtok.py \
+  --train-data data/tasks/hotpotqa_bridge_train.jsonl \
+  --sharer-model unsloth/Llama-3.2-1B-Instruct --receiver-model Qwen/Qwen3-0.6B \
+  --num-spans 5 --num-tokens 8 --d-model 512 --num-heads 8 \
+  --checkpoint-out data/checkpoints/kvtok/translator.pt
+
+python scripts/run_kvtok.py \
+  --dataset data/tasks/hotpotqa_bridge_val.jsonl \
+  --sharer-model unsloth/Llama-3.2-1B-Instruct --receiver-model Qwen/Qwen3-0.6B \
+  --num-spans 5 --num-tokens 8 --d-model 512 --num-heads 8 \
+  --translator-checkpoint data/checkpoints/kvtok/translator.pt \
+  --output-dir results/kvtok_trained
+```
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--sharer-model` / `--receiver-model` | `Qwen/Qwen3-0.6B` each | Independent frozen pair (may differ in size/arch). |
+| `--translator-checkpoint` | (none) | Trained translator weights. **Omit → gentle-init translator (plumbing pass close to the Receiver-only floor).** |
+| `--num-spans` | `5` | Sharer Stage-1 pooling spans (must match the checkpoint; same knob/default as LCF-X/EIYW). |
+| `--num-tokens` | `8` | Soft tokens the down-projection outputs (must match the checkpoint — baked into its weight shape). |
+| `--d-model` | `512` | Translator width (must match the checkpoint). |
+| `--num-heads` | `8` | Cross-attention heads (must match after divisor-safe resolution). |
+| `--allow-model-mismatch` | off | Load a checkpoint whose stamped Sharer/Receiver/arch differ (otherwise a hard error). |
+| `--max-new-tokens` | `64` | Receiver answer budget. |
+
+**Plumbing-correctness check.** Same rationale as EIYW: an exact-zero soft
+embedding is a numerical degeneracy, so the translator uses a *gentle*
+small-scale init instead. With no `--translator-checkpoint` the run is a
+plumbing pass (soft tokens near zero), not an exact Receiver-only equality
+check.
+
+Unlike EIYW, `--num-spans`/`--num-tokens` are baked into the translator's
+weight shapes at construction time. Width and resolved head count are also
+part of its architecture, so all four values must be re-supplied identically
+between `train_kvtok.py` and `run_kvtok.py` —
+`load_translator` hard-errors on a mismatch. Same memory note as EIYW
+(grad-enabled prompt forward; gradient checkpointing on automatically). The
+same `MAX_TRAIN` / `MAX_STEPS` / `BATCH_SIZE` / `GRAD_ACCUM` knobs work via
+`make kvtok-train`.
+
+### Test F — XKV dual-cache KV update
+
+XKV runs the frozen Sharer and Receiver prefix once, pools both caches with an
+expanded LCF-X `N → P → 2` process, and applies the learned layer-axis map
+when `L_s != L_r`. The two K/V summaries per layer and side double the joint
+bottleneck input width while its output remains `[B,L_r,d]`. Raw Receiver K/V
+positions then query the translated layer memory through shared
+cross-attention. Two shared K/V up-projections produce distinct gated updates
+at different cache positions.
+For `DATASET=ropes`, `make xkv-train` defaults to batch 32 / accumulation 8;
+full sweeps halve/double those values through the existing model-size tiers.
+
+```bash
+python scripts/train_xkv.py \
+  --train-data data/tasks/hotpotqa_bridge_train.jsonl \
+  --sharer-model unsloth/Llama-3.2-1B-Instruct \
+  --receiver-model Qwen/Qwen3-0.6B \
+  --d-model eighth --num-blocks 1 --pool-slots 2 \
+  --checkpoint-out data/checkpoints/xkv/translator.pt
+
+python scripts/run_xkv.py \
+  --dataset data/tasks/hotpotqa_bridge_val.jsonl \
+  --sharer-model unsloth/Llama-3.2-1B-Instruct \
+  --receiver-model Qwen/Qwen3-0.6B \
+  --d-model eighth --num-blocks 1 --pool-slots 2 \
+  --translator-checkpoint data/checkpoints/xkv/translator.pt \
+  --output-dir results/xkv
+```
+
+The Makefile equivalents are `make xkv`, `make xkv-train`, `make xkv-eval`,
+and `make exp METHOD=xkv DATASET=<name>`.
 
 ---
 
@@ -316,9 +423,9 @@ After a run, the headline numbers are in `<output-dir>/metrics.json`:
 - Per-example traces (prompts, message, prediction) are in `predictions.jsonl`
   for debugging.
 
-> The small smoke runs so far (Qwen2.5-0.5B, 10 examples) are for plumbing
+> The small smoke runs so far (Qwen3-0.6B, 10 examples) are for plumbing
 > validation only; report numbers from a larger sample and a stronger Receiver
-> (e.g. Qwen3-0.6B) over `--num-examples 200`+.
+> (e.g. `unsloth/Llama-3.2-1B-Instruct`) over `--num-examples 200`+.
 
 ---
 
@@ -326,7 +433,7 @@ After a run, the headline numbers are in `<output-dir>/metrics.json`:
 
 ```bash
 DATA=data/tasks/hotpotqa_bridge_cross.jsonl
-M=Qwen/Qwen2.5-0.5B-Instruct
+M=Qwen/Qwen3-0.6B
 N=200
 
 python scripts/run_single_model.py --dataset $DATA \

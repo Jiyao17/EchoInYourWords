@@ -1,7 +1,10 @@
-"""Per-example runner for EIYW (the receiver-anchored method).
+"""Per-example runner for EIYW.
 
-Orchestrates the soft-token pipeline for one example: encode the Sharer context
--> compute the Receiver anchor -> translate to K soft tokens -> decode the
+Orchestrates the pipeline for one example: encode the Sharer's own context
+(full forward, pooled per layer with the paper-exact LCF-X pool) and look up
+the Receiver's own context *embeddings* (table read, no forward pass) -> the
+pooled Sharer slots cross-attend into the Receiver memory and become
+``k·L_s`` soft tokens in the Receiver's embedding space -> decode the
 Receiver with those tokens prepended to its input.
 """
 
@@ -12,10 +15,15 @@ from time import perf_counter
 from typing import Any, Callable
 
 from methods.common.parsing import parse_choice_answer
-from methods.common.prompts import build_receiver_prompt, build_sharer_encode_text
+from methods.common.prompts import (
+    build_receiver_encode_text,
+    build_receiver_prompt,
+    build_sharer_encode_text,
+)
 
 from .model import EIYWPair
 from .schema import EIYWExample
+from .spans import paragraph_span_starts
 from .translator import EIYWTranslator
 
 ScoreFn = Callable[[str, str], dict[str, Any]]
@@ -28,7 +36,7 @@ class EIYWResult:
     id: str
     method: str
     sharer_prompt: str
-    sharer_message: str  # short descriptor of the soft tokens (no NL message)
+    sharer_message: str  # short descriptor of the soft token (no NL message)
     receiver_prompt: str
     receiver_output: str
     prediction: str | None
@@ -77,50 +85,69 @@ def run_eiyw_example(
     pair: EIYWPair,
     translator: EIYWTranslator,
     *,
-    num_spans: int = 4,
+    num_spans: int = 5,
+    span_scheme: str = "paragraphs",
     max_new_tokens: int = 64,
     score_fn: ScoreFn | None = None,
 ) -> EIYWResult:
-    """Run the EIYW receiver-anchored soft-token pipeline for a single example."""
+    """Run the EIYW pipeline for a single example.
+
+    ``span_scheme``: ``"paragraphs"`` pools the Sharer over its encode text's
+    natural ``\\n\\n``-separated blocks; ``"fixed"`` divides the tokens into
+    ``num_spans`` near-equal chunks. (The Receiver side is an embedding
+    lookup — no pooling, so no spans.)
+    """
 
     import torch
 
     sharer_text = build_sharer_encode_text(example)
+    receiver_text = build_receiver_encode_text(example)
     receiver_prompt = build_receiver_prompt(example)
 
     start = perf_counter()
-    summary, sharer_tokens = pair.sharer_summary(sharer_text)
+    sharer_kv, sharer_tokens = pair.sharer_summary(sharer_text)
+    receiver_embeds, receiver_ctx_tokens = pair.receiver_context_embeds(receiver_text)
     sharer_ms = (perf_counter() - start) * 1000.0
 
-    # Translate the Sharer cache to receiver-anchored soft tokens.
     start = perf_counter()
+    if span_scheme == "paragraphs":
+        s_bounds = [paragraph_span_starts(pair.sharer_tok, sharer_text)]
+    else:
+        s_bounds = None
     with torch.no_grad():
-        anchor = pair.receiver_anchor(receiver_prompt)
-        soft_tokens = translator.translate(summary, anchor, num_spans=num_spans)
-    fuser_ms = (perf_counter() - start) * 1000.0
+        soft_token = translator.translate(
+            sharer_kv,
+            receiver_embeds,
+            num_spans=num_spans,
+            sharer_span_boundaries=s_bounds,
+        )
+    translator_ms = (perf_counter() - start) * 1000.0
 
     start = perf_counter()
     output, recv_in, recv_out, recv_first_ms, recv_last_ms = pair.decode_receiver(
-        receiver_prompt, soft_tokens=soft_tokens, max_new_tokens=max_new_tokens
+        receiver_prompt, soft_token=soft_token, max_new_tokens=max_new_tokens
     )
     receiver_ms = (perf_counter() - start) * 1000.0
 
     # decode_receiver's own timestamps are relative to its call; shift them to be
-    # relative to the start of this example (sharer + fuser already elapsed).
-    pre_decode_ms = sharer_ms + fuser_ms
+    # relative to the start of this example (encode + translate already elapsed).
+    pre_decode_ms = sharer_ms + translator_ms
     first_token_ms = pre_decode_ms + recv_first_ms if recv_first_ms is not None else None
     last_token_ms = pre_decode_ms + recv_last_ms if recv_last_ms is not None else None
 
     prediction = parse_choice_answer(output, example.choices)
     is_correct, scores = _score_prediction(prediction, example.answer, score_fn)
+    num_soft_tokens = int(soft_token.shape[1])
 
-    n_layers = len(summary)
-    k = translator.num_soft_tokens
     return EIYWResult(
         id=example.id,
         method="eiyw",
         sharer_prompt=sharer_text,
-        sharer_message=f"[soft tokens: {k} (pooled from {n_layers} layers x {num_spans} spans)]",
+        sharer_message=(
+            f"[{num_soft_tokens} soft tokens: {len(sharer_kv)}-layer pooled Sharer "
+            f"slots cross-attending over {receiver_ctx_tokens} Receiver context "
+            f"embeddings]"
+        ),
         receiver_prompt=receiver_prompt,
         receiver_output=output,
         prediction=prediction,
@@ -129,19 +156,17 @@ def run_eiyw_example(
         scores=scores,
         latency={
             "sharer_ms": sharer_ms,
-            "fuser_ms": fuser_ms,
+            "fuser_ms": translator_ms,
             "receiver_ms": receiver_ms,
-            "total_ms": sharer_ms + fuser_ms + receiver_ms,
+            "total_ms": sharer_ms + translator_ms + receiver_ms,
             "first_token_ms": first_token_ms,
             "last_token_ms": last_token_ms,
         },
         token_counts={
             "sharer_input": sharer_tokens,
-            "sharer_output": k,  # soft-token slots, not text tokens
+            "sharer_output": num_soft_tokens,  # soft-token slots, not text tokens
             "receiver_input": recv_in,
             "receiver_output": recv_out,
         },
         metadata=dict(example.metadata),
     )
-
-

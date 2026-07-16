@@ -6,10 +6,11 @@ Targets the transformers >= 5 ``DynamicCache`` layout, where a cache exposes
 count. Torch is imported lazily so the rest of the package stays importable
 without a GPU stack.
 
-Unlike LCF-X, EIYW does **not** inject a residual into the Receiver cache — the
-Sharer's information is translated into soft tokens prepended to the Receiver
-*input* (see ``translator.py`` / ``model.py``). We only need to read the Sharer's
-raw KV here.
+EIYW does not inject a residual into the Receiver's KV cache -- the Sharer's
+cache is pooled position-free (see ``translator.py``) into ``k·L_s`` soft
+tokens prepended to the Receiver's *input embeddings* (see ``model.py``); the
+Receiver side is a raw embedding lookup and never touches a cache. We only
+need to read the Sharer's raw KV here.
 """
 
 from __future__ import annotations

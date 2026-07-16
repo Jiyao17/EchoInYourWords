@@ -122,11 +122,11 @@ class LCFXPair:
         """Encode Sharer text and return its raw per-layer KV cache.
 
         Returns ``(summary, input_tokens)`` where ``summary`` is per layer
-        ``(K, V)`` of shape ``[B, H_s, N_S, D_s]``. The fuser's 2-stage
-        learned-attention pooling (``LCFXFuser.align``) turns these into a
-        position-free, still Sharer-shaped summary; ``LCFXFuser.project``
-        then turns that (plus the Receiver cache) into a Receiver-shaped
-        residual.
+        ``(K, V)`` of shape ``[B, H_s, N_S, D_s]``. The fuser's per-layer
+        2-stage pooling (``LCFXFuser.align``) turns each layer into one
+        position-free, still Sharer-shaped ``[B, H_s, 1, D_s]`` summary;
+        ``LCFXFuser.project`` then turns those (plus the Receiver cache)
+        into a Receiver-shaped residual.
         """
 
         import torch

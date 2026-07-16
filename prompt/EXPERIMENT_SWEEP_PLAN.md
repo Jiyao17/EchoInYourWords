@@ -1,4 +1,4 @@
-# Experiment Sweep Plan: 5-Model Roster x 6 Datasets x 3 Methods
+# Experiment Sweep Plan: 3-Model Roster (+ opt-in 8B) x 6 Datasets x 3 Methods
 
 ## Goal
 
@@ -9,53 +9,54 @@ analyze.
 
 ## Axes
 
-### Models (primary roster, 5 models, one flat tier)
+### Models (primary roster, 3 models, one flat tier; 8B is opt-in)
 
-One model per size from 0.5B to 8B, different families, all ungated:
+One model per size from 0.6B to 4B, different families, all ungated:
 
-- `Qwen/Qwen2.5-0.5B-Instruct` (0.5B) — used by LCF-X
 - `Qwen/Qwen3-0.6B` (0.6B) — used by LCF-X
 - `unsloth/Llama-3.2-1B-Instruct` (1B)
 - `unsloth/gemma-3-4b-it` (4B)
-- `Qwen/Qwen3-8B` (8B tier)
 
-`Qwen/Qwen3-4B` and `unsloth/gemma-3-1b-it` were considered but are **not**
-part of the roster — excluded as redundant with the models above (extra
-Qwen/Gemma sizes outside the 0.5/0.6/1/4/8B ladder this sweep targets).
+**Opt-in large tier** — `Qwen/Qwen3-8B` (8B) is no longer in the default
+grid (its cells dominate the sweep's wall time/memory); pass
+`EXTRA_MODELS=TRUE` (make) / `--extra-models` (run_sweep.py / run_all.py)
+to add it on both axes, growing the grid from 3x3=9 to 4x4=16 pairs.
+
+`Qwen/Qwen2.5-0.5B-Instruct` was dropped from the roster (LCF-X's own
+cross-context scenario only considered two 0.6B models, so the 0.5B tier
+isn't relevant here). `Qwen/Qwen3-4B` and `unsloth/gemma-3-1b-it` were also
+considered but are **not** part of the roster — excluded as redundant with
+the models above (extra Qwen/Gemma sizes outside the 0.6/1/4/8B ladder this
+sweep targets).
 
 - **Datasets** (6): `hotpotqa_bridge`, `musique`, `qasc`, `2wikimultihop`,
   `ropes`, `strategyqa`
-- **Sharer x Receiver pairs** (5 x 5 = 25, includes symmetric self-pairs)
+- **Sharer x Receiver pairs** (3 x 3 = 9 default, includes symmetric
+  self-pairs; 4 x 4 = 16 with `EXTRA_MODELS=TRUE`)
 - **Methods** (3): T2T (eval only, no training), LCF-X (train fuser + eval),
   EIYW (train translator + eval)
 
-**Grid size:** 25 pairs x 6 datasets = **150 configs**; x 3 methods = **450
-experiment cells**. 300 of those cells (LCF-X + EIYW, 150 each) need a
-training run first; the other 150 (T2T) are eval-only.
+**Grid size:** 9 pairs x 6 datasets = **54 configs**; x 3 methods = **162
+experiment cells** (108 of them, LCF-X + EIYW, need a training run first;
+the other 54, T2T, are eval-only). With `EXTRA_MODELS=TRUE`: 16 pairs x 6
+datasets x 3 methods = **288 cells**.
 
-**Complementary, not part of the 150/450:** the single-model oracle baseline
-(`make single`) is not pair-dependent — 5 models x 6 datasets = 30 cheap
-eval-only runs. Worth collecting alongside the grid as an upper-bound
-reference column, but tracked separately.
-
-One cell already has a head start: `data/checkpoints/lcfx/hotpotqa_bridge/
-Qwen--Qwen2.5-0.5B-Instruct/Qwen--Qwen3-0.6B/fuser.pt` exists from earlier
-development (trained, not yet evaluated at sweep scale). The sweep driver
-doesn't currently detect/reuse pre-existing checkpoints (see "Still needed"
-below) — revisit this once the `full` stage is in play, where reuse matters
-more than at smoke scale.
+**Complementary, not part of the 54/162:** the single-model oracle baseline
+(`make single`) is not pair-dependent — 3 models (4 with extras) x 6
+datasets = 18-24 cheap eval-only runs. Worth collecting alongside the grid
+as an upper-bound reference column, but tracked separately.
 
 ## Stage 0 — Prep (one-time, cheap)
 
 - `make data` — builds all 6 dataset train/val files. `hotpotqa_bridge`,
   `musique`, `qasc` are already built; `2wikimultihop` / `ropes` /
   `strategyqa` still need a real (`-1`) run (only smoke-tested so far).
-- `make model` — fetches all 5 primary-roster models into `data/hf_cache`;
+- `make model` — fetches all 4 primary-roster models into `data/hf_cache`;
   already downloaded (confirmed via `data/hf_cache/hub/`); idempotent to
   re-run. `Qwen/Qwen3-4B`'s cache (7.6GB, downloaded while it was still part
   of the roster) has been deleted now that it's excluded.
 
-## Stage 1 — Smoke sweep (all 450 cells, reduced budget)
+## Stage 1 — Smoke sweep (all cells, reduced budget)
 
 **Purpose:** catch structural failures per pair/dataset cheaply before
 committing to full compute — tokenizer quirks, Gemma's unusual
@@ -73,7 +74,8 @@ Proposed budget overrides (vs. Makefile defaults):
 | `BATCH_SIZE` / `GRAD_ACCUM` | scaled down for 8B pairs | Keep the 8B<->8B cell inside ~40GB free per GPU (see Risk notes) |
 
 **Execution:** `scripts/run_sweep.py` (see "Sweep driver script" below)
-iterates `make lcfx` / `make eiyw` / `make t2t` over all 25 pairs for one
+iterates `make lcfx` / `make eiyw` / `make t2t` over every roster pair (9, or
+16 with `--extra-models`) for one
 dataset+method at a time, with the Stage 1 overrides, logs one manifest line
 per cell (ok / failed / oom + wall time), and is resumable (skips cells
 already marked done) so a crash doesn't lose progress.
@@ -84,10 +86,11 @@ triage before spending Stage 2 compute.
 ## Stage 2 — Full-scale runs, staged by priority
 
 Priority tiers (review results after each tier before starting the next —
-don't blindly launch all 300 full trainings at once):
+don't blindly launch all 192 full trainings at once):
 
-1. **Priority 1 — symmetric pairs**: the 5 same-model pairs (0.5B-0.5B,
-   0.6B-0.6B, 1B-1B, 4B-4B, 8B-8B) x 6 datasets x 3 methods = 90 cells.
+1. **Priority 1 — symmetric pairs**: the 3 same-model pairs (0.6B-0.6B,
+   1B-1B, 4B-4B; plus 8B-8B with `EXTRA_MODELS=TRUE`) x 6 datasets x 3
+   methods = 54 (72 with extras) cells.
    Establishes same-model baselines across every dataset first.
 2. **Priority 2 — heterogeneous pairs that passed Stage 1 cleanly** x 6
    datasets x 3 methods.
@@ -117,7 +120,9 @@ dataset/model.
 
 **Status: implemented and verified for the smoke stage** (real end-to-end
 run: T2T, 1B<->1B, `hotpotqa_bridge`, 150 eval examples, wrote a correct
-`metrics.json` and manifest entry; resume-skip and `--force` both verified).
+`metrics.json` and manifest entry). Every launch reruns every selected cell
+fresh by default; `--resume` opts into skipping cells already `ok` (to
+continue a crashed sweep).
 The `full` stage uses the Makefile's paper-scale defaults (full train split,
 full val EM/F1) plus a pair-size-aware `BATCH_SIZE`/`GRAD_ACCUM`
 (`pick_batch_grad_accum`, sized for an ~80GB GPU, effective batch always
@@ -126,8 +131,8 @@ priority-tiering (`--priority-tier`) is **not yet implemented** — for now,
 scope a full-stage run manually with `--sharer`/`--receiver` filters.
 
 The script enumerates cells (method x sharer x receiver, for the one
-`--dataset` it's given) from the fixed 5-model `PRIMARY_MODELS` roster,
-maintains a resumable manifest, and shells out to the existing `make lcfx` /
+`--dataset` it's given) from the fixed 4-model `PRIMARY_MODELS` roster,
+records every run in the manifest (used only by `--resume`), and shells out to the existing `make lcfx` /
 `make eiyw` / `make t2t` targets — so all of the project's existing budget
 knobs, checkpoint stamping, and results auto-separation keep working
 unmodified. The **Makefile `exp` target** splits tests **method-major,
@@ -156,10 +161,12 @@ generic `failed`.
 model`, now nested method -> dataset):**
 
 ```bash
-make exp                                                 # every method, every dataset (450 cells)
-make exp METHOD=t2t                                      # t2t only, every dataset (150 cells)
-make exp METHOD=t2t DATASET=hotpotqa_bridge              # t2t only, one dataset (25 cells)
-make exp DATASET=hotpotqa_bridge                          # every method, one dataset (75 cells)
+make exp                                                 # every method, every dataset (162 cells)
+make exp EXTRA_MODELS=TRUE                               # same, with Qwen3-8B added (288 cells)
+make exp METHOD=t2t                                      # t2t only, every dataset (54 cells)
+make exp METHOD=t2t DATASET=hotpotqa_bridge              # t2t only, one dataset (9 cells)
+make exp DATASET=hotpotqa_bridge                          # every method, one dataset (27 cells)
+CUDA_VISIBLE_DEVICES=0,1,2,3 make exp METHOD=kvtok DATASET=ropes # auto: one worker per visible GPU
 make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_GPUS=1,2,3
 ```
 
@@ -167,11 +174,13 @@ make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_GPUS=1,2,3
 
 ```bash
 make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--dry-run"          # preview the cell list only
-make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--rerun-failed" EXP_GPUS=1,2,3
-make exp METHOD=lcfx DATASET=hotpotqa_bridge EXP_ARGS="--force"           # force-rerun one method
-make exp DATASET=hotpotqa_bridge \
+make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--resume" EXP_GPUS=1,2,3   # continue a crashed sweep
+make exp DATASET=hotpotqa_bridge EXTRA_MODELS=TRUE \
   EXP_ARGS="--sharer unsloth/gemma-3-4b-it --receiver Qwen/Qwen3-8B"      # narrow to one pair
 ```
+
+Every launch reruns every selected cell fresh by default (results and
+checkpoints are overwritten in place); `--resume` is the only skip mode.
 
 Or call `scripts/run_sweep.py` directly for the same effect (what
 `_exp-dataset` shells out to) — useful when scripting outside `make`; note
@@ -179,7 +188,7 @@ it always takes a single `--dataset` (the method-loop / dataset-loop live in
 the Makefile, not the script):
 
 ```bash
-python scripts/run_sweep.py --dataset hotpotqa_bridge --method t2t --gpus 1,2,3 --rerun-failed
+python scripts/run_sweep.py --dataset hotpotqa_bridge --method t2t --gpus 1,2,3 --resume
 ```
 
 ## Full pipeline (`make sweep` + `scripts/run_all.py` — implemented)
@@ -200,7 +209,7 @@ methods -- or just the one given -- for each of its assigned datasets).
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep                          # prepare everything, then sweep at full scale, 4-way parallel
 CUDA_VISIBLE_DEVICES=1,2     make sweep SWEEP_ARGS="--dry-run"   # preview the whole plan, no GPUs touched
-CUDA_VISIBLE_DEVICES=1,2     make sweep SWEEP_ARGS="--rerun-failed"
+CUDA_VISIBLE_DEVICES=1,2     make sweep SWEEP_ARGS="--resume"    # continue a crashed sweep
 make sweep                                                        # no GPUs pinned -> single sequential worker
 CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep EXP_STAGE=smoke           # cheap reduced-budget sanity pass instead
 ```
@@ -227,11 +236,11 @@ own default is `smoke`, but `make exp`/`make sweep` pass `--stage full` by
 default via `EXP_STAGE ?= full` in the Makefile -- pass `EXP_STAGE=smoke` to
 get the script's cheap default instead), `--method {t2t,lcfx,eiyw}`
 (repeatable, default all 3),
-`--sharer`/`--receiver` (repeatable filters into the 5-model roster),
+`--sharer`/`--receiver` (repeatable filters into the 4-model roster),
 `--gpus` (comma-separated ids; default: no `CUDA_VISIBLE_DEVICES` pinning,
-one worker), `--concurrency-per-gpu` (default 1), `--rerun-failed`,
-`--force`, `--dry-run`, `--manifest`/`--log-dir` (override the default
-paths).
+one worker), `--concurrency-per-gpu` (default 1), `--resume` (skip cells
+already `ok`; default is to rerun everything fresh), `--dry-run`,
+`--manifest`/`--log-dir` (override the default paths).
 
 **Still needed:** `scripts/aggregate_results.py` (Stage 3) — flattens all
 `metrics.json` files into one comparison table. Stage 2's priority-tier
@@ -261,7 +270,7 @@ separation by dataset+pair.
   re-check `nvidia-smi` before each stage — availability will change. The
   `--gpus` flag on `run_sweep.py` is exactly how this gets respected per
   invocation.
-- **The 0.5B/0.6B pairs are much cheaper** than the 1B/4B/8B ones, so a
+- **The 0.6B pairs are much cheaper** than the 1B/4B/8B ones, so a
   `--gpus` worker can likely run several of them concurrently per GPU
   (`--concurrency-per-gpu`) even while an 8B cell is running one-at-a-time
   elsewhere — worth accounting for when scheduling Stage 2 priority tiers.
@@ -274,7 +283,7 @@ separation by dataset+pair.
 - The Stage 1 budget knobs (`MAX_TRAIN=800` etc.) are unvalidated at scale —
   the one real cell run so far was T2T (eval-only, no training knobs
   exercised). Worth watching the first LCF-X/EIYW cell, and especially the
-  first Qwen-8B<->Qwen-8B cell, for OOM before launching the full 25-pair
+  first Qwen-8B<->Qwen-8B cell, for OOM before launching the full 16-pair
   sweep unattended.
 - Stage 2 (`--priority-tier`), Stage 3 (`aggregate_results.py`), and
   pre-existing-checkpoint reuse are still just planned, not built.

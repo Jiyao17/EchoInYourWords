@@ -43,10 +43,10 @@ def build_sweep_args(args: argparse.Namespace) -> list[str]:
         forwarded += ["--sharer", sharer]
     for receiver in args.receiver or []:
         forwarded += ["--receiver", receiver]
-    if args.rerun_failed:
-        forwarded.append("--rerun-failed")
-    if args.force:
-        forwarded.append("--force")
+    if args.extra_models:
+        forwarded.append("--extra-models")
+    if args.resume:
+        forwarded.append("--resume")
     if args.dry_run:
         forwarded.append("--dry-run")
     return forwarded
@@ -77,12 +77,18 @@ def main() -> None:
         "--datasets", nargs="*", default=None, help="Override the dataset list (default: all 6)"
     )
     parser.add_argument("--stage", default="smoke", choices=["smoke", "full"])
-    parser.add_argument("--method", action="append", choices=["t2t", "lcfx", "eiyw"])
+    parser.add_argument(
+        "--method", action="append", choices=["t2t", "lcfx", "eiyw", "kvtok", "xkv"]
+    )
     parser.add_argument("--sharer", action="append")
     parser.add_argument("--receiver", action="append")
+    parser.add_argument("--extra-models", action="store_true")
     parser.add_argument("--concurrency-per-gpu", type=int, default=1)
-    parser.add_argument("--rerun-failed", action="store_true")
-    parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip cells already ok in the manifest (default: rerun everything fresh)",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 

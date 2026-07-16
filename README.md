@@ -3,11 +3,14 @@
 Research codebase for **flexible, cross-context communication between language
 models** for multi-agent collaboration: a *Sharer* and *Receiver* hold different
 evidence (and may differ in size/architecture), and we study how the Sharer can
-help the Receiver answer. It compares three methods under one standardized
+help the Receiver answer. It compares five methods under one standardized
 output contract: **T2T** (text message), **LCF-X** (position-free latent cache
-communication), and **EIYW** — our **receiver-anchored** method (the Sharer
-cache is translated into soft pseudo-tokens, conditioned on the Receiver's
-question, prepended to the Receiver's input).
+communication), and **EIYW** — a variant that reuses LCF-X's pooling design on
+the Sharer, cross-attends the pooled slots into the Receiver's own context
+embeddings, and feeds the Receiver `k·L_s` soft input tokens instead of a
+KV-cache residual — plus the compact Stage-1-only **KVTok** baseline and
+**XKV**, which translates pooled Sharer and Receiver caches into Receiver KV
+updates.
 
 - Architecture & contracts: [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)
 - Full run reference (every flag): [scripts/README.md](scripts/README.md)
@@ -62,7 +65,7 @@ make data                            # every dataset: hotpotqa_bridge, musique, 
 make data  DATASET=hotpotqa_bridge   # ...or just one: train (~70.7K) + val (5,899)
 
 make model                                    # fetch every known-good model into data/hf_cache (primary roster + pair-testing extras)
-make model MODEL=Qwen/Qwen2.5-0.5B-Instruct   # ...or just one
+make model MODEL=unsloth/Llama-3.2-1B-Instruct   # ...or just one
 ```
 
 Full lists: [Available datasets](#available-datasets-dataset) /
@@ -70,10 +73,11 @@ Full lists: [Available datasets](#available-datasets-dataset) /
 
 ### 2. Run experiments
 
-**Sweep the whole grid** — every method (T2T, LCF-X, EIYW) × every model
+**Sweep the whole grid** — every method (T2T, LCF-X, EIYW, KVTok, XKV) × every model
 pair from the primary roster × every dataset — with `make exp`, split
-**method-major, then dataset-minor**. A single command runs everything (450
-runs: 3 methods × 25 pairs × 6 datasets):
+**method-major, then dataset-minor**. A single command runs everything (270
+runs: 5 methods × 9 pairs × 6 datasets; `EXTRA_MODELS=TRUE` adds the 8B tier
+for 16 pairs / 480 runs):
 
 ```bash
 make exp     # every method, every dataset, every pair
@@ -94,10 +98,14 @@ that, omit either to run all):
 make exp METHOD=t2t                                             # t2t only, every dataset
 make exp DATASET=hotpotqa_bridge                                # every method, one dataset
 make exp METHOD=t2t DATASET=hotpotqa_bridge                     # t2t only, one dataset
+make exp METHOD=kvtok DATASET=hotpotqa_bridge                   # KVTok only, one dataset
+make exp METHOD=xkv DATASET=hotpotqa_bridge                     # XKV only, one dataset
+make exp EXTRA_MODELS=TRUE                                      # add the 8B tier: 4x4=16 pairs
+CUDA_VISIBLE_DEVICES=0,1,2,3 make exp METHOD=kvtok DATASET=ropes # one cell worker per visible GPU
 make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_GPUS=1,2,3      # pin to specific GPUs
 make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--dry-run"       # preview the cell list only
-make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--rerun-failed"  # retry failed/oom cells
-make exp METHOD=t2t DATASET=hotpotqa_bridge \
+make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--resume"  # continue a crashed sweep (skip cells already ok)
+make exp METHOD=t2t DATASET=hotpotqa_bridge EXTRA_MODELS=TRUE \
   EXP_ARGS="--sharer Qwen/Qwen3-8B --receiver Qwen/Qwen3-8B"    # narrow to one pair
 ```
 
@@ -105,9 +113,10 @@ Or run **one exact model pair** directly (skip the sweep grid entirely),
 naming `DATASET=` plus a `SHARER=`/`RECEIVER=` pair explicitly:
 
 ```bash
-make lcfx   DATASET=hotpotqa_bridge SHARER=Qwen/Qwen2.5-0.5B-Instruct RECEIVER=Qwen/Qwen3-0.6B  # train -> eval
-make eiyw   DATASET=hotpotqa_bridge SHARER=Qwen/Qwen2.5-0.5B-Instruct RECEIVER=Qwen/Qwen3-0.6B  # ours: train -> eval
-make t2t    DATASET=hotpotqa_bridge SHARER=Qwen/Qwen2.5-0.5B-Instruct RECEIVER=Qwen/Qwen3-0.6B  # baseline (no training)
+make lcfx   DATASET=hotpotqa_bridge SHARER=unsloth/Llama-3.2-1B-Instruct RECEIVER=Qwen/Qwen3-0.6B  # train -> eval
+make eiyw   DATASET=hotpotqa_bridge SHARER=unsloth/Llama-3.2-1B-Instruct RECEIVER=Qwen/Qwen3-0.6B  # ours: train -> eval
+make xkv    DATASET=hotpotqa_bridge SHARER=unsloth/Llama-3.2-1B-Instruct RECEIVER=Qwen/Qwen3-0.6B  # dual-cache KV update
+make t2t    DATASET=hotpotqa_bridge SHARER=unsloth/Llama-3.2-1B-Instruct RECEIVER=Qwen/Qwen3-0.6B  # baseline (no training)
 make single DATASET=hotpotqa_bridge MODEL=Qwen/Qwen3-0.6B                                        # upper bound: one model, all evidence
 ```
 
@@ -121,17 +130,17 @@ count** — results go to `results/<method>/<dataset>/<sharer>/<receiver>/sp<SPA
 and the checkpoint to `data/checkpoints/lcfx/<dataset>/<sharer>/<receiver>/
 sp<SPANS>/fuser.pt` (model id `/` → `--`), so runs never overwrite each other,
 including across a `SPANS=` sweep. `SHARER`/`RECEIVER` move every method at
-once; the per-method `LCFX_*`/`EIYW_*`/`T2T_*` vars override a single method.
-EIYW adds `SOFT_TOKENS` (K, the number of soft pseudo-tokens; default 64),
-`STAGE1_NUM_HEADS` (independent pooling heads over each span — default 1,
-the original single-query pooling; see [Run EIYW](#run-eiyw-our-receiver-anchored-method)),
-and `STAGE2_NUM_HEADS`/`STAGE2_HEAD_DIM` (the soft-token cross-attention
-width), and otherwise reuses the LCF-X training knobs. Its translator
-checkpoint lands at `data/checkpoints/eiyw/<dataset>/<sharer>/<receiver>/
-k<SOFT_TOKENS>/b<BOTTLENECK>/s1h<STAGE1_NUM_HEADS>/h<STAGE2_NUM_HEADS>/
-d<STAGE2_HEAD_DIM>/sp<SPANS>/translator.pt`. `lcfx-train`/`lcfx-eval` and
-`eiyw-train`/`eiyw-eval` also exist standalone if you want to separate
-training from evaluation.
+once; the per-method `LCFX_*`/`EIYW_*`/`KVTOK_*`/`XKV_*`/`T2T_*` vars override a single method.
+EIYW reuses LCF-X's pooling design (and hence its `SPANS` knob) on the Sharer —
+there's no separate `EIYW_SPANS`. Its own shape knobs are `EIYW_DMODEL`
+(translator width, default `512`, receiver-independent), `EIYW_QPL` (max pool
+queries per layer k; soft tokens = k·L_s), `EIYW_ADAPT` (w>0 scales the
+active k with the Sharer's context length), and `EIYW_BLOCKS` (fusion depth;
+see [Run EIYW](#run-eiyw-our-method)). Its translator checkpoint lands at
+`data/checkpoints/eiyw/<dataset>/<sharer>/<receiver>/sp<SPANS>_dm<EIYW_DMODEL>_k<EIYW_QPL>/translator.pt`.
+`lcfx-train`/`lcfx-eval`, `eiyw-train`/`eiyw-eval`, and
+`kvtok-train`/`kvtok-eval` and `xkv-train`/`xkv-eval` also exist standalone if
+you want to separate training from evaluation.
 
 ### Available datasets (`DATASET=`)
 
@@ -182,21 +191,26 @@ make visual ITEM=datasets   # writes results/comparison/datasets.md
 Any id below works as **either** the Sharer or the Receiver — mix families and
 sizes freely (the LCF-X fuser bridges differing shapes; specs in
 [Models](#models-sharer--receiver)). This is the **primary model roster** —
-one model per size from 0.5B to 8B, different families — used by `make exp`/
+one model per size from 0.6B to 3B, different families — used by `make exp`/
 `make sweep`/`make single` when no `MODEL=`/`SHARER=`/`RECEIVER=` is given.
 All ids are **ungated** (no `HF_TOKEN` needed). Fetch one with
 `make model MODEL=<id>` (or let the first run download it):
 
-- `Qwen/Qwen2.5-0.5B-Instruct` — 0.5B; used by LCF-X
 - `Qwen/Qwen3-0.6B` — 0.6B; used by LCF-X
-- `unsloth/Llama-3.2-1B-Instruct` — 1B; ungated mirror of Llama-3.2-1B
-- `unsloth/gemma-3-4b-it` — 4B; ungated mirror of Gemma-3-4B
+- `unsloth/gemma-3-1b-it` — 1B; ungated mirror of Gemma-3-1B
+- `unsloth/Llama-3.2-3B-Instruct` — 3B; ungated mirror of Llama-3.2-3B
+
+Opt-in large tier — added to `make exp`/`make sweep`/`make single`/`make
+visual` with `EXTRA_MODELS=TRUE` (grid grows from 3×3=9 to 4×4=16 pairs):
+
 - `Qwen/Qwen3-8B` — 8B tier
 
 Pair-testing extras, available for manual `SHARER=`/`RECEIVER=` runs and
-downloaded by `make model`, but **not** included in `make exp`/`make sweep`:
+downloaded by `make model`, but **not** included in `make exp`/`make sweep`
+(the former 1B/4B roster members live here now):
 
-- `unsloth/gemma-3-1b-it` — 1B; ungated mirror of Gemma-3-1B
+- `unsloth/Llama-3.2-1B-Instruct` — 1B; ungated mirror of Llama-3.2-1B
+- `unsloth/gemma-3-4b-it` — 4B; ungated mirror of Gemma-3-4B
 - `Qwen/Qwen3-4B` — 4B tier
 
 Defaults follow the paper (per-device batch 16 × grad-accum 16 = effective batch
@@ -228,17 +242,25 @@ dim, and depth — the LCF-X fuser's align stage bridges the differing shapes. A
 id works as either role.
 
 Primary roster (mix freely as Sharer/Receiver) — all **ungated**, no `HF_TOKEN`
-needed:
+needed. Note both Qwen3 and Gemma-3 decouple `head_dim` from
+`hidden/attn heads`, and gemma-3-1b is pure MQA (1 KV head), so its per-layer
+pooled slot (2·KV heads·head_dim = 512) is the narrowest in the pool:
 
-| Model | hidden | head_dim | layers | notes |
-|---|---|---|---|---|
-| `Qwen/Qwen3-0.6B` | 1024 | 128 | 28 | used by LCF-X |
-| `Qwen/Qwen2.5-0.5B-Instruct` | 896 | 64 | 24 | used by LCF-X |
-| `unsloth/Llama-3.2-1B-Instruct` | 2048 | 64 | 16 | **1B tier**; ungated mirror of Llama-3.2-1B |
-| `unsloth/gemma-3-4b-it` | 2560 | 256 | 34 | **4B tier**; ungated mirror of Gemma-3-4B |
-| `Qwen/Qwen3-8B` | 4096 | 128 | 36 | **8B tier** |
+| Model | hidden | head_dim | layers | attn heads | KV heads | notes |
+|---|---|---|---|---|---|---|
+| `Qwen/Qwen3-0.6B` | 1024 | 128 | 28 | 16 | 8 | used by LCF-X |
+| `unsloth/gemma-3-1b-it` | 1152 | 256 | 26 | 4 | 1 | **1B tier**; ungated mirror of Gemma-3-1B; MQA |
+| `unsloth/Llama-3.2-3B-Instruct` | 3072 | 128 | 28 | 24 | 8 | **3B tier**; ungated mirror of Llama-3.2-3B |
+| `Qwen/Qwen3-8B` | 4096 | 128 | 36 | 32 | 8 | **8B tier** — opt-in via `EXTRA_MODELS=TRUE`; not in the default `exp`/`sweep` grid |
 
-Pair-testing extras (manual `SHARER=` / `RECEIVER=` use; not part of the primary roster): `unsloth/gemma-3-1b-it`, `Qwen/Qwen3-4B`.
+Pair-testing extras (manual `SHARER=` / `RECEIVER=` use; not part of the
+primary roster — the former 1B/4B roster members live here):
+
+| Model | hidden | head_dim | layers | attn heads | KV heads | notes |
+|---|---|---|---|---|---|---|
+| `unsloth/Llama-3.2-1B-Instruct` | 2048 | 64 | 16 | 32 | 8 | ungated mirror of Llama-3.2-1B |
+| `unsloth/gemma-3-4b-it` | 2560 | 256 | 34 | 8 | 4 | ungated mirror of Gemma-3-4B; multimodal wrapper (dims under `text_config`) |
+| `Qwen/Qwen3-4B` | 2560 | 128 | 36 | 32 | 8 | |
 
 Trained fuser checkpoints are **stamped** with the Sharer/Receiver they were
 trained for, and `run_lcfx.py` hard-errors if you load one against a different
@@ -258,11 +280,11 @@ message plus its own context and answers (another `generate()` call). No
 fusion, no training — just two independent forward generations per example.
 
 ```bash
-make t2t DATASET=hotpotqa_bridge SHARER=Qwen/Qwen2.5-0.5B-Instruct RECEIVER=Qwen/Qwen3-0.6B
+make t2t DATASET=hotpotqa_bridge SHARER=unsloth/Llama-3.2-1B-Instruct RECEIVER=Qwen/Qwen3-0.6B
 
 # or the script directly
 python scripts/run_text_to_text.py --dataset data/tasks/hotpotqa_bridge_val.jsonl \
-  --sharer-model Qwen/Qwen2.5-0.5B-Instruct --receiver-model Qwen/Qwen3-0.6B \
+  --sharer-model unsloth/Llama-3.2-1B-Instruct --receiver-model Qwen/Qwen3-0.6B \
   --sharer-max-new-tokens 100 --receiver-max-new-tokens 64 \
   --output-dir results/t2t
 ```
@@ -292,7 +314,7 @@ and the Receiver answers. The two models are set independently (`--sharer-model`
 ```bash
 DATA=data/tasks/hotpotqa_bridge_val.jsonl
 python scripts/run_lcfx.py --dataset $DATA --num-spans 4 \
-  --sharer-model Qwen/Qwen2.5-0.5B-Instruct --receiver-model Qwen/Qwen3-0.6B \
+  --sharer-model unsloth/Llama-3.2-1B-Instruct --receiver-model Qwen/Qwen3-0.6B \
   --fuser-checkpoint data/checkpoints/lcfx/fuser.pt --output-dir results/lcfx
 ```
 
@@ -312,9 +334,13 @@ methods are directly comparable. Headline numbers are in `metrics.json`.
 
 Frozen Sharer/Receiver; only the fuser learns (teacher-forced next-token CE on
 the gold answer, with the Sharer summary fused into the Receiver's prompt cache).
-Optimization follows the paper: AdamW, lr 1e-4, 200-step warmup, latent 128, 2.8%
+Optimization follows the paper: AdamW, lr 1e-4, latent 128, 2.8%
 dev holdout, per-device batch 16 × grad-accum 16 = **effective batch 256**, 1
-epoch (~276 steps), EM/F1. Always name the Sharer/Receiver pair explicitly.
+epoch (~276 steps on hotpotqa), EM/F1. One deliberate deviation: warmup is
+scaled to ~10% of one epoch's optimizer steps per dataset instead of the
+paper's fixed 200 (which QASC's ~31-step epoch would never finish ramping) —
+see `WARMUP_<dataset>` in the Makefile. Always name the Sharer/Receiver pair
+explicitly.
 
 ```bash
 # Needs a large GPU (~80GB); on smaller GPUs see "Smaller GPUs".
@@ -322,7 +348,7 @@ HF_HUB_OFFLINE=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
 python scripts/train_lcfx_fuser.py \
   --train-data data/tasks/hotpotqa_bridge_train.jsonl \
   --eval-data  data/tasks/hotpotqa_bridge_val.jsonl \
-  --sharer-model Qwen/Qwen2.5-0.5B-Instruct --receiver-model Qwen/Qwen3-0.6B \
+  --sharer-model unsloth/Llama-3.2-1B-Instruct --receiver-model Qwen/Qwen3-0.6B \
   --checkpoint-out data/checkpoints/lcfx/fuser.pt
 # (dim/batch/warmup/etc. default to the paper values above)
 ```
@@ -354,11 +380,9 @@ Other memory/time knobs:
   (monitoring only; doesn't change the trained model).
 - `--bottleneck-dim D` (Makefile `BOTTLENECK`) — smaller latent dim uses less
   memory, but **changes capacity** (deviates from the paper's 128).
-- `--num-spans P` (Makefile `SPANS`) — fewer Sharer pooling spans = fewer tokens
-  for the resampler.
-- `--stage1-num-heads H1` (Makefile `STAGE1_NUM_HEADS`, EIYW only) — more
-  independent stage-1 pooling heads = a wider span-token feature dim feeding
-  stage 2 (more trainable params, more memory).
+- `--num-spans P` (Makefile `SPANS`) — span count for `--span-scheme fixed`
+  (LCF-X defaults to `--span-scheme paragraphs`, the paper's natural-block
+  scheme, where `P` follows the text). EIYW/KVTok still use `SPANS` chunks.
 
 ### Quick partial runs (limit data for verification)
 
@@ -375,7 +399,7 @@ Limit how much data each stage uses — for a fast end-to-end sanity check
 One-shot verification (tiny train + dev + test, end to end in minutes):
 
 ```bash
-P="SHARER=Qwen/Qwen2.5-0.5B-Instruct RECEIVER=Qwen/Qwen3-0.6B"
+P="SHARER=unsloth/Llama-3.2-1B-Instruct RECEIVER=Qwen/Qwen3-0.6B"
 # train 5 steps on 200 examples, dev-eval on 20
 make lcfx-train $P MAX_TRAIN=200 MAX_STEPS=5 EVAL_MAX=20 BATCH_SIZE=4 GRAD_ACCUM=2
 # evaluate on 50 test examples (+ the no-fusion floor)
@@ -387,13 +411,13 @@ Same with the scripts directly:
 ```bash
 python scripts/train_lcfx_fuser.py \
   --train-data data/tasks/hotpotqa_bridge_train.jsonl \
-  --sharer-model Qwen/Qwen2.5-0.5B-Instruct --receiver-model Qwen/Qwen3-0.6B \
+  --sharer-model unsloth/Llama-3.2-1B-Instruct --receiver-model Qwen/Qwen3-0.6B \
   --max-train-examples 200 --val-frac 0.1 --eval-max-examples 20 \
   --batch-size 4 --grad-accum 2 --max-steps 5 \
   --checkpoint-out data/checkpoints/lcfx/fuser_smoke.pt
 python scripts/run_lcfx.py \
   --dataset data/tasks/hotpotqa_bridge_val.jsonl --num-examples 50 \
-  --sharer-model Qwen/Qwen2.5-0.5B-Instruct --receiver-model Qwen/Qwen3-0.6B \
+  --sharer-model unsloth/Llama-3.2-1B-Instruct --receiver-model Qwen/Qwen3-0.6B \
   --fuser-checkpoint data/checkpoints/lcfx/fuser_smoke.pt --output-dir results/lcfx_smoke
 ```
 
@@ -408,13 +432,14 @@ python scripts/run_lcfx.py \
 | `DATASET` | `--dataset` (via `$(VAL)`/`$(TRAIN)`) | `hotpotqa_bridge` | Dataset name (see [Available datasets](#available-datasets-dataset)). |
 | `LCFX_SHARER` | `--sharer-model` | `$(SHARER)` = `Qwen/Qwen3-0.6B` | Sharer model id. |
 | `LCFX_RECEIVER` | `--receiver-model` | `$(RECEIVER)` = `Qwen/Qwen3-0.6B` | Receiver model id. |
-| `SPANS` | `--num-spans` | `5` | Sharer pooling spans (position-free summary granularity). |
+| `SPAN_SCHEME` | `--span-scheme` | `paragraphs` | Span partition: `paragraphs` = natural blank-line blocks (paper's scheme, `P` varies per example), `fixed` = `SPANS` near-equal token chunks. The pool has no `P`-dependent parameters, so a trained checkpoint accepts either (paper E.4). |
+| `SPANS` | `--num-spans` | `5` | Span count for `--span-scheme fixed`. |
 | `BOTTLENECK` | `--bottleneck-dim` | `128` | Fuser latent width. |
 | `LR` | `--lr` | `1e-4` | Learning rate. |
 | `EPOCHS` | `--epochs` | `1` | Training epochs. |
-| `BATCH_SIZE` | `--batch-size` | `16` | Per-device micro-batch. |
+| `BATCH_SIZE` | `--batch-size` | `16` (`128` on qasc) | Per-device micro-batch (qasc's short contexts fit 8x more per device; `GRAD_ACCUM` shrinks 8x to match). |
 | `GRAD_ACCUM` | `--grad-accum` | `16` | Micro-batches per optimizer step (effective batch = `BATCH_SIZE`×`GRAD_ACCUM` = 256). |
-| `WARMUP` | `--warmup` | `200` | Linear LR warmup steps. |
+| `WARMUP` | `--warmup` | ~10% of steps/epoch, per dataset | Linear LR warmup steps (`WARMUP_<dataset>` in the Makefile: hotpotqa 28, 2wiki 29, musique 5, ropes 4, qasc 3, strategyqa 1). |
 | `VAL_FRAC` | `--val-frac` | `0.028` | Dev holdout fraction of train data (when no `--eval-data`). |
 | `LOG_EVERY` | `--log-every` | `10` | Steps between training log lines. |
 | `EVAL_EVERY` | `--eval-every` | `50` | Steps between in-training dev evals. |
@@ -427,50 +452,65 @@ python scripts/run_lcfx.py \
 | `SEED` | `--seed` | `0` | Random seed. |
 | `CKPT` | `--checkpoint-out` / `--fuser-checkpoint` | `data/checkpoints/lcfx/<dataset>/<sharer>/<receiver>/sp<SPANS>/fuser.pt` | Checkpoint path (train writes it, eval reads it). |
 
-## Run EIYW (our receiver-anchored method)
+## Run EIYW (our method)
 
-The Sharer encodes its own context; its KV cache is translated into **K soft
-pseudo-tokens, conditioned on the Receiver's question**, which are **prepended to
-the Receiver's input embeddings**. The Receiver answers from its own context plus
-those soft tokens — the Sharer's information is added at the Receiver's *input*
-(not broadcast into its KV cache as in LCF-X). Only the translator is trained;
-both base models stay frozen.
+**Current iteration (v2): EIYW keeps LCF-X's paper-exact pooling on the
+Sharer and replaces everything after it with a cross-attention translator
+whose output is input tokens rather than a KV-cache residual.** The Sharer's
+context is pooled **per layer** with the paper-exact LCF-X pool (up to
+`--queries-per-layer` k position-free `[B,H,1,D]` slots per layer, in Sharer
+geometry) — so any gain over LCF-X is attributable to what happens *after*
+pooling, not to a richer pool. Flattening `K*‖V*` per slot gives the slot
+matrix `[B, k·L_s, 2·H_s·D_s]`; a `Linear` projects it to `--d-model` width
+(default 512 — a fixed, receiver-independent hyperparameter, so the adapter
+does not grow quadratically with the Receiver) with learned layer /
+query-index tags.
+The Receiver's own context enters as raw input **embeddings** — an
+embedding-table lookup, *no Receiver forward pass* (one whole frozen-model
+call cheaper than v1) — projected to the same width plus **sinusoidal
+positional encoding** (raw embeddings carry no order, unlike the KV caches v1
+pooled; the pooled slots are position-free and need none; the soft tokens get
+positions 0..S-1 from the Receiver's own RoPE at prefill). `--num-blocks`
+decoder-shaped pre-LN blocks — self-attention over the slots,
+**cross-attention from the slots into the Receiver memory** (cost
+`k·L_s × N_r`, no `N_r²` term), then an MLP — refine the slots, and an output
+head calibrated to the Receiver's measured embedding RMS emits `k·L_s` soft
+tokens **prepended to the Receiver's input embeddings** — the Receiver
+attends to them like any other input position; unlike LCF-X, nothing is
+reshaped into a KV delta (see
+[methods/eiyw/translator.py](methods/eiyw/translator.py)). The token count is
+independent of both contexts' lengths; `--adaptive-k-tokens w` makes the
+*active* k scale with the Sharer's length (`clamp(ceil(N_s/w), 1, k)`, e.g.
+`--queries-per-layer 8 --adaptive-k-tokens 256`), so short contexts emit
+fewer tokens and long ones cap at the fixed worst-case budget. Only the
+translator is trained; both base models stay frozen. (See
+[prompt/EIYW_IMPLEMENTATION_PLAN.md](prompt/EIYW_IMPLEMENTATION_PLAN.md) for
+the original receiver-anchored design.)
 
 ```bash
-# train -> eval end to end (model-stamped checkpoint per dataset+pair)
-make eiyw DATASET=hotpotqa_bridge SHARER=Qwen/Qwen2.5-0.5B-Instruct RECEIVER=Qwen/Qwen3-0.6B
+# train -> eval end to end (model-stamped checkpoint per dataset+pair+bottleneck)
+make eiyw DATASET=hotpotqa_bridge SHARER=unsloth/Llama-3.2-1B-Instruct RECEIVER=Qwen/Qwen3-0.6B
 
 # or the scripts directly
 python scripts/train_eiyw.py --train-data data/tasks/hotpotqa_bridge_train.jsonl \
-  --sharer-model Qwen/Qwen2.5-0.5B-Instruct --receiver-model Qwen/Qwen3-0.6B \
-  --num-soft-tokens 64 --num-spans 5 --checkpoint-out data/checkpoints/eiyw/translator.pt
+  --sharer-model unsloth/Llama-3.2-1B-Instruct --receiver-model Qwen/Qwen3-0.6B \
+  --d-model 512 --queries-per-layer 1 --num-blocks 1 \
+  --checkpoint-out data/checkpoints/eiyw/translator.pt
 python scripts/run_eiyw.py --dataset data/tasks/hotpotqa_bridge_val.jsonl \
-  --sharer-model Qwen/Qwen2.5-0.5B-Instruct --receiver-model Qwen/Qwen3-0.6B \
-  --num-soft-tokens 64 --translator-checkpoint data/checkpoints/eiyw/translator.pt \
+  --sharer-model unsloth/Llama-3.2-1B-Instruct --receiver-model Qwen/Qwen3-0.6B \
+  --translator-checkpoint data/checkpoints/eiyw/translator.pt \
   --output-dir results/eiyw
 ```
 
-> `--no-fusion` runs the Receiver alone (the comparison floor / plumbing check).
-> EIYW's prompt forward is grad-enabled (soft tokens lead the sequence), so it
-> uses more memory than LCF-X — lower `--batch-size` and raise `--grad-accum` to
-> keep the effective batch at 256. See
-> [prompt/EIYW_IMPLEMENTATION_PLAN.md](prompt/EIYW_IMPLEMENTATION_PLAN.md).
-
-The translator pools the Sharer cache in two stages (see
-[methods/eiyw/translator.py](methods/eiyw/translator.py)): stage 1 compresses
-each Sharer layer's tokens down to `--num-spans` (`SPANS`) span-tokens, then
-stage 2 runs `--stage2-num-heads`/`--stage2-head-dim` cross-attention from the
-`K` soft-token queries over those span-tokens. `--stage1-num-heads`
-(`STAGE1_NUM_HEADS`, default 1) widens stage 1 itself: each head learns an
-independent pooling query over a span's raw tokens (no value projection, so no
-extra information is thrown away — only *how many independent views* of a
-span survive into stage 2), which is often the tighter bottleneck since a
-single shared query has to pool every Sharer layer identically. Sweep it the
-same way as the stage-2 knobs:
-
-```bash
-make eiyw DATASET=hotpotqa_bridge STAGE1_NUM_HEADS=4 SPANS=10
-```
+> No `--translator-checkpoint` gentle-inits the translator (soft tokens near,
+> but not exactly, zero — exact-zero embeddings are a numerical degeneracy
+> that makes the frozen Receiver's backward pass non-finite), so the run is a
+> plumbing pass close to, but not guaranteed identical to, the Receiver-only
+> floor (unlike LCF-X's exact-zero KV residual, which *is* an exact
+> equality). Because the soft tokens lead the sequence, the whole Receiver
+> generation forward is grad-enabled end to end (heavier than LCF-X's
+> no_grad-prefill design) — gradient checkpointing on the frozen Receiver is
+> enabled automatically; lower `--batch-size` / raise `--grad-accum` as needed.
 
 ### All EIYW options
 
@@ -479,17 +519,17 @@ make eiyw DATASET=hotpotqa_bridge STAGE1_NUM_HEADS=4 SPANS=10
 | `DATASET` | `--dataset` (via `$(VAL)`/`$(TRAIN)`) | `hotpotqa_bridge` | Dataset name (see [Available datasets](#available-datasets-dataset)). |
 | `EIYW_SHARER` | `--sharer-model` | `$(SHARER)` = `Qwen/Qwen3-0.6B` | Sharer model id. |
 | `EIYW_RECEIVER` | `--receiver-model` | `$(RECEIVER)` = `Qwen/Qwen3-0.6B` | Receiver model id. |
-| `SOFT_TOKENS` | `--num-soft-tokens` | `64` | K, soft pseudo-tokens prepended to the Receiver input. |
-| `BOTTLENECK` | `--bottleneck-dim` | `128` | Translator latent width. |
-| `STAGE1_NUM_HEADS` | `--stage1-num-heads` | `1` | Independent stage-1 span-pooling heads (`1` = original single-query pooling). |
-| `STAGE2_NUM_HEADS` | `--stage2-num-heads` | `8` | Multi-head count for the stage-2 soft-token cross-attention. |
-| `STAGE2_HEAD_DIM` | `--stage2-head-dim` | `256` | Per-head width for the stage-2 cross-attention. |
-| `SPANS` | `--num-spans` | `5` | Sharer pooling spans. |
+| `SPAN_SCHEME` | `--span-scheme` | `paragraphs` | Sharer pooling span partition (shared with LCF-X): natural blank-line blocks or `fixed` token chunks. |
+| `SPANS` | `--num-spans` | `5` | Span count for `--span-scheme fixed`. |
+| `EIYW_QPL` | `--queries-per-layer` | `1` | Max cross-span pool queries per layer k (soft tokens = k·L_s; k=1 = paper-exact pool). |
+| `EIYW_ADAPT` | `--adaptive-k-tokens` | `0` (off) | w>0: active k = `clamp(ceil(N_s/w), 1, EIYW_QPL)` — one query per w Sharer tokens, capped (e.g. `EIYW_QPL=8 EIYW_ADAPT=256`). |
+| `EIYW_BLOCKS` | `--num-blocks` | `1` | Fusion depth (self-attn + cross-attn + MLP blocks; ~16·d_model² params each, ~4.2M at d_model 512). |
+| `EIYW_DMODEL` | `--d-model` | `512` (receiver-independent) | Translator width (slot/memory projections and blocks); `half`/`hidden` remain as sweep options. |
 | `LR` | `--lr` | `1e-4` | Learning rate. |
 | `EPOCHS` | `--epochs` | `1` | Training epochs. |
-| `BATCH_SIZE` | `--batch-size` | `16` | Per-device micro-batch (EIYW's forward is grad-enabled end to end, so it needs more memory than LCF-X at the same batch size — lower this before raising `GRAD_ACCUM`). |
-| `GRAD_ACCUM` | `--grad-accum` | `16` | Micro-batches per optimizer step (effective batch = `BATCH_SIZE`×`GRAD_ACCUM` = 256). |
-| `WARMUP` | `--warmup` | `200` | Linear LR warmup steps. |
+| `BATCH_SIZE` | `--batch-size` | `8` (EIYW-specific; global default is 16) | Per-device micro-batch. EIYW's forward is grad-enabled end to end, so it holds ~2× LCF-X's activations at the same batch — `make eiyw-train` defaults to half LCF-X's batch, and `make exp` uses halved per-pair tiers for eiyw automatically. |
+| `GRAD_ACCUM` | `--grad-accum` | `32` (EIYW-specific) | Micro-batches per optimizer step (effective batch = `BATCH_SIZE`×`GRAD_ACCUM` = 256, unchanged). |
+| `WARMUP` | `--warmup` | ~10% of steps/epoch, per dataset | Linear LR warmup steps (`WARMUP_<dataset>` in the Makefile: hotpotqa 28, 2wiki 29, musique 5, ropes 4, qasc 3, strategyqa 1). |
 | `VAL_FRAC` | `--val-frac` | `0.028` | Dev holdout fraction of train data (when no `--eval-data`). |
 | `LOG_EVERY` | `--log-every` | `10` | Steps between training log lines. |
 | `EVAL_EVERY` | `--eval-every` | `50` | Steps between in-training dev evals. |
@@ -500,7 +540,120 @@ make eiyw DATASET=hotpotqa_bridge STAGE1_NUM_HEADS=4 SPANS=10
 | `MAX_STEPS` | `--max-steps` | (empty = full epoch(s)) | Cap optimizer steps. |
 | `EVAL_N` | `--num-examples` | (empty = full val split) | Cap final-eval examples in `eiyw-eval`. |
 | `SEED` | `--seed` | `0` | Random seed. |
-| `EIYW_CKPT` | `--checkpoint-out` / `--translator-checkpoint` | `data/checkpoints/eiyw/<dataset>/<sharer>/<receiver>/k<SOFT_TOKENS>/b<BOTTLENECK>/s1h<STAGE1_NUM_HEADS>/h<STAGE2_NUM_HEADS>/d<STAGE2_HEAD_DIM>/sp<SPANS>/translator.pt` | Checkpoint path (train writes it, eval reads it). |
+| `EIYW_CKPT` | `--checkpoint-out` / `--translator-checkpoint` | `data/checkpoints/eiyw/<dataset>/<sharer>/<receiver>/sp<SPANS>_dm<EIYW_DMODEL>_k<EIYW_QPL>/translator.pt` | Checkpoint path (train writes it, eval reads it). |
+
+## Run KVTok (baseline)
+
+**KVTok reuses LCF-X's Fig. 3 Stage 1 (within-span attention) on the Sharer
+only and drops Stage 2 (across-span attention).** Its `[B,L_s·P,2·H_s·D_s]`
+summaries use a factorized linear down-projection: a position-shared
+`2·H_s·D_s → d_model` feature projection followed by a feature-shared
+`L_s·P → num_tokens` token-axis projection. This keeps KVTok linear (there is
+no Stage-2 attention) without the erroneous billion-parameter fully dense
+`(L_s·P·2·H_s·D_s) → (num_tokens·d_model)` map. The Receiver contributes only
+raw context embeddings — no initial Receiver forward or KV cache — processed
+with `receiver_proj + sinusoidal PE + LayerNorm`. Cross-attention and the
+EIYW-v2 calibrated output head emit Receiver-compatible soft tokens, which are
+prepended to the generation prompt embeddings. For Qwen3-0.6B → Qwen3-0.6B at
+`SPANS=5`, `KVTOK_TOKENS=8`, and `d_model=512`, the translator has 3,183,721
+trainable parameters (about 12.1 MiB in fp32), not 2.35B.
+
+```bash
+# train -> eval end to end (model-stamped checkpoint per dataset+pair+shape)
+make kvtok DATASET=hotpotqa_bridge SHARER=unsloth/Llama-3.2-1B-Instruct RECEIVER=Qwen/Qwen3-0.6B
+
+# or the scripts directly
+python scripts/train_kvtok.py --train-data data/tasks/hotpotqa_bridge_train.jsonl \
+  --sharer-model unsloth/Llama-3.2-1B-Instruct --receiver-model Qwen/Qwen3-0.6B \
+  --num-spans 5 --num-tokens 8 --d-model 512 --num-heads 8 \
+  --checkpoint-out data/checkpoints/kvtok/translator.pt
+python scripts/run_kvtok.py --dataset data/tasks/hotpotqa_bridge_val.jsonl \
+  --sharer-model unsloth/Llama-3.2-1B-Instruct --receiver-model Qwen/Qwen3-0.6B \
+  --num-spans 5 --num-tokens 8 --d-model 512 --num-heads 8 \
+  --translator-checkpoint data/checkpoints/kvtok/translator.pt \
+  --output-dir results/kvtok
+```
+
+> No `--translator-checkpoint` gentle-inits the translator (same rationale as
+> EIYW: exact-zero soft-token embeddings make the frozen Receiver's backward
+> pass non-finite), so the run is a plumbing pass close to the Receiver-only
+> floor. `--num-spans`, `--num-tokens`, `--d-model`, and resolved `--num-heads`
+> are baked into the translator architecture, so they must be re-supplied identically
+> between `train_kvtok.py` and `run_kvtok.py` — `load_translator` hard-errors
+> on a mismatch.
+
+### All KVTok options
+
+| Makefile var | Flag | Default | Meaning |
+|---|---|---|---|
+| `DATASET` | `--dataset` (via `$(VAL)`/`$(TRAIN)`) | `hotpotqa_bridge` | Dataset name (see [Available datasets](#available-datasets-dataset)). |
+| `KVTOK_SHARER` | `--sharer-model` | `$(SHARER)` = `Qwen/Qwen3-0.6B` | Sharer model id. |
+| `KVTOK_RECEIVER` | `--receiver-model` | `$(RECEIVER)` = `Qwen/Qwen3-0.6B` | Receiver model id. |
+| `SPANS` | `--num-spans` | `5` | Sharer Stage-1 pooling spans (shared with LCF-X/EIYW). |
+| `KVTOK_TOKENS` | `--num-tokens` | `8` | Soft tokens the down-projection outputs (free knob; baked into the checkpoint shape). |
+| `KVTOK_DMODEL` | `--d-model` | `512` | Translator width. |
+| `KVTOK_HEADS` | `--num-heads` | `8` | Cross-attention heads; resolved down to the largest value that divides `KVTOK_DMODEL`. |
+| `LR` | `--lr` | `1e-4` | Learning rate. |
+| `EPOCHS` | `--epochs` | `1` | Training epochs. |
+| `BATCH_SIZE` | `--batch-size` | `8` (KVTok-specific; global default is 16) | Per-device micro-batch. KVTok's Receiver prompt forward is grad-enabled like EIYW, so `make kvtok-train` uses EIYW's half-batch default. |
+| `GRAD_ACCUM` | `--grad-accum` | `32` (KVTok-specific) | Micro-batches per optimizer step (effective batch = `BATCH_SIZE`×`GRAD_ACCUM` = 256). |
+| `WARMUP` | `--warmup` | ~10% of total optimizer steps | Linear LR warmup steps. `make kvtok-train` and direct `scripts/train_kvtok.py` auto-compute 10% after train/eval split and `MAX_TRAIN`/`MAX_STEPS` are applied; pass `WARMUP=...` or `--warmup ...` to override. |
+| `VAL_FRAC` | `--val-frac` | `0.028` | Dev holdout fraction of train data (when no `--eval-data`). |
+| `LOG_EVERY` | `--log-every` | `10` | Steps between training log lines. |
+| `EVAL_EVERY` | `--eval-every` | `50` | Steps between in-training dev evals. |
+| `EVAL_MAX` | `--eval-max-examples` | `500` | Cap on in-training dev eval examples (monitoring only). |
+| `SAVE_EVERY` | `--save-every` | `50` | Steps between checkpoint saves. |
+| `EVAL_EM` | `--eval-em-examples` | `0` (off) | Generation-based EM/F1 on N dev examples per eval. |
+| `MAX_TRAIN` | `--max-train-examples` | (empty = all) | Cap training examples (partial run). |
+| `MAX_STEPS` | `--max-steps` | (empty = full epoch(s)) | Cap optimizer steps. |
+| `EVAL_N` | `--num-examples` | (empty = full val split) | Cap final-eval examples in `kvtok-eval`. |
+| `SEED` | `--seed` | `0` | Random seed. |
+| `KVTOK_CKPT` | `--checkpoint-out` / `--translator-checkpoint` | `data/checkpoints/kvtok/<dataset>/<sharer>/<receiver>/sp<SPANS>_tok<KVTOK_TOKENS>_dm<KVTOK_DMODEL>_h<KVTOK_HEADS>/translator.pt` | Checkpoint path (train writes it, eval reads it). |
+
+## Run XKV
+
+XKV prefills both frozen models and independently applies an expanded LCF-X
+two-stage pool to both caches. Within-span attention still maps `N → P`, but
+two independent learned cross-span queries now map `P → 2`, producing K and
+V summaries of shape `[B,H,2,D]` per layer and side. After the optional learned
+`L_s → L_r` layer-axis map, the two flattened slots double the concatenated
+width to `2*(2*H_s*D_s + 2*H_r*D_r)`. A learned bottleneck returns this to
+`[B,L_r,d]`, with `d=receiver_hidden//8`, before `n=1` attention block by
+default. This resolves to 128/144/384 for the Qwen-0.6B, Gemma-1B, and
+Llama-3B receivers. After attention, each
+raw Receiver K/V position is projected into a query and cross-attends to the
+translated layer memory. The resulting position-aware latent is gated per
+Receiver KV head and passed through one shared K up-projection and one shared V
+up-projection. Output weights remain shared across Receiver layers.
+
+Gemma-3's hybrid cache is handled explicitly. When its sliding and full-attention
+layers have different token widths, XKV uses the shortest layer width as a
+recent common window for pooling/translation. Updates are scattered back into
+each Receiver layer's original shape; older full-attention positions receive a
+zero update and remain available to the frozen Receiver. Other model families
+retain the strict equal-layer-width behavior.
+
+```bash
+# train -> eval
+make xkv DATASET=hotpotqa_bridge \
+  SHARER=unsloth/Llama-3.2-1B-Instruct RECEIVER=Qwen/Qwen3-0.6B
+
+# include XKV in the model-pair experiment sweep
+make exp METHOD=xkv DATASET=hotpotqa_bridge
+```
+
+Key settings are `XKV_DMODEL=eighth` (`receiver_hidden//8`), `XKV_BLOCKS=1`, `XKV_HEADS=8`,
+`XKV_POOL_SLOTS=2`, `XKV_DROPOUT=0.1`, plus the shared
+`SPANS`/`SPAN_SCHEME` training knobs. An explicit integer such as
+`XKV_DMODEL=256` still selects a fixed width. Set `XKV_POOL_SLOTS=1` to
+reproduce the previous one-summary pooling width.
+On ROPES, XKV defaults to `BATCH_SIZE=32` and `GRAD_ACCUM=8` for the reference
+pair (effective batch 256); the experiment sweep keeps its existing rule of
+halving the batch and doubling accumulation as pair size increases.
+Checkpoints and results are isolated under
+`sp<SPANS>_dh8_n<XKV_BLOCKS>_h<XKV_HEADS>_do<XKV_DROPOUT>_p<XKV_POOL_SLOTS>_v6`
+for the dynamic default (`d256` replaces `dh8` for an explicit width of 256;
+the dropout decimal point is rendered as `p`).
 
 ## Visual comparison table
 
@@ -510,20 +663,21 @@ Once you've got some results on disk, render a Markdown comparison table with
 ```bash
 make visual DATASET=hotpotqa_bridge                  # EM+F1 grid (default ITEM=scores)
 make visual DATASET=hotpotqa_bridge ITEM=scores       # same, explicit
-make visual DATASET=hotpotqa_bridge ITEM=params       # trainable-parameter grid (lcfx/eiyw only)
+make visual DATASET=hotpotqa_bridge ITEM=params       # trainable-parameter grid (lcfx/eiyw/kvtok/xkv)
 make visual DATASET=hotpotqa_bridge ITEM=latency      # average per-example latency grid
 make visual ITEM=datasets                              # dataset overview (DATASET= ignored)
 ```
 
 `ITEM=` picks what gets rendered:
 
-- `scores` (default) — Sharer × Receiver grid (primary roster, 5×5) for one
-  `DATASET=`, with LCF-X / EIYW / T2T EM+F1 per cell (best EM and best F1 in
+- `scores` (default) — Sharer × Receiver grid (primary roster, 3×3; 4×4 with
+  `EXTRA_MODELS=TRUE`, matching `exp`/`sweep`) for one
+  `DATASET=`, with LCF-X / EIYW / KVTok / XKV / T2T EM+F1 per cell (best EM and best F1 in
   each cell bolded). Read from `results/<method>/<dataset>/<sharer>/<receiver>/metrics.json`.
 - `params` — the same Sharer × Receiver grid, but trainable-parameter counts
-  for LCF-X / EIYW (T2T trains nothing, so it's omitted). Read from the
+  for LCF-X / EIYW / KVTok / XKV (T2T trains nothing, so it's omitted). Read from the
   `training_log.jsonl` under each checkpoint dir.
-- `latency` — the same Sharer × Receiver grid, but LCF-X / EIYW / T2T average
+- `latency` — the same Sharer × Receiver grid, but LCF-X / EIYW / KVTok / XKV / T2T average
   per-example total latency (fastest of each cell bolded). Read from the
   `average.total_ms` field of `results/<method>/<dataset>/<sharer>/<receiver>/latency.json`.
 - `datasets` — one overview table across *every* dataset (`DATASET=` is
@@ -532,7 +686,18 @@ make visual ITEM=datasets                              # dataset overview (DATAS
 
 Any method/checkpoint/result that hasn't been run yet is left blank rather
 than erroring, so you can call `make visual` at any point mid-sweep. Tables
-are written to `results/comparison/<dataset>[_params|_latency].md` (or
+use the active `SPANS`, `EIYW_DMODEL`, `EIYW_QPL`, `EIYW_ADAPT`, KVTok, and
+XKV shape settings. By default, KVTok selects the globally newest completed
+configuration for the grid and uses it strictly for every cell, so a partial
+1024-width sweep is never mixed with legacy 512-width cells. Pass
+`KVTOK_DMODEL`/`KVTOK_HEADS` for an exact shape, or
+`KVTOK_VISUAL_HP=sp5_tok8` to select the legacy layout explicitly. The chosen
+KVTok configuration is printed and embedded in the table caption. XKV uses
+the exact active `XKV_DMODEL`, `XKV_BLOCKS`, `XKV_HEADS`,
+`XKV_POOL_SLOTS`, and `XKV_DROPOUT` configuration, which is also embedded in
+the table caption. The
+tables are written
+to `results/comparison/<dataset>[_params|_latency].md` (or
 `results/comparison/datasets.md` for `ITEM=datasets`) — override the path
 with `OUT=`:
 
@@ -543,9 +708,9 @@ make visual DATASET=ropes OUT=results/comparison/ropes_custom.md
 ## Layout
 
 ```text
-methods/      # one package per method (t2t, lcfx, eiyw — all implemented)
+methods/      # one package per method (t2t, lcfx, eiyw, kvtok, xkv)
 scripts/      # runnable entrypoints (prepare / run / train) + cache config
 data/tasks/   # prepared task JSONL (reused across runs)
 results/      # run outputs (one dir per run)
-Makefile      # data / lcfx{-train,-eval} / eiyw{-train,-eval} / t2t / visual one-liners
+Makefile      # data / lcfx / eiyw / kvtok / xkv / t2t / exp / visual one-liners
 ```

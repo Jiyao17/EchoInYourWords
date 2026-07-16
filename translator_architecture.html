@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Translator Architectures — EIYW and KVTok-v2</title>
+</head>
+<body>
+<style>
+  :root {
+    --bg: #f6f5f1;
+    --surface: #ffffff;
+    --ink: #1c2124;
+    --ink-dim: #5b6165;
+    --line: #d8d4c9;
+    --line-strong: #b7b2a4;
+    --frozen: #8b8378;
+    --frozen-bg: #efece4;
+    --accent: #2b6f76;
+    --accent-bg: #e2eeee;
+    --amber: #935a1e;
+    --amber-bg: #f5e9d8;
+    --shadow: 0 1px 2px rgba(28,33,36,0.06);
+    --mono: ui-monospace, "SFMono-Regular", "Cascadia Code", "Roboto Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --t1: #1f4d52; --t2: #2b6f76; --t3: #3d8790; --t4: #5aa3ab; --t5: #79b9c0; --t6: #a3d1d5; --t7: #cfe7e9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14181a; --surface: #1b2023; --ink: #e9e6de; --ink-dim: #9aa0a3;
+      --line: #2e3335; --line-strong: #454c4f; --frozen: #9c9384; --frozen-bg: #23271f;
+      --accent: #5fb6bc; --accent-bg: #1c3336; --amber: #e0954a; --amber-bg: #3a2c1a;
+      --shadow: 0 1px 2px rgba(0,0,0,0.35);
+      --t1: #2a5c61; --t2: #3f8089; --t3: #57a0a8; --t4: #74b8bf; --t5: #8ccbd1; --t6: #a7d8dc; --t7: #cfeef0;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14181a; --surface: #1b2023; --ink: #e9e6de; --ink-dim: #9aa0a3;
+    --line: #2e3335; --line-strong: #454c4f; --frozen: #9c9384; --frozen-bg: #23271f;
+    --accent: #5fb6bc; --accent-bg: #1c3336; --amber: #e0954a; --amber-bg: #3a2c1a;
+    --shadow: 0 1px 2px rgba(0,0,0,0.35);
+    --t1: #2a5c61; --t2: #3f8089; --t3: #57a0a8; --t4: #74b8bf; --t5: #8ccbd1; --t6: #a7d8dc; --t7: #cfeef0;
+  }
+  :root[data-theme="light"] {
+    --bg: #f6f5f1; --surface: #ffffff; --ink: #1c2124; --ink-dim: #5b6165;
+    --line: #d8d4c9; --line-strong: #b7b2a4; --frozen: #8b8378; --frozen-bg: #efece4;
+    --accent: #2b6f76; --accent-bg: #e2eeee; --amber: #935a1e; --amber-bg: #f5e9d8;
+    --shadow: 0 1px 2px rgba(28,33,36,0.06);
+    --t1: #1f4d52; --t2: #2b6f76; --t3: #3d8790; --t4: #5aa3ab; --t5: #79b9c0; --t6: #a3d1d5; --t7: #cfe7e9;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  .page { max-width: 900px; margin: 0 auto; padding: 56px 24px 96px; }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--accent); font-weight: 600;
+  }
+  h1 { font-size: 30px; line-height: 1.2; margin: 10px 0 8px; text-wrap: balance; letter-spacing: -0.01em; }
+  .sub { color: var(--ink-dim); font-size: 15px; line-height: 1.6; max-width: 62ch; }
+  .sub code, .stat code { font-family: var(--mono); font-size: 0.93em; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 0.05em 0.4em; }
+
+  .statrow { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+  .stat {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 14px; box-shadow: var(--shadow); flex: 1 1 150px;
+  }
+  .stat .k { font-size: 11px; color: var(--ink-dim); text-transform: uppercase; letter-spacing: 0.06em; }
+  .stat .v { font-family: var(--mono); font-size: 17px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+
+  section { margin-top: 52px; }
+  h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-dim);
+    border-bottom: 1px solid var(--line); padding-bottom: 10px; margin: 0 0 24px; font-weight: 600;
+  }
+
+  /* ---------- pipeline ---------- */
+  .pipeline { display: flex; flex-direction: column; align-items: stretch; }
+  .node {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    box-shadow: var(--shadow); padding: 16px 20px;
+  }
+  .node--frozen { background: var(--frozen-bg); border-style: dashed; border-color: var(--line-strong); }
+  .node-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .node-title { font-weight: 600; font-size: 15px; }
+  .node-title .mono { font-family: var(--mono); font-weight: 500; }
+  .node-flag {
+    font-family: var(--mono); font-size: 11px; padding: 2px 8px; border-radius: 999px;
+    white-space: nowrap; letter-spacing: 0.01em;
+  }
+  .node-flag--frozen { background: var(--frozen-bg); color: var(--frozen); border: 1px solid var(--line-strong); }
+  .node-desc { color: var(--ink-dim); font-size: 13.5px; line-height: 1.55; margin-top: 8px; max-width: 68ch; }
+
+  .weights { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+  .weight-row {
+    display: grid; grid-template-columns: 1.3fr 1.5fr auto auto; gap: 14px; align-items: center;
+    font-family: var(--mono); font-size: 13px; padding: 7px 10px; background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px;
+  }
+  .weight-row .name { font-weight: 600; }
+  .weight-row .shape { color: var(--ink-dim); }
+  .weight-row .count { text-align: right; font-variant-numeric: tabular-nums; }
+  .tag { font-family: var(--mono); font-size: 10.5px; padding: 2px 7px; border-radius: 999px; white-space: nowrap; }
+  .tag--tune { background: var(--amber-bg); color: var(--amber); }
+  .tag--fixed { background: var(--frozen-bg); color: var(--frozen); }
+
+  .connector { display: flex; flex-direction: column; align-items: center; padding: 10px 0; }
+  .connector .line { width: 1px; height: 20px; background: var(--line-strong); }
+  .connector .shape {
+    font-family: var(--mono); font-size: 12px; color: var(--ink-dim); background: var(--bg);
+    padding: 2px 10px; border: 1px solid var(--line); border-radius: 999px; margin: 2px 0;
+  }
+  .connector .arrow { width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 7px solid var(--line-strong); }
+
+  /* ---------- capacity map ---------- */
+  .bar { display: flex; width: 100%; height: 34px; border-radius: 7px; overflow: hidden; border: 1px solid var(--line-strong); }
+  .bar > div { height: 100%; }
+  .bar-caption { color: var(--ink-dim); font-size: 12.5px; margin-top: 8px; }
+
+  table.spec { width: 100%; border-collapse: collapse; margin-top: 22px; font-size: 13.5px; }
+  table.spec th {
+    text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--ink-dim); font-weight: 600; padding: 0 10px 8px; border-bottom: 1px solid var(--line);
+  }
+  table.spec td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  table.spec td.num { font-family: var(--mono); text-align: right; font-variant-numeric: tabular-nums; }
+  table.spec td.formula { font-family: var(--mono); color: var(--ink-dim); font-size: 12.5px; }
+  table.spec tr.total td { border-bottom: none; border-top: 2px solid var(--line-strong); font-weight: 600; padding-top: 12px; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 8px; vertical-align: middle; }
+  .scroller { overflow-x: auto; }
+
+  /* ---------- ideas ---------- */
+  .ideas { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 640px) { .ideas { grid-template-columns: 1fr; } }
+  .idea {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px;
+    box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 8px;
+  }
+  .idea-head { display: flex; align-items: center; gap: 10px; }
+  .idea-letter {
+    font-family: var(--mono); font-weight: 700; font-size: 13px; color: var(--accent);
+    background: var(--accent-bg); width: 24px; height: 24px; border-radius: 6px;
+    display: flex; align-items: center; justify-content: center; flex: none;
+  }
+  .idea h3 { font-size: 14.5px; margin: 0; }
+  .idea p { margin: 0; color: var(--ink-dim); font-size: 13px; line-height: 1.55; }
+  .idea .loc { font-family: var(--mono); font-size: 11.5px; color: var(--ink-dim); }
+  .idea .impact { font-family: var(--mono); font-size: 11.5px; color: var(--amber); }
+
+  footer {
+    margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line);
+    font-family: var(--mono); font-size: 11.5px; color: var(--ink-dim); line-height: 1.7;
+  }
+
+  /* ---------- symbol legend ---------- */
+  table.legend { width: 100%; border-collapse: collapse; margin-bottom: 26px; font-size: 12.5px; }
+  table.legend th {
+    text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--ink-dim); font-weight: 600; padding: 0 10px 7px; border-bottom: 1px solid var(--line);
+  }
+  table.legend td { padding: 6px 10px; border-bottom: 1px solid var(--line); }
+  table.legend td.sym { font-family: var(--mono); font-weight: 600; }
+  table.legend td.val { font-family: var(--mono); color: var(--ink-dim); text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* ---------- svg diagram ---------- */
+  .diagram-wrap { overflow-x: auto; }
+  #diagram, #diagram-kvtok { display: block; margin: 0 auto; }
+  #diagram text, #diagram-kvtok text { font-family: var(--sans); fill: var(--ink); }
+  #diagram text.mono, #diagram-kvtok text.mono { font-family: var(--mono); }
+  #diagram text.title, #diagram-kvtok text.title { font-weight: 700; font-size: 15px; }
+  #diagram text.tagtext, #diagram-kvtok text.tagtext { font-size: 11px; fill: var(--ink-dim); }
+  #diagram text.desc, #diagram-kvtok text.desc { font-size: 12.5px; fill: var(--ink-dim); }
+  #diagram text.rowname, #diagram-kvtok text.rowname { font-size: 13px; font-weight: 600; }
+  #diagram text.rowshape, #diagram-kvtok text.rowshape { font-size: 12.5px; fill: var(--ink-dim); }
+  #diagram text.rowformula, #diagram-kvtok text.rowformula { font-size: 12.5px; }
+  #diagram rect.card-frozen, #diagram-kvtok rect.card-frozen { fill: var(--frozen-bg); stroke: var(--line-strong); stroke-dasharray: 6 5; stroke-width: 1.4; }
+  #diagram rect.card-module, #diagram-kvtok rect.card-module { fill: var(--surface); stroke: var(--line); stroke-width: 1.4; }
+  #diagram rect.row-bg, #diagram-kvtok rect.row-bg { fill: var(--bg); stroke: var(--line); }
+  #diagram rect.accent-tune, #diagram-kvtok rect.accent-tune { fill: var(--amber); }
+  #diagram rect.accent-fixed, #diagram-kvtok rect.accent-fixed { fill: var(--frozen); }
+  #diagram line.conn, #diagram-kvtok line.conn { stroke: var(--line-strong); stroke-width: 1.4; }
+  #diagram polygon.arrowhead, #diagram-kvtok polygon.arrowhead { fill: var(--line-strong); }
+  #diagram rect.conn-pill, #diagram-kvtok rect.conn-pill { fill: var(--bg); stroke: var(--line); }
+  #diagram text.conn-label, #diagram-kvtok text.conn-label { font-size: 12px; fill: var(--ink-dim); }
+</style>
+
+<div class="page">
+  <div class="eyebrow">Architecture spec &middot; methods/kvtok/translator.py + methods/eiyw/translator.py</div>
+  <h1>Modified KVTok-v2 and EIYW translator maps</h1>
+  <p class="sub">
+    The only trained module in EIYW: it turns the frozen Sharer's raw KV cache into <code>K</code> soft
+    tokens the frozen Receiver reads. Everything below is drawn from the actual run at
+    <code>k128/b512</code> — <code>num_soft_tokens=128</code>, <code>bottleneck_dim=512</code>,
+    Qwen2.5&#8209;0.5B&#8209;Instruct &rarr; Qwen3&#8209;0.6B.
+  </p>
+  <div class="statrow">
+    <div class="stat"><div class="k">Trainable params</div><div class="v">2,166,784</div></div>
+    <div class="stat"><div class="k">K (soft tokens)</div><div class="v">128</div></div>
+    <div class="stat"><div class="k">Bottleneck dim</div><div class="v">512</div></div>
+    <div class="stat"><div class="k">Sharer layers</div><div class="v">24</div></div>
+    <div class="stat"><div class="k">Receiver hidden</div><div class="v">1024</div></div>
+  </div>
+
+  <section>
+    <h2>00 &middot; KVTok-v2 modified architecture (new)</h2>
+    <p class="sub">
+      KVTok-v2 keeps KVTok's Stage-1-only pooling for the <em>Sharer cache only</em>.
+      The Receiver contributes an embedding lookup &mdash; never a KV cache &mdash; processed by
+      <code>receiver_proj + sinusoidal PE + LayerNorm</code>. A lightweight cross-attention fusion
+      and EIYW-v2-style calibrated output head emit Receiver-compatible soft tokens.
+    </p>
+    <div class="diagram-wrap">
+      <svg id="diagram-kvtok" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+  </section>
+
+  <script>
+  (function () {
+    var NS = 'http://www.w3.org/2000/svg';
+    var svg = document.getElementById('diagram-kvtok');
+    var BOX_W = 700, BOX_X = 30, VIEW_W = 760;
+    var PAD_X = 20, PAD_TOP = 16, PAD_BOTTOM = 16;
+    var ROW_H = 32, ROW_GAP = 8, LINE_H = 17;
+    var y = 10;
+
+    function el(tag, attrs, parent) {
+      var e = document.createElementNS(NS, tag);
+      for (var k in attrs) e.setAttribute(k, attrs[k]);
+      (parent || svg).appendChild(e);
+      return e;
+    }
+
+    function text(x, yy, s, cls, anchor) {
+      var t = el('text', { x: x, y: yy, class: cls || '' });
+      if (anchor) t.setAttribute('text-anchor', anchor);
+      t.textContent = s;
+      return t;
+    }
+
+    function drawIO(title, tag, lines) {
+      var h = PAD_TOP + 22 + lines.length * LINE_H + PAD_BOTTOM;
+      el('rect', { class: 'card-frozen', x: BOX_X, y: y, width: BOX_W, height: h, rx: 10 });
+      text(BOX_X + PAD_X, y + PAD_TOP + 14, title, 'title');
+      text(BOX_X + BOX_W - PAD_X, y + PAD_TOP + 13, tag, 'tagtext mono', 'end');
+      lines.forEach(function (line, i) {
+        text(BOX_X + PAD_X, y + PAD_TOP + 35 + i * LINE_H, line, 'desc');
+      });
+      y += h;
+    }
+
+    function drawBox(title, lines, rows) {
+      var descH = lines.length ? lines.length * LINE_H + 8 : 0;
+      var rowsH = rows.length * ROW_H + (rows.length - 1) * ROW_GAP;
+      var h = PAD_TOP + 22 + descH + rowsH + PAD_BOTTOM;
+      el('rect', { class: 'card-module', x: BOX_X, y: y, width: BOX_W, height: h, rx: 10 });
+      text(BOX_X + PAD_X, y + PAD_TOP + 14, title, 'title');
+      var cursorY = y + PAD_TOP + 22;
+      lines.forEach(function (line, i) {
+        text(BOX_X + PAD_X, cursorY + 13 + i * LINE_H, line, 'desc');
+      });
+      cursorY += descH;
+      rows.forEach(function (row, i) {
+        var ry = cursorY + i * (ROW_H + ROW_GAP);
+        var rx = BOX_X + PAD_X;
+        var rw = BOX_W - 2 * PAD_X;
+        el('rect', { class: 'row-bg', x: rx, y: ry, width: rw, height: ROW_H, rx: 6 });
+        el('rect', { class: row.tune ? 'accent-tune' : 'accent-fixed', x: rx, y: ry, width: 4, height: ROW_H });
+        text(rx + 16, ry + 20, row.name, 'rowname mono');
+        text(rx + 215, ry + 20, row.shape, 'rowshape mono');
+        text(rx + 455, ry + 20, row.formula, 'rowformula mono');
+      });
+      y += h;
+    }
+
+    function conn(label) {
+      var cx = BOX_X + BOX_W / 2;
+      el('line', { class: 'conn', x1: cx, y1: y, x2: cx, y2: y + 22 });
+      y += 22;
+      var w = label.length * 6.2 + 20;
+      var lx = cx - w / 2;
+      el('rect', { class: 'conn-pill', x: lx, y: y, width: w, height: 22, rx: 11 });
+      text(cx, y + 15, label, 'conn-label mono', 'middle');
+      y += 22;
+      el('line', { class: 'conn', x1: cx, y1: y, x2: cx, y2: y + 18 });
+      y += 18;
+      el('polygon', { class: 'arrowhead', points: (cx - 6) + ',' + y + ' ' + (cx + 6) + ',' + y + ' ' + cx + ',' + (y + 9) });
+      y += 23;
+    }
+
+    drawIO('Asymmetric initial inputs', 'frozen sources', [
+      'Sharer: one LM prefill -> raw KV cache. Receiver: embedding-table lookup only -> token embeddings.',
+      'No Receiver forward pass and no Receiver KV cache enter the translator.'
+    ]);
+    conn('Sharer KV: Stage-1-only pooling (N_s -> P per layer)');
+    drawBox('Sharer cache -> compact KVTok slot seeds', [
+      'Preserve L_s*P summary positions; factor feature and token-axis projections to avoid a giant dense matrix.'
+    ], [
+      { name: 'sharer_pool', shape: 'Stage-1 only', formula: '[B, L_s*P, 2*H_s*D_s]', tune: true },
+      { name: 'feature_proj', shape: 'Linear(2*H_s*D_s -> d)', formula: '[B, L_s*P, d_model]', tune: true },
+      { name: 'token_down', shape: 'Linear(L_s*P -> T)', formula: '[B, T, d_model]', tune: true },
+      { name: 'norm_slots', shape: 'LayerNorm(d)', formula: 'slot stabilization', tune: true }
+    ]);
+    conn('parallel Receiver memory path: embeddings only');
+    drawBox('Receiver embedding processing (new)', [
+      'The frozen embedding table supplies token vectors; the translator makes them order-aware memory.'
+    ], [
+      { name: 'receiver_proj', shape: 'Linear(H_hidden -> d)', formula: '[B, N_r, d_model]', tune: true },
+      { name: 'sinusoidal PE', shape: 'additive', formula: 'length-agnostic order signal', tune: false },
+      { name: 'norm_mem', shape: 'LayerNorm(d)', formula: 'memory normalization', tune: true }
+    ]);
+    conn('slot queries cross-attend over processed receiver memory');
+    drawBox('Receiver-aware refinement + EIYW-v2 style head (new)', [
+      'One cross-attention refinement step then calibrated output into receiver hidden width.'
+    ], [
+      { name: 'cross_attn + residual', shape: 'MHA(d)', formula: '[B, T, d_model]', tune: true },
+      { name: 'norm_out + out', shape: 'LayerNorm + Linear(d -> H_hidden)', formula: '[B, T, H_hidden]', tune: true },
+      { name: 'embed_scale*out_gain', shape: 'calibration', formula: 'receiver-aware output magnitude', tune: true }
+    ]);
+    conn('prepend soft tokens to Receiver prompt embeddings');
+    drawIO('Receiver generation prefill + decode', 'frozen, not trained', [
+      'This is the Receiver LM\'s first forward pass: [soft tokens ; prompt embeddings] -> generation KV.',
+      'The generation cache stays inside the Receiver and is never shared back to the translator.'
+    ]);
+
+    svg.setAttribute('viewBox', '0 0 ' + VIEW_W + ' ' + (y + 10));
+    svg.setAttribute('width', VIEW_W);
+    svg.setAttribute('height', y + 10);
+  })();
+  </script>
+
+  <section>
+    <h2>01 &middot; Data flow, in symbols</h2>
+
+    <table class="legend">
+      <thead><tr><th>Symbol</th><th>Meaning</th><th>This run</th></tr></thead>
+      <tbody>
+        <tr><td class="sym">B</td><td>batch size</td><td class="val">run-time</td></tr>
+        <tr><td class="sym">N</td><td>Sharer tokens per layer (context length)</td><td class="val">&asymp; 733 avg</td></tr>
+        <tr><td class="sym">H_s</td><td>Sharer KV heads</td><td class="val">2</td></tr>
+        <tr><td class="sym">D_s</td><td>Sharer head dim</td><td class="val">64</td></tr>
+        <tr><td class="sym">L_s</td><td>Sharer layers</td><td class="val">24</td></tr>
+        <tr><td class="sym">P</td><td>spans per layer &middot; <span class="mono">--num-spans</span></td><td class="val">4</td></tr>
+        <tr><td class="sym">K</td><td>soft tokens &middot; <span class="mono">--num-soft-tokens</span></td><td class="val">128</td></tr>
+        <tr><td class="sym">d</td><td>bottleneck dim &middot; <span class="mono">--bottleneck-dim</span></td><td class="val">512</td></tr>
+        <tr><td class="sym">H_r</td><td>Receiver hidden size</td><td class="val">1024</td></tr>
+      </tbody>
+    </table>
+
+    <div class="diagram-wrap">
+      <svg id="diagram" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+  </section>
+
+  <script>
+  (function () {
+    var NS = 'http://www.w3.org/2000/svg';
+    var svg = document.getElementById('diagram');
+    var BOX_W = 700, BOX_X = 30, VIEW_W = 760;
+    var PAD_X = 20, PAD_TOP = 16, PAD_BOTTOM = 16;
+    var ROW_H = 32, ROW_GAP = 8, LINE_H = 17;
+
+    // current-run values, used only to compute the literal "=" numbers beside each symbolic formula
+    var V = { Hs: 2, Ds: 64, Ls: 24, P: 4, K: 128, d: 512, Hr: 1024 };
+    var stok = 2 * V.Hs * V.Ds; // sharer_token_dim = 2*H_s*D_s = 256
+    function fmt(n) { return n.toLocaleString('en-US'); }
+
+    var y = 10;
+
+    function el(tag, attrs, parent) {
+      var e = document.createElementNS(NS, tag);
+      for (var k in attrs) e.setAttribute(k, attrs[k]);
+      (parent || svg).appendChild(e);
+      return e;
+    }
+
+    // renders text with H_s / D_s / L_s / H_r style subscripts
+    function richText(x, yy, str, cls, anchor) {
+      var t = el('text', { x: x, y: yy, class: cls || '' });
+      if (anchor) t.setAttribute('text-anchor', anchor);
+      var re = /([A-Za-z])_([A-Za-z0-9])/g;
+      var last = 0, m;
+      while ((m = re.exec(str)) !== null) {
+        if (m.index > last) t.appendChild(document.createTextNode(str.slice(last, m.index)));
+        t.appendChild(document.createTextNode(m[1]));
+        var sub = document.createElementNS(NS, 'tspan');
+        sub.setAttribute('baseline-shift', 'sub');
+        sub.setAttribute('font-size', '75%');
+        sub.textContent = m[2];
+        t.appendChild(sub);
+        last = re.lastIndex;
+      }
+      if (last < str.length) t.appendChild(document.createTextNode(str.slice(last)));
+      return t;
+    }
+
+    function measureWrapText(x, yy, lines, cls) {
+      lines.forEach(function (line, i) {
+        richText(x, yy + i * LINE_H, line, cls);
+      });
+      return lines.length * LINE_H;
+    }
+
+    function drawIOBox(title, tag, descLines) {
+      var h = PAD_TOP + 22 + descLines.length * LINE_H + PAD_BOTTOM;
+      el('rect', { class: 'card-frozen', x: BOX_X, y: y, width: BOX_W, height: h, rx: 10 });
+      richText(BOX_X + PAD_X, y + PAD_TOP + 14, title, 'title');
+      var tagEl = richText(BOX_X + BOX_W - PAD_X, y + PAD_TOP + 13, tag, 'tagtext', 'end');
+      measureWrapText(BOX_X + PAD_X, y + PAD_TOP + 22 + LINE_H - 4, descLines, 'desc');
+      y += h;
+    }
+
+    function drawModuleBox(title, descLines, rows) {
+      var descH = descLines.length ? descLines.length * LINE_H + 8 : 0;
+      var rowsH = rows.length * ROW_H + (rows.length - 1) * ROW_GAP;
+      var h = PAD_TOP + 22 + descH + rowsH + PAD_BOTTOM;
+      el('rect', { class: 'card-module', x: BOX_X, y: y, width: BOX_W, height: h, rx: 10 });
+      richText(BOX_X + PAD_X, y + PAD_TOP + 14, title, 'title');
+      var cursorY = y + PAD_TOP + 22;
+      if (descLines.length) {
+        measureWrapText(BOX_X + PAD_X, cursorY + LINE_H - 4, descLines, 'desc');
+        cursorY += descH;
+      }
+      rows.forEach(function (row, i) {
+        var ry = cursorY + i * (ROW_H + ROW_GAP);
+        var rx = BOX_X + PAD_X;
+        var rw = BOX_W - 2 * PAD_X;
+        el('rect', { class: 'row-bg', x: rx, y: ry, width: rw, height: ROW_H, rx: 6 });
+        el('rect', { class: row.tune ? 'accent-tune' : 'accent-fixed', x: rx, y: ry, width: 4, height: ROW_H });
+        richText(rx + 16, ry + 20, row.name, 'rowname mono');
+        richText(rx + 150, ry + 20, row.shape, 'rowshape mono');
+        var value = row.value !== undefined ? '  =  ' + fmt(row.value) : '';
+        richText(rx + 330, ry + 20, row.formula + value, 'rowformula mono');
+      });
+      y += h;
+    }
+
+    function drawConnector(label) {
+      var cx = BOX_X + BOX_W / 2;
+      el('line', { class: 'conn', x1: cx, y1: y, x2: cx, y2: y + 22 });
+      y += 22;
+      var w = label.length * 6.6 + 20;
+      var lx = cx - w / 2;
+      el('rect', { class: 'conn-pill', x: lx, y: y, width: w, height: 22, rx: 11 });
+      richText(cx, y + 15, label, 'conn-label mono', 'middle');
+      y += 22;
+      el('line', { class: 'conn', x1: cx, y1: y, x2: cx, y2: y + 18 });
+      y += 18;
+      el('polygon', { class: 'arrowhead', points: (cx - 6) + ',' + y + ' ' + (cx + 6) + ',' + y + ' ' + cx + ',' + (y + 9) });
+      y += 9 + 14;
+    }
+
+    // ---- build the pipeline ----
+    drawIOBox('Sharer context  —  Qwen2.5-0.5B-Instruct', 'frozen, not trained',
+      ['L_s layers × (K, V), each of shape [B, H_s, N, D_s]']);
+
+    drawConnector('flatten per token → [B, N, 2·H_s·D_s]');
+
+    drawModuleBox('Stage 1 — within-span pooling  (shared across all L_s layers)',
+      ['Pools each layer’s N tokens into P spans; spans stay in the raw 2·H_s·D_s-dim space —',
+       'span_key only builds the attention weights, in bottleneck (d) space.'],
+      [
+        { name: 'span_key', shape: 'Linear(2·H_s·D_s → d)', formula: 'd·(2H_sD_s + 1)', value: V.d * (stok + 1), tune: true },
+        { name: 'span_query', shape: 'Parameter(d)', formula: 'd', value: V.d, tune: true }
+      ]);
+
+    drawConnector('concat L_s layers × P spans → [B, L_s·P, 2·H_s·D_s]');
+
+    drawModuleBox('Stage 2 — receiver-anchored cross-attention',
+      ['K queries (query_bank + anchor_proj(anchor)) attend over the L_s·P span tokens;',
+       'softmax weights pool value_proj’s outputs into K vectors.'],
+      [
+        { name: 'key_proj', shape: 'Linear(2·H_s·D_s → d)', formula: 'd·(2H_sD_s + 1)', value: V.d * (stok + 1), tune: true },
+        { name: 'value_proj', shape: 'Linear(2·H_s·D_s → H_r)', formula: 'H_r·(2H_sD_s + 1)', value: V.Hr * (stok + 1), tune: false },
+        { name: 'query_bank', shape: 'Parameter(K, d)', formula: 'K·d', value: V.K * V.d, tune: true },
+        { name: 'anchor_proj', shape: 'Linear(H_r → d)', formula: 'd·(H_r + 1)', value: V.d * (V.Hr + 1), tune: true }
+      ]);
+
+    drawConnector('softmax(scores)·values → [B, K, H_r]');
+
+    drawModuleBox('Output projection',
+      ['Sized purely by the Receiver’s hidden dim — not reachable via --bottleneck-dim or --num-soft-tokens.'],
+      [
+        { name: 'out_proj', shape: 'Linear(H_r → H_r)', formula: 'H_r·(H_r + 1)', value: V.Hr * (V.Hr + 1), tune: false }
+      ]);
+
+    drawConnector('[B, K, H_r]  soft tokens');
+
+    drawIOBox('Receiver input  —  Qwen3-0.6B', 'frozen, not trained',
+      ['K soft tokens prepended to the Receiver’s own embedded question + context.']);
+
+    svg.setAttribute('viewBox', '0 0 ' + VIEW_W + ' ' + (y + 10));
+    svg.setAttribute('width', VIEW_W);
+    svg.setAttribute('height', y + 10);
+  })();
+  </script>
+  <p class="bar-caption" style="margin-top:10px; text-align:center;">
+    <span class="swatch" style="background:var(--amber)"></span>reachable via an existing <code>--flag</code>
+    &nbsp;&nbsp;&nbsp;
+    <span class="swatch" style="background:var(--frozen)"></span>fixed once Sharer/Receiver are chosen
+  </p>
+
+  <section>
+    <h2>02 &middot; Where the 2,166,784 parameters actually live</h2>
+    <div class="bar">
+      <div style="width:48.44%; background:var(--t1)" title="out_proj 48.44%"></div>
+      <div style="width:24.22%; background:var(--t2)" title="anchor_proj 24.22%"></div>
+      <div style="width:12.15%; background:var(--t3)" title="value_proj 12.15%"></div>
+      <div style="width:6.07%;  background:var(--t4)" title="span_key 6.07%"></div>
+      <div style="width:6.07%;  background:var(--t5)" title="key_proj 6.07%"></div>
+      <div style="width:3.02%;  background:var(--t6)" title="query_bank 3.02%"></div>
+      <div style="width:0.02%; background:var(--t7)" title="span_query 0.02%"></div>
+    </div>
+    <div class="bar-caption">Left &rarr; right, largest to smallest. 84.8% of the module (out_proj + anchor_proj + value_proj) is sized by <code>--receiver-model</code>'s hidden dim, not by any training hyperparameter.</div>
+
+    <div class="scroller">
+    <table class="spec">
+      <thead>
+        <tr><th></th><th>Module</th><th>Formula</th><th>Count</th><th>Share</th><th>Controlled by</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><span class="swatch" style="background:var(--t1)"></span></td><td>out_proj</td><td class="formula">H_r&middot;(H_r + 1)</td><td class="num">1,049,600</td><td class="num">48.44%</td><td class="formula">--receiver-model</td></tr>
+        <tr><td><span class="swatch" style="background:var(--t2)"></span></td><td>anchor_proj</td><td class="formula">d&middot;(H_r + 1)</td><td class="num">524,800</td><td class="num">24.22%</td><td class="formula">--receiver-model, --bottleneck-dim</td></tr>
+        <tr><td><span class="swatch" style="background:var(--t3)"></span></td><td>value_proj</td><td class="formula">H_r&middot;(2H_sD_s + 1)</td><td class="num">263,168</td><td class="num">12.15%</td><td class="formula">--receiver-model</td></tr>
+        <tr><td><span class="swatch" style="background:var(--t4)"></span></td><td>span_key</td><td class="formula">d&middot;(2H_sD_s + 1)</td><td class="num">131,584</td><td class="num">6.07%</td><td class="formula">--bottleneck-dim</td></tr>
+        <tr><td><span class="swatch" style="background:var(--t5)"></span></td><td>key_proj</td><td class="formula">d&middot;(2H_sD_s + 1)</td><td class="num">131,584</td><td class="num">6.07%</td><td class="formula">--bottleneck-dim</td></tr>
+        <tr><td><span class="swatch" style="background:var(--t6)"></span></td><td>query_bank</td><td class="formula">K&middot;d</td><td class="num">65,536</td><td class="num">3.02%</td><td class="formula">--num-soft-tokens, --bottleneck-dim</td></tr>
+        <tr><td><span class="swatch" style="background:var(--t7)"></span></td><td>span_query</td><td class="formula">d</td><td class="num">512</td><td class="num">0.02%</td><td class="formula">--bottleneck-dim</td></tr>
+        <tr class="total"><td></td><td>total</td><td class="formula"></td><td class="num">2,166,784</td><td class="num">100%</td><td></td></tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>03 &middot; If you want to add a module, not just tune one</h2>
+    <p class="sub" style="margin-bottom:18px;">
+      <span class="mono">--bottleneck-dim</span> and <span class="mono">--num-soft-tokens</span> only reach the
+      15% of the translator not pinned to <span class="mono">receiver_hidden</span>. To meaningfully grow
+      capacity beyond that, these are architecture edits to <span class="mono">methods/eiyw/translator.py</span>:
+    </p>
+    <div class="ideas">
+      <div class="idea">
+        <div class="idea-head"><div class="idea-letter">A</div><h3>Widen the output head</h3></div>
+        <p>Replace <span class="mono">out_proj</span> with a 2-layer MLP (1024&rarr;m&rarr;GELU&rarr;1024). Grows
+        the single biggest block (48%) independent of K or bottleneck_dim &mdash; currently the one place with
+        no dial at all.</p>
+        <div class="loc">translator.py:85, :164</div>
+        <div class="impact">+ ~2&times;m params, m=hidden size of new mid layer</div>
+      </div>
+      <div class="idea">
+        <div class="idea-head"><div class="idea-letter">B</div><h3>Multi-head cross-attention</h3></div>
+        <p>Stage 2 is effectively single-head (one shared query/key/value space). Split into H heads before
+        the <span class="mono">einsum</span>, concat, project &mdash; lets different soft tokens specialize on
+        different Sharer content.</p>
+        <div class="loc">translator.py:158&ndash;163</div>
+        <div class="impact">+ per-head out proj, ~H&times; small</div>
+      </div>
+      <div class="idea">
+        <div class="idea-head"><div class="idea-letter">C</div><h3>Iterative refinement</h3></div>
+        <p>Feed Stage 2's pooled output back as queries over the same 96 span tokens for a second round
+        (perceiver-style stacking) before <span class="mono">out_proj</span>.</p>
+        <div class="loc">translator.py:163&ndash;164</div>
+        <div class="impact">+ 1 more attention block's worth of params per round</div>
+      </div>
+      <div class="idea">
+        <div class="idea-head"><div class="idea-letter">D</div><h3>Per-layer Stage-1 pooling</h3></div>
+        <p><span class="mono">span_key</span>/<span class="mono">span_query</span> are shared across all 24
+        Sharer layers. Giving each layer its own would let pooling specialize per depth &mdash; expensive.</p>
+        <div class="loc">translator.py:67&ndash;68</div>
+        <div class="impact">+ &asymp;24&times; stage-1 cost, ~3.2M params</div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    checkpoint: data/checkpoints/eiyw/hotpotqa_bridge/Qwen--Qwen2.5-0.5B-Instruct/Qwen--Qwen3-0.6B/k128/b512/translator.pt<br>
+    source: methods/eiyw/translator.py (EIYWTranslator) &middot; arch stamped in checkpoint, verified against training_log.jsonl start event
+  </footer>
+</div>
+
+</body>
+</html>

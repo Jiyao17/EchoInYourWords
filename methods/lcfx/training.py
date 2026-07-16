@@ -31,6 +31,7 @@ from .cache import add_residual_inplace, extract_kv
 from .fuser import LCFXFuser
 from .model import LCFXPair
 from .schema import LCFXExample
+from .spans import paragraph_span_starts
 
 
 def _freeze(model: Any) -> None:
@@ -43,8 +44,21 @@ def _as_example(raw: Any) -> LCFXExample:
     return raw if isinstance(raw, LCFXExample) else LCFXExample.from_mapping(raw)
 
 
+def _boundaries(pair: LCFXPair, text: str, span_scheme: str) -> "list[int] | None":
+    """Span starts for one sharer text: paragraph blocks (paper's training
+    scheme) or None (fixed near-equal chunks of ``num_spans``)."""
+
+    if span_scheme == "paragraphs":
+        return paragraph_span_starts(pair.sharer_tok, text)
+    return None
+
+
 def example_loss(
-    pair: LCFXPair, fuser: LCFXFuser, example: LCFXExample, num_spans: int
+    pair: LCFXPair,
+    fuser: LCFXFuser,
+    example: LCFXExample,
+    num_spans: int,
+    span_scheme: str = "paragraphs",
 ) -> "Any | None":
     """Teacher-forced next-token CE for one example (None if it can't be scored).
 
@@ -58,8 +72,13 @@ def example_loss(
     if not example.answer:
         return None
 
-    summary, _ = pair.sharer_summary(build_sharer_encode_text(example))
-    aligned = fuser.align(summary, num_spans=num_spans)
+    sharer_text = build_sharer_encode_text(example)
+    summary, _ = pair.sharer_summary(sharer_text)
+    aligned = fuser.align(
+        summary,
+        num_spans=num_spans,
+        span_boundaries=[_boundaries(pair, sharer_text, span_scheme)],
+    )
 
     prompt_ids = pair._encode_chat(pair.receiver_tok, build_receiver_prompt(example))
     answer_ids = pair.receiver_tok(
@@ -130,6 +149,7 @@ def batched_example_loss(
     examples: list,
     num_spans: int,
     *,
+    span_scheme: str = "paragraphs",
     reduction: str = "mean",
 ) -> "Any | None":
     """Teacher-forced loss for a batch of examples (the same fusion as the single path).
@@ -163,27 +183,31 @@ def batched_example_loss(
         if stop_id is not None:
             stop_tensor = torch.tensor([stop_id], dtype=answer.dtype, device=pair.device)
             answer = torch.cat([answer, stop_tensor], dim=0)
-        sharer = pair.sharer_tok(
-            build_sharer_encode_text(ex), return_tensors="pt"
-        )["input_ids"][0].to(pair.device)
+        sharer_text = build_sharer_encode_text(ex)
+        sharer = pair.sharer_tok(sharer_text, return_tensors="pt")["input_ids"][0].to(
+            pair.device
+        )
         if prompt.numel() >= 2 and answer.numel() >= 1:
-            rows.append((prompt, answer, sharer))
+            rows.append((prompt, answer, sharer, _boundaries(pair, sharer_text, span_scheme)))
     if not rows:
         return None
 
-    prompts, answers, sharers = zip(*rows)
+    prompts, answers, sharers, boundaries = zip(*rows)
     r_pad = pair.receiver_tok.pad_token_id
     s_pad = pair.sharer_tok.pad_token_id
 
-    # Sharer: batched forward; the fuser's 2-stage learned pooling reduces over
-    # each example's real tokens (via lengths) -> aligned Receiver-shaped summary.
+    # Sharer: batched forward; the fuser's per-layer 2-stage pooling reduces over
+    # each example's real tokens (via lengths) -> per-layer Sharer summaries.
     sharer_ids, sharer_mask = _pad(list(sharers), s_pad, "right")
     with torch.no_grad():
         sharer_cache = pair.sharer(
             input_ids=sharer_ids, attention_mask=sharer_mask, use_cache=True
         ).past_key_values
     aligned = fuser.align(
-        extract_kv(sharer_cache), lengths=sharer_mask.sum(dim=1), num_spans=num_spans
+        extract_kv(sharer_cache),
+        lengths=sharer_mask.sum(dim=1),
+        num_spans=num_spans,
+        span_boundaries=list(boundaries),
     )
 
     # Receiver: left-pad prompts so prompt[:, -1] is the last real token for all.
@@ -236,7 +260,8 @@ def evaluate(
     fuser: LCFXFuser,
     eval_data: list[Any],
     *,
-    num_spans: int = 1,
+    num_spans: int = 5,
+    span_scheme: str = "paragraphs",
     batch_size: int = 16,
     max_examples: int | None = None,
 ) -> float:
@@ -254,7 +279,7 @@ def evaluate(
     with torch.no_grad():
         for chunk in _chunks(items, batch_size):
             per_example = batched_example_loss(
-                pair, fuser, chunk, num_spans, reduction="none"
+                pair, fuser, chunk, num_spans, span_scheme=span_scheme, reduction="none"
             )
             if per_example is not None:
                 total += float(per_example.sum().item())
@@ -269,7 +294,8 @@ def evaluate_em_f1(
     fuser: LCFXFuser,
     eval_data: list[Any],
     *,
-    num_spans: int = 1,
+    num_spans: int = 5,
+    span_scheme: str = "paragraphs",
     max_new_tokens: int = 64,
     max_examples: int | None = None,
     brief_path: "str | Any | None" = None,
@@ -306,7 +332,7 @@ def evaluate_em_f1(
             if not ex.answer:
                 continue
             result = run_lcfx_example(
-                ex, pair, fuser, num_spans=num_spans,
+                ex, pair, fuser, num_spans=num_spans, span_scheme=span_scheme,
                 max_new_tokens=max_new_tokens, score_fn=score_free_form,
             )
             results.append(result)
@@ -324,7 +350,11 @@ def evaluate_em_f1(
     }
 
 
-CHECKPOINT_FORMAT = 2
+# Format 3: paper-faithful pool (per-layer cross-span attention: q_layer is per
+# *sharer* layer over that layer's own span summaries) + per-layer per-type
+# (K, V) gate logits. Format <= 2 checkpoints (cross-layer pooling, scalar
+# gates) have incompatible shapes and must be retrained.
+CHECKPOINT_FORMAT = 3
 
 
 def _pair_arch(pair: LCFXPair) -> dict:
@@ -342,7 +372,11 @@ def _pair_arch(pair: LCFXPair) -> dict:
 
 
 def save_fuser(
-    fuser: LCFXFuser, path: str, pair: LCFXPair, num_spans: int | None = None
+    fuser: LCFXFuser,
+    path: str,
+    pair: LCFXPair,
+    num_spans: int | None = None,
+    span_scheme: str | None = None,
 ) -> None:
     """Save the fuser stamped with the Sharer/Receiver it was trained for.
 
@@ -363,6 +397,7 @@ def save_fuser(
         "sharer_model": pair.sharer_spec.name,
         "receiver_model": pair.receiver_spec.name,
         "num_spans": num_spans,
+        "span_scheme": span_scheme,
     }
     torch.save(payload, path)
 
@@ -379,8 +414,9 @@ def load_fuser(
 
     New-format checkpoints (written by :func:`save_fuser`) carry the model names and
     architecture. By default any mismatch against ``pair`` raises ``ValueError`` --
-    pass ``allow_model_mismatch=True`` to downgrade to a warning. Legacy bare
-    ``state_dict`` checkpoints are still accepted (rebuilt from the pair's specs).
+    pass ``allow_model_mismatch=True`` to downgrade to a warning. Checkpoints from
+    before the paper-faithful pool rewrite (format < 3, including legacy bare
+    ``state_dict`` files) have incompatible shapes and are rejected — retrain.
     """
 
     import torch
@@ -388,16 +424,18 @@ def load_fuser(
     ckpt = torch.load(path, map_location=device)
 
     if not (isinstance(ckpt, dict) and "state_dict" in ckpt):
-        # Legacy: bare state_dict with no model identity. Rebuild from the pair.
-        print(
-            f"[load_fuser] {path}: legacy checkpoint (no model stamp) -- "
-            "cannot verify Sharer/Receiver; trusting the pair passed at eval time."
+        raise ValueError(
+            f"Fuser checkpoint {path} is a legacy bare state_dict from before the "
+            "paper-faithful pool rewrite (per-layer cross-span attention, K/V gate "
+            "logits) and cannot be loaded. Retrain with scripts/train_lcfx_fuser.py."
         )
-        fuser = LCFXFuser.from_specs(
-            pair.sharer_spec, pair.receiver_spec, bottleneck_dim=bottleneck_dim, zero_init=False
+    if ckpt.get("format") != CHECKPOINT_FORMAT:
+        raise ValueError(
+            f"Fuser checkpoint {path} has format {ckpt.get('format')}, expected "
+            f"{CHECKPOINT_FORMAT}. Formats < 3 predate the paper-faithful pool "
+            "(per-layer cross-span attention, per-type gate logits) and have "
+            "incompatible shapes. Retrain with scripts/train_lcfx_fuser.py."
         )
-        fuser.load_state_dict(ckpt)
-        return fuser
 
     expected_arch = {**_pair_arch(pair), "bottleneck_dim": bottleneck_dim}
     mismatches: list[str] = []
@@ -437,7 +475,8 @@ def train_fuser(
     train_data: Iterable[Any],
     *,
     eval_data: Iterable[Any] | None = None,
-    num_spans: int = 1,
+    num_spans: int = 5,
+    span_scheme: str = "paragraphs",
     lr: float = 1e-4,
     epochs: int = 1,
     batch_size: int = 16,
@@ -519,6 +558,7 @@ def train_fuser(
             "effective_batch": batch_size * grad_accum,
             "warmup": max(0, int(warmup_steps)),
             "num_spans": num_spans,
+            "span_scheme": span_scheme,
             "bottleneck_dim": fuser.bottleneck_dim,
             "eval_em_examples": eval_em_examples,
             "checkpoint_path": checkpoint_path,
@@ -559,6 +599,7 @@ def train_fuser(
             fuser,
             eval_list,
             num_spans=num_spans,
+            span_scheme=span_scheme,
             batch_size=batch_size,
             max_examples=eval_max_examples,
         )
@@ -569,7 +610,7 @@ def train_fuser(
                 if checkpoint_path else None
             )
             scores = evaluate_em_f1(
-                pair, fuser, eval_list, num_spans=num_spans,
+                pair, fuser, eval_list, num_spans=num_spans, span_scheme=span_scheme,
                 max_examples=eval_em_examples, brief_path=brief_path,
             )
             em, f1 = scores["em"], scores["f1"]
@@ -578,7 +619,7 @@ def train_fuser(
         if is_best:
             best_eval = eval_loss
             if checkpoint_path:
-                save_fuser(fuser, checkpoint_path, pair, num_spans)
+                save_fuser(fuser, checkpoint_path, pair, num_spans, span_scheme)
                 saved_best = True
                 marker = "  (new best -> saved)"
         em_str = f" | em {em:.4f} f1 {f1:.4f}" if em is not None else ""
@@ -598,7 +639,9 @@ def train_fuser(
         for chunk in _chunks(order, batch_size):
             batch = [train_list[i] for i in chunk]
             fuser.gate_tau = _gate_tau(opt_step)
-            loss = batched_example_loss(pair, fuser, batch, num_spans, reduction="mean")
+            loss = batched_example_loss(
+                pair, fuser, batch, num_spans, span_scheme=span_scheme, reduction="mean"
+            )
             if loss is None:
                 continue
             (loss / grad_accum).backward()
@@ -633,7 +676,7 @@ def train_fuser(
             if eval_every and opt_step % eval_every == 0:
                 _maybe_eval_and_save()
             if checkpoint_path and save_every and opt_step % save_every == 0:
-                save_fuser(fuser, checkpoint_path + ".latest", pair, num_spans)
+                save_fuser(fuser, checkpoint_path + ".latest", pair, num_spans, span_scheme)
             if max_steps is not None and opt_step >= max_steps:
                 stop = True
                 break
@@ -644,7 +687,7 @@ def train_fuser(
 
     # Persist: best already saved when eval was used; otherwise save the final fuser.
     if checkpoint_path and not saved_best:
-        save_fuser(fuser, checkpoint_path, pair, num_spans)
+        save_fuser(fuser, checkpoint_path, pair, num_spans, span_scheme)
         print(f"Saved fuser checkpoint -> {checkpoint_path}")
     elif checkpoint_path:
         print(f"Best fuser checkpoint (eval_loss {best_eval:.4f}) -> {checkpoint_path}")

@@ -12,7 +12,7 @@ Example (full-context single model on cross-context HotpotQA-bridge):
 
     python scripts/run_single_model.py \
         --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
-        --model Qwen/Qwen2.5-0.5B-Instruct \
+        --model Qwen/Qwen3-0.6B \
         --output-dir results/single_model
 
 Writes the same standardized output files as the method runners.

@@ -9,6 +9,7 @@ from .fuser import LCFXFuser
 from .model import LCFXPair, ModelSpec, check_pair_compatible, load_lcfx_pair
 from .runner import LCFXResult, run_lcfx_example
 from .schema import LCFXExample
+from .spans import paragraph_span_starts
 from .training import evaluate, example_loss, load_fuser, save_fuser, train_fuser
 
 # Standard writer with this method's default name (a "method" in metadata still
@@ -29,6 +30,7 @@ __all__ = [
     "evaluate",
     "example_loss",
     "load_fuser",
+    "paragraph_span_starts",
     "save_fuser",
     "train_fuser",
     "write_run_outputs",

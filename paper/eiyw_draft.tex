@@ -275,7 +275,6 @@ identical architectures.
     \toprule
     Model & Family & Params & Layers & Hidden \\
     \midrule
-    \texttt{Qwen/Qwen2.5-0.5B-Instruct} & Qwen2.5 & 0.5B & \res & \res \\
     \texttt{Qwen/Qwen3-0.6B}            & Qwen3   & 0.6B & \res & \res \\
     \texttt{Qwen/Qwen3-4B}              & Qwen3   & 4B   & \res & \res \\
     \texttt{unsloth/Llama-3.2-1B-Instruct} & Llama 3.2 & 1B & \res & \res \\
@@ -292,7 +291,7 @@ identical architectures.
     \toprule
     Pair & \sharer & \receiver \\
     \midrule
-    Homogeneous (Qwen)   & \texttt{Qwen2.5-0.5B-Instruct} & \texttt{Qwen3-0.6B} \\
+    Homogeneous (Qwen)   & \texttt{Qwen3-0.6B} & \texttt{Qwen3-0.6B} \\
     Heterogeneous (cross-family) & \texttt{Llama-3.2-1B-Instruct} & \texttt{gemma-3-1b-it} \\
     \bottomrule
   \end{tabular}

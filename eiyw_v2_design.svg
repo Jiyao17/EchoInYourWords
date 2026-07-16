@@ -1,0 +1,177 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1560" height="1400" viewBox="0 0 1560 1400" font-family="'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrowRose" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#e11d48"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1560" height="1400" fill="#ffffff"/>
+
+  <!-- ================= TITLE ================= -->
+  <text x="780" y="30" text-anchor="middle" font-size="21" font-weight="700" fill="#0f172a">EIYW v2 — LCF-X pooled Sharer slots cross-attend into the Receiver's context embeddings</text>
+  <text x="780" y="52" text-anchor="middle" font-size="12.5" fill="#475569">Sharer side: the paper-exact LCF-X pool, unchanged → S = k·Lₛ slots (k adaptive in Nₛ, capped). Receiver side: a raw embedding lookup (no forward pass) + sinusoidal PE.</text>
+  <text x="780" y="68" text-anchor="middle" font-size="12.5" fill="#475569">Every step is annotated with its output tensor shape. B batch · Lₛ Sharer layers · Hₛ/Dₛ Sharer KV heads/head dim · Nₛ/Nᵣ context lengths · d = d_model · d_hidden = Receiver width.</text>
+
+  <!-- ================= COLUMN HEADERS ================= -->
+  <rect x="60" y="92" width="340" height="28" rx="7" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="230" y="111" text-anchor="middle" font-size="13" font-weight="700" fill="#1d4ed8">SHARER PATH — frozen LM + LCF-X pool (as-is)</text>
+
+  <rect x="1040" y="92" width="340" height="28" rx="7" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="1210" y="111" text-anchor="middle" font-size="13" font-weight="700" fill="#15803d">RECEIVER PATH — embedding lookup only (new)</text>
+
+  <!-- ======================================================================= -->
+  <!-- SHARER COLUMN                                                           -->
+  <!-- ======================================================================= -->
+  <text x="230" y="150" text-anchor="middle" font-size="11.5" fill="#334155">Sharer context (Nₛ tokens)</text>
+  <line x1="230" y1="156" x2="230" y2="172" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="130" y="174" width="200" height="60" rx="9" fill="#dbeafe" stroke="#2563eb" stroke-width="1.6"/>
+  <text x="230" y="198" text-anchor="middle" font-size="12.5" font-weight="600" fill="#0f172a">Sharer LM</text>
+  <text x="230" y="216" text-anchor="middle" font-size="10" fill="#1d4ed8">❄ frozen · prefill, use_cache</text>
+
+  <line x1="230" y1="234" x2="230" y2="268" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="242" y="249" text-anchor="start" font-size="9.5" fill="#64748b">raw KV cache, per layer ×Lₛ:</text>
+  <text x="242" y="262" text-anchor="start" font-size="9.5" font-weight="600" fill="#475569">K, V [B, Hₛ, Nₛ, Dₛ]</text>
+
+  <rect x="60" y="270" width="340" height="158" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.8"/>
+  <text x="230" y="292" text-anchor="middle" font-size="12" font-weight="700" fill="#7c2d12">LCF-X 2-stage pool (reused verbatim)</text>
+  <text x="230" y="312" text-anchor="middle" font-size="10" fill="#334155">① within-span q_base⁽ˡ⁾, per layer:</text>
+  <text x="230" y="328" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">[B, Hₛ, Nₛ, Dₛ] → [B, Hₛ, P, Dₛ]</text>
+  <text x="230" y="346" text-anchor="middle" font-size="10" fill="#334155">② cross-span, k queries q_layer⁽ˡʲ⁾:</text>
+  <text x="230" y="362" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">[B, Hₛ, P, Dₛ] → K*, V* [B, Hₛ, k, Dₛ]</text>
+  <text x="230" y="380" text-anchor="middle" font-size="10" fill="#334155">flatten K*‖V* → [B, k, 2·Hₛ·Dₛ] per layer; stack Lₛ layers</text>
+  <text x="230" y="396" text-anchor="middle" font-size="10" fill="#334155">adaptive-k: active k = clamp(⌈Nₛ/w⌉, 1, k_max)</text>
+  <text x="230" y="413" text-anchor="middle" font-size="9.5" font-style="italic" fill="#92400e">trainable: q_base, q_layer ((1+k)·Hₛ·Dₛ params per layer)</text>
+
+  <line x1="230" y1="428" x2="230" y2="462" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="242" y="443" text-anchor="start" font-size="9.5" font-weight="600" fill="#475569">slot matrix [B, S, 2·Hₛ·Dₛ]</text>
+  <text x="242" y="456" text-anchor="start" font-size="9.5" fill="#64748b">S = k·Lₛ (layer-major, query-minor)</text>
+
+  <rect x="90" y="464" width="280" height="88" rx="9" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.6"/>
+  <text x="230" y="486" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f172a">W_S : 2·Hₛ·Dₛ → d</text>
+  <text x="230" y="503" text-anchor="middle" font-size="10" fill="#334155">+ layer emb [Lₛ, d] + query emb [k, d]</text>
+  <text x="230" y="519" text-anchor="middle" font-size="10" fill="#334155">LayerNorm (norm_slots)</text>
+  <text x="230" y="537" text-anchor="middle" font-size="10" font-weight="600" fill="#7e22ce">out: Q₀ [B, S, d]</text>
+
+  <polyline points="230,552 230,576 680,576 680,598" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="455" y="570" text-anchor="middle" font-size="10.5" font-weight="600" fill="#475569">slot queries Q₀ [B, S, d]</text>
+
+  <!-- ======================================================================= -->
+  <!-- RECEIVER COLUMN                                                         -->
+  <!-- ======================================================================= -->
+  <text x="1210" y="150" text-anchor="middle" font-size="11.5" fill="#334155">Receiver context (Nᵣ tokens)</text>
+  <line x1="1210" y1="156" x2="1210" y2="172" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="1090" y="174" width="240" height="62" rx="9" fill="#dcfce7" stroke="#16a34a" stroke-width="1.6"/>
+  <text x="1210" y="196" text-anchor="middle" font-size="12.5" font-weight="600" fill="#0f172a">Embedding lookup</text>
+  <text x="1210" y="212" text-anchor="middle" font-size="10" fill="#15803d">❄ Receiver input-embedding table</text>
+  <text x="1210" y="227" text-anchor="middle" font-size="9.5" fill="#475569">no decoder forward pass (cheaper than v1)</text>
+
+  <line x1="1210" y1="236" x2="1210" y2="270" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="1222" y="256" text-anchor="start" font-size="9.5" font-weight="600" fill="#475569">[B, Nᵣ, d_hidden]</text>
+
+  <rect x="1100" y="272" width="220" height="50" rx="9" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.6"/>
+  <text x="1210" y="292" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f172a">W_R : d_hidden → d</text>
+  <text x="1210" y="309" text-anchor="middle" font-size="9.5" fill="#7e22ce">trainable</text>
+
+  <line x1="1210" y1="322" x2="1210" y2="356" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="1222" y="342" text-anchor="start" font-size="9.5" font-weight="600" fill="#475569">[B, Nᵣ, d]</text>
+
+  <!-- the gotcha-1 fix -->
+  <rect x="1050" y="358" width="320" height="88" rx="10" fill="#fff1f2" stroke="#e11d48" stroke-width="2.4"/>
+  <text x="1210" y="380" text-anchor="middle" font-size="12.5" font-weight="700" fill="#be123c">⊕ sinusoidal positional encoding</text>
+  <text x="1210" y="398" text-anchor="middle" font-size="10" fill="#334155">raw input embeddings carry no order (gotcha #1)</text>
+  <text x="1210" y="414" text-anchor="middle" font-size="10" fill="#334155">PE[Nᵣ, d] added — shape preserved:</text>
+  <text x="1210" y="431" text-anchor="middle" font-size="10" font-weight="600" fill="#be123c">[B, Nᵣ, d]  (sinusoidal ⇒ any Nᵣ at inference)</text>
+
+  <line x1="1210" y1="446" x2="1210" y2="478" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="1100" y="480" width="220" height="50" rx="9" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.6"/>
+  <text x="1210" y="500" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f172a">LayerNorm (norm_mem)</text>
+  <text x="1210" y="518" text-anchor="middle" font-size="10" font-weight="600" fill="#7e22ce">memory M [B, Nᵣ, d]</text>
+
+  <polyline points="1210,530 1210,806 866,806" fill="none" stroke="#e11d48" stroke-width="1.8" marker-end="url(#arrowRose)"/>
+  <text x="1222" y="600" text-anchor="start" font-size="10.5" font-weight="600" fill="#be123c">M [B, Nᵣ, d]</text>
+  <text x="1222" y="616" text-anchor="start" font-size="9.5" fill="#64748b">K and V of every</text>
+  <text x="1222" y="630" text-anchor="start" font-size="9.5" fill="#64748b">cross-attn sublayer;</text>
+  <text x="1222" y="644" text-anchor="start" font-size="9.5" fill="#64748b">pad mask [B, Nᵣ] from</text>
+  <text x="1222" y="658" text-anchor="start" font-size="9.5" fill="#64748b">receiver_lengths</text>
+
+  <!-- ======================================================================= -->
+  <!-- TRANSLATOR CORE                                                         -->
+  <!-- ======================================================================= -->
+  <rect x="440" y="600" width="480" height="410" rx="12" fill="#faf5ff" stroke="#9333ea" stroke-width="2"/>
+  <text x="680" y="626" text-anchor="middle" font-size="13" font-weight="700" fill="#6b21a8">EIYW translator core (trainable) — ×N pre-LN residual blocks</text>
+  <text x="680" y="644" text-anchor="middle" font-size="10" fill="#7e22ce">block input x [B, S, d]  (x = Q₀ for block 1);  x̂ denotes LN(x)</text>
+
+  <rect x="500" y="658" width="360" height="72" rx="8" fill="#ffffff" stroke="#9333ea" stroke-width="1.4"/>
+  <text x="680" y="678" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f172a">① LN → self-attn(x̂, x̂, x̂)</text>
+  <text x="680" y="695" text-anchor="middle" font-size="9.5" fill="#64748b">scores [B, heads, S, S]  →  attn [B, S, d]</text>
+  <text x="680" y="712" text-anchor="middle" font-size="9.5" font-weight="600" fill="#334155">x ← x + attn   ⇒  [B, S, d]</text>
+
+  <line x1="680" y1="730" x2="680" y2="748" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="500" y="750" width="360" height="88" rx="8" fill="#ffffff" stroke="#9333ea" stroke-width="1.4"/>
+  <text x="680" y="770" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f172a">② LN → cross-attn(Q = x̂, K = M, V = M)</text>
+  <text x="680" y="787" text-anchor="middle" font-size="9.5" fill="#64748b">scores [B, heads, S, Nᵣ] — pad positions masked</text>
+  <text x="680" y="803" text-anchor="middle" font-size="9.5" fill="#64748b">attn [B, S, d]  (the fusion step: reads Receiver context)</text>
+  <text x="680" y="820" text-anchor="middle" font-size="9.5" font-weight="600" fill="#334155">x ← x + attn   ⇒  [B, S, d]</text>
+
+  <line x1="680" y1="838" x2="680" y2="856" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="500" y="858" width="360" height="88" rx="8" fill="#ffffff" stroke="#9333ea" stroke-width="1.4"/>
+  <text x="680" y="878" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f172a">③ LN → MLP</text>
+  <text x="680" y="895" text-anchor="middle" font-size="9.5" fill="#64748b">Linear d → 4d:  [B, S, 4·d]  →  GELU</text>
+  <text x="680" y="911" text-anchor="middle" font-size="9.5" fill="#64748b">Linear 4d → d:  [B, S, d]</text>
+  <text x="680" y="928" text-anchor="middle" font-size="9.5" font-weight="600" fill="#334155">x ← x + mlp   ⇒  [B, S, d]</text>
+
+  <text x="470" y="806" text-anchor="middle" font-size="20" font-weight="700" fill="#9333ea">×N</text>
+
+  <text x="680" y="972" text-anchor="middle" font-size="10" font-weight="600" fill="#475569">after N blocks: refined slots [B, S, d]</text>
+  <text x="680" y="990" text-anchor="middle" font-size="10" fill="#64748b">attention cost per block: self S², cross S·Nᵣ — no Nᵣ² term</text>
+
+  <line x1="680" y1="1010" x2="680" y2="1036" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <!-- ================= OUTPUT HEAD ================= -->
+  <rect x="470" y="1038" width="420" height="88" rx="10" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.8"/>
+  <text x="680" y="1060" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0f172a">output head:  LN (norm_out)  ⇒  [B, S, d]</text>
+  <text x="680" y="1077" text-anchor="middle" font-size="10" fill="#334155">W_out : d → d_hidden  ⇒  [B, S, d_hidden]</text>
+  <text x="680" y="1093" text-anchor="middle" font-size="10" fill="#334155">× embed_scale · out_gain (scalars)  ⇒  [B, S, d_hidden]</text>
+  <text x="680" y="1110" text-anchor="middle" font-size="9.5" font-style="italic" fill="#0f766e">starts at ~5% of the Receiver's measured embedding RMS</text>
+
+  <line x1="680" y1="1126" x2="680" y2="1152" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="692" y="1144" text-anchor="start" font-size="10" font-weight="600" fill="#0d9488">soft tokens [B, S, d_hidden] — S = k·Lₛ; adaptive-k: k = clamp(⌈Nₛ/w⌉, 1, k_max)</text>
+
+  <!-- ================= DECODE ROW ================= -->
+  <rect x="390" y="1154" width="360" height="60" rx="9" fill="#f1f5f9" stroke="#475569" stroke-width="1.5"/>
+  <text x="570" y="1177" text-anchor="middle" font-size="11.5" font-weight="600" fill="#0f172a">concat on the sequence axis</text>
+  <text x="570" y="1196" text-anchor="middle" font-size="10" fill="#334155">[ soft ; embed(prompt) ]  ⇒  [B, S + N_prompt, d_hidden]</text>
+
+  <line x1="750" y1="1184" x2="798" y2="1184" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="800" y="1154" width="190" height="60" rx="9" fill="#dbeafe" stroke="#2563eb" stroke-width="1.6"/>
+  <text x="895" y="1177" text-anchor="middle" font-size="12" font-weight="600" fill="#0f172a">Receiver LM ❄</text>
+  <text x="895" y="1195" text-anchor="middle" font-size="9.5" fill="#1d4ed8">prefill inputs_embeds → decode</text>
+
+  <line x1="990" y1="1184" x2="1038" y2="1184" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="1048" y="1189" text-anchor="start" font-size="12.5" font-weight="700" fill="#0f172a">answer</text>
+
+  <!-- ================= NOTE PANELS ================= -->
+  <rect x="60" y="1240" width="730" height="118" rx="10" fill="#fff1f2" stroke="#e11d48" stroke-width="1.5"/>
+  <text x="76" y="1262" text-anchor="start" font-size="12.5" font-weight="700" fill="#be123c">Where positional information lives (gotcha #1 answered)</text>
+  <text x="76" y="1284" text-anchor="start" font-size="10.5" fill="#334155">• Receiver memory: sinusoidal PE added once, right after W_R — the only input that needs sequence order.</text>
+  <text x="76" y="1302" text-anchor="start" font-size="10.5" fill="#334155">• Sharer slots: no sequence PE — position-free pooled summaries; layer + query-index embeddings tag identity.</text>
+  <text x="76" y="1320" text-anchor="start" font-size="10.5" fill="#334155">• Soft tokens at decode: nothing extra — the Receiver's own RoPE assigns them positions 0…S−1 at prefill.</text>
+  <text x="76" y="1338" text-anchor="start" font-size="10.5" fill="#334155">• Ablation knob: DETR-style — re-add PE to K at every cross-attn sublayer instead of once at the input.</text>
+
+  <rect x="810" y="1240" width="690" height="134" rx="10" fill="#f8fafc" stroke="#64748b" stroke-width="1.5"/>
+  <text x="826" y="1262" text-anchor="start" font-size="12.5" font-weight="700" fill="#0f172a">What changed vs EIYW v1</text>
+  <text x="826" y="1284" text-anchor="start" font-size="10.5" fill="#334155">• Receiver pool + full receiver forward pass deleted — replaced by an embedding lookup (cheaper inference).</text>
+  <text x="826" y="1302" text-anchor="start" font-size="10.5" fill="#334155">• Fusion: self-attn over [sharer ; receiver] slots → self-attn over slots + cross-attn into token-level memory.</text>
+  <text x="826" y="1320" text-anchor="start" font-size="10.5" fill="#334155">• Soft-token count k·(Lₛ+Lᵣ) → k·Lₛ; side embedding dropped (the two streams are structurally distinct).</text>
+  <text x="826" y="1338" text-anchor="start" font-size="10.5" fill="#334155">• New: adaptive token budget — active queries k(Nₛ) = clamp(⌈Nₛ/w⌉, 1, k_max); short contexts emit fewer.</text>
+  <text x="826" y="1356" text-anchor="start" font-size="10.5" fill="#334155">• Kept: LCF-X pool verbatim, layer embeddings, RMS-calibrated output head. d_model now fixed (default 512).</text>
+</svg>

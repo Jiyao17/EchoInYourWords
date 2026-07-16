@@ -1,22 +1,28 @@
-"""Run EIYW, the receiver-anchored cross-context communication method.
+"""Run EIYW, the cross-context latent-communication method.
 
-The Sharer encodes its own context; its KV cache is translated into K soft
-pseudo-tokens — conditioned on the Receiver's question — that are prepended to
-the Receiver's input embeddings. The Receiver then answers from its own context
-plus those soft tokens.
+The Sharer's own context is pooled per layer with the paper-exact LCF-X pool
+(up to k position-free slots per layer); the projected, layer/query-tagged
+slots cross-attend into the Receiver's own context *embeddings* (a table
+lookup + sinusoidal PE — no Receiver forward pass) and become k*L_s soft
+tokens in the Receiver's embedding width, prepended to the Receiver's input
+-- and the Receiver answers with those tokens leading its own prompt.
+(Zero-init shape knobs are ignored when --translator-checkpoint is given; the
+checkpoint carries its own stamped architecture, including the adaptive-k
+setting.)
 
 Example (cross-context HotpotQA-bridge, trained translator):
 
     python scripts/run_eiyw.py \
         --dataset data/tasks/hotpotqa_bridge_val.jsonl \
-        --sharer-model Qwen/Qwen2.5-0.5B-Instruct \
+        --sharer-model unsloth/Llama-3.2-1B-Instruct \
         --receiver-model Qwen/Qwen3-0.6B \
         --translator-checkpoint data/checkpoints/eiyw/translator.pt \
         --output-dir results/eiyw_hotpotqa
 
-With no ``--translator-checkpoint`` the translator is zero-initialized (soft
-tokens start near zero — a plumbing run, not the method). Writes the four
-standardized output files.
+With no ``--translator-checkpoint`` the translator uses a gentle
+near-zero-output init, so the run sits close to (not exactly at) the
+single-model floor (see the translator docstring for why exact zero is unsafe
+for embedding-space tokens). Writes the four standardized output files.
 """
 
 from __future__ import annotations
@@ -77,40 +83,48 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--translator-checkpoint", type=Path, default=None)
     parser.add_argument(
-        "--num-soft-tokens",
-        type=int,
-        default=64,
-        help="K soft tokens; must match the trained --translator-checkpoint",
+        "--span-scheme",
+        choices=["paragraphs", "fixed"],
+        default="paragraphs",
+        help=(
+            "Sharer pooling span partition: 'paragraphs' uses the encode text's "
+            "blank-line blocks, 'fixed' uses --num-spans token chunks. The pool "
+            "has no P-dependent parameters, so any checkpoint accepts either."
+        ),
     )
     parser.add_argument(
-        "--bottleneck-dim",
+        "--num-spans",
         type=int,
-        default=256,
-        help="Translator latent dim; must match the trained checkpoint",
+        default=5,
+        help="Span count for --span-scheme fixed",
     )
-    parser.add_argument(
-        "--stage1-num-heads",
-        type=int,
-        default=1,
-        help="Multi-head count for the stage-1 span pooling; must match the trained checkpoint",
-    )
-    parser.add_argument(
-        "--stage2-num-heads",
-        type=int,
-        default=8,
-        help="Multi-head count for the stage-2 cross-attention; must match the trained checkpoint",
-    )
-    parser.add_argument(
-        "--stage2-head-dim",
-        type=int,
-        default=256,
-        help="Per-head width for the stage-2 cross-attention; must match the trained checkpoint",
-    )
-    parser.add_argument("--num-spans", type=int, default=4, help="Sharer pooling spans")
     parser.add_argument(
         "--allow-model-mismatch",
         action="store_true",
         help="Load the translator even if its stamped Sharer/Receiver differ",
+    )
+    parser.add_argument(
+        "--queries-per-layer",
+        type=int,
+        default=1,
+        help="Zero-init only (ignored with --translator-checkpoint): max Sharer pool queries per layer k (tokens = k*L_s)",
+    )
+    parser.add_argument(
+        "--adaptive-k-tokens",
+        type=int,
+        default=0,
+        help="Zero-init only (ignored with --translator-checkpoint): w>0 scales active k with Sharer length (k=clamp(ceil(N_s/w),1,k)); 0 = fixed",
+    )
+    parser.add_argument(
+        "--num-blocks",
+        type=int,
+        default=1,
+        help="Zero-init only (ignored with --translator-checkpoint): fusion block count (self-attn + cross-attn + MLP)",
+    )
+    parser.add_argument(
+        "--d-model",
+        default=512,
+        help="Zero-init only (ignored with --translator-checkpoint): translator width (int, default 512; 'half'|'hidden' as sweep options)",
     )
     parser.add_argument("--num-examples", type=int, default=None)
     parser.add_argument("--max-new-tokens", type=int, default=64)
@@ -154,25 +168,19 @@ def main() -> None:
             pair,
             device=pair.device,
             allow_model_mismatch=args.allow_model_mismatch,
-            num_soft_tokens=args.num_soft_tokens,
-            bottleneck_dim=args.bottleneck_dim,
-            stage1_num_heads=args.stage1_num_heads,
-            stage2_num_heads=args.stage2_num_heads,
-            stage2_head_dim=args.stage2_head_dim,
         ).to(pair.device)
         print(f"Loaded translator checkpoint: {args.translator_checkpoint}")
     else:
         translator = EIYWTranslator.from_specs(
             pair.sharer_spec,
             pair.receiver_spec,
-            num_soft_tokens=args.num_soft_tokens,
-            bottleneck_dim=args.bottleneck_dim,
-            stage1_num_heads=args.stage1_num_heads,
-            stage2_num_heads=args.stage2_num_heads,
-            stage2_head_dim=args.stage2_head_dim,
+            d_model=args.d_model,
+            queries_per_layer=args.queries_per_layer,
+            adaptive_k_tokens=args.adaptive_k_tokens,
+            num_blocks=args.num_blocks,
             zero_init=True,
         ).to(pair.device)
-        print("No checkpoint: using ZERO-INIT translator (soft tokens ~ 0; plumbing only)")
+        print("No checkpoint: using ZERO-INIT translator (== single-model floor)")
     translator.eval()
     print(f"Translator trainable params: {translator.trainable_parameters()}")
 
@@ -201,6 +209,7 @@ def main() -> None:
             pair,
             translator,
             num_spans=args.num_spans,
+            span_scheme=args.span_scheme,
             max_new_tokens=args.max_new_tokens,
             score_fn=score_fn,
         )
@@ -221,10 +230,7 @@ def main() -> None:
         "num_examples": len(examples),
         "max_new_tokens": args.max_new_tokens,
         "num_spans": args.num_spans,
-        "num_soft_tokens": args.num_soft_tokens,
-        "bottleneck_dim": args.bottleneck_dim,
-        "stage1_num_heads": args.stage1_num_heads,
-        "stage2_num_heads": args.stage2_num_heads,
+        "span_scheme": args.span_scheme,
         "translator_checkpoint": (
             str(args.translator_checkpoint) if args.translator_checkpoint else None
         ),
