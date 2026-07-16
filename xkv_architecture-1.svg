@@ -20,8 +20,8 @@
   <rect width="1560" height="1080" fill="#ffffff"/>
 
   <text x="780" y="34" text-anchor="middle" font-size="24" font-weight="700" fill="#0f172a">XKV — dual-cache attention translation into Receiver KV updates</text>
-  <text x="780" y="58" text-anchor="middle" font-size="12.5" fill="#475569">Both frozen models prefill once · expanded LCF-X pooling keeps Q=2 summaries per layer and side · only XKV is trained</text>
-  <text x="780" y="77" text-anchor="middle" font-size="11.5" fill="#64748b">B batch · L layers · H KV heads · N tokens · D head dimension · Q=2 slots · d=Receiver hidden/8 · n=1 block</text>
+  <text x="780" y="58" text-anchor="middle" font-size="12.5" fill="#475569">Both frozen models prefill once · symmetric vectorized N→k attention pooling · only XKV is trained</text>
+  <text x="780" y="77" text-anchor="middle" font-size="11.5" fill="#64748b">B batch · L layers · H KV heads · N tokens · D head dimension · k=2 slots · d=Receiver hidden/8 · n=1 block</text>
 
   <!-- Input paths -->
   <rect x="55" y="103" width="640" height="34" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
@@ -50,18 +50,18 @@
 
   <!-- Pools -->
   <rect x="165" y="289" width="420" height="132" rx="11" fill="#fffbeb" stroke="#d97706" stroke-width="1.8" filter="url(#shadow)"/>
-  <text x="375" y="314" text-anchor="middle" font-size="12.5" font-weight="700" fill="#92400e">LCF-X two-stage Sharer pool</text>
-  <text x="375" y="337" text-anchor="middle" font-size="10.5" fill="#334155">1 · within-span attention: Nₛ → Pₛ</text>
-  <text x="375" y="357" text-anchor="middle" font-size="10.5" fill="#334155">2 · cross-span attention: Pₛ → Q=2</text>
-  <text x="375" y="380" text-anchor="middle" font-size="10.5" font-weight="600" fill="#7c2d12">per layer: Kₛ*,Vₛ* [B,Hₛ,2,Dₛ]</text>
-  <text x="375" y="401" text-anchor="middle" font-size="9.5" fill="#64748b">q_base,s + two independent learned q_layer,s queries</text>
+  <text x="375" y="314" text-anchor="middle" font-size="12.5" font-weight="700" fill="#92400e">Direct Sharer attention pool</text>
+  <text x="375" y="337" text-anchor="middle" font-size="10.5" fill="#334155">k learned queries per layer/head: Nₛ → k</text>
+  <text x="375" y="357" text-anchor="middle" font-size="10.5" fill="#334155">vectorized across Sharer layers, heads, and slots · no spans</text>
+  <text x="375" y="380" text-anchor="middle" font-size="10.5" font-weight="600" fill="#7c2d12">per layer: Kₛ*,Vₛ* [B,Hₛ,k,Dₛ]</text>
+  <text x="375" y="401" text-anchor="middle" font-size="9.5" fill="#64748b">q_direct,s · γₛ=exp(gₛ), init 1 · full Kaiming query scale</text>
 
   <rect x="975" y="289" width="420" height="132" rx="11" fill="#fffbeb" stroke="#d97706" stroke-width="1.8" filter="url(#shadow)"/>
-  <text x="1185" y="314" text-anchor="middle" font-size="12.5" font-weight="700" fill="#92400e">LCF-X two-stage Receiver pool</text>
-  <text x="1185" y="337" text-anchor="middle" font-size="10.5" fill="#334155">1 · within-span attention: Nᵣ → Pᵣ</text>
-  <text x="1185" y="357" text-anchor="middle" font-size="10.5" fill="#334155">2 · cross-span attention: Pᵣ → Q=2</text>
-  <text x="1185" y="380" text-anchor="middle" font-size="10.5" font-weight="600" fill="#7c2d12">per layer: Kᵣ*,Vᵣ* [B,Hᵣ,2,Dᵣ]</text>
-  <text x="1185" y="401" text-anchor="middle" font-size="9.5" fill="#64748b">q_base,r + two independent learned q_layer,r queries</text>
+  <text x="1185" y="314" text-anchor="middle" font-size="12.5" font-weight="700" fill="#92400e">Direct Receiver attention pool</text>
+  <text x="1185" y="337" text-anchor="middle" font-size="10.5" fill="#334155">k learned queries per layer/head: Nᵣ → k</text>
+  <text x="1185" y="357" text-anchor="middle" font-size="10.5" fill="#334155">vectorized across Receiver layers, heads, and slots · no spans</text>
+  <text x="1185" y="380" text-anchor="middle" font-size="10.5" font-weight="600" fill="#7c2d12">per layer: Kᵣ*,Vᵣ* [B,Hᵣ,k,Dᵣ]</text>
+  <text x="1185" y="401" text-anchor="middle" font-size="9.5" fill="#64748b">q_direct,r · γᵣ=exp(gᵣ), init 1 · full Kaiming query scale</text>
 
   <!-- Converge -->
   <polyline points="375,421 375,453 695,453 695,471" fill="none" stroke="#2563eb" stroke-width="1.8" marker-end="url(#arrowBlue)"/>
@@ -71,7 +71,7 @@
   <rect x="530" y="474" width="500" height="104" rx="11" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.9" filter="url(#shadow)"/>
   <text x="780" y="499" text-anchor="middle" font-size="13" font-weight="700" fill="#6b21a8">Per-layer concatenate + heterogeneous bottleneck</text>
   <text x="780" y="522" text-anchor="middle" font-size="10.5" fill="#334155">xₗ = [flat(Kₛ*), flat(Vₛ*), flat(Kᵣ*), flat(Vᵣ*)]</text>
-  <text x="780" y="543" text-anchor="middle" font-size="10.5" fill="#334155">W_down → MLP → LayerNorm · width 2×(2HₛDₛ+2HᵣDᵣ) → d=hiddenᵣ/8</text>
+  <text x="780" y="543" text-anchor="middle" font-size="10.5" fill="#334155">W_down → MLP → LayerNorm · width 2k(HₛDₛ+HᵣDᵣ) → d=hiddenᵣ/8</text>
   <text x="780" y="564" text-anchor="middle" font-size="10.5" font-weight="600" fill="#7e22ce">joint layer memory Z₀ [B,Lᵣ,d]</text>
 
   <line x1="780" y1="578" x2="780" y2="602" stroke="#7e22ce" stroke-width="1.9" marker-end="url(#arrowPurple)"/>
@@ -99,10 +99,10 @@
 
   <!-- Output -->
   <rect x="385" y="892" width="790" height="104" rx="12" fill="#fff1f2" stroke="#e11d48" stroke-width="2" filter="url(#shadow)"/>
-  <text x="780" y="917" text-anchor="middle" font-size="13" font-weight="700" fill="#be123c">Shared gated K/V update head</text>
-  <text x="780" y="940" text-anchor="middle" font-size="10.5" fill="#334155">ΔK=W_up,K U · ΔV=W_up,V U · per-head αK/αV · per-layer/type gates</text>
+  <text x="780" y="917" text-anchor="middle" font-size="13" font-weight="700" fill="#be123c">Shared K/V update head</text>
+  <text x="780" y="940" text-anchor="middle" font-size="10.5" fill="#334155">ΔK=W_up,K U · ΔV=W_up,V U · deterministic per-head αK/αV · no layer/type gates</text>
   <text x="780" y="963" text-anchor="middle" font-size="10.5" font-weight="600" fill="#be123c">ΔK,ΔV: Lᵣ × [B,Hᵣ,Nᵣ,Dᵣ] · padded/older Gemma positions stay zero</text>
-  <text x="780" y="983" text-anchor="middle" font-size="10" fill="#64748b">Cᵣ′ = Cᵣ + gated(ΔCᵣ) · zero-initialized up-projections</text>
+  <text x="780" y="983" text-anchor="middle" font-size="10" fill="#64748b">Cᵣ′ = Cᵣ + α ⊙ ΔCᵣ · zero-initialized up-projections</text>
 
   <line x1="1175" y1="944" x2="1260" y2="944" stroke="#e11d48" stroke-width="1.9" marker-end="url(#arrow)"/>
   <rect x="1263" y="897" width="240" height="94" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="1.7" filter="url(#shadow)"/>

@@ -52,18 +52,24 @@ def main() -> None:
         d_model=256,
         num_blocks=1,
     )
-    assert default.trainable_parameters() == 5_437_256
+    assert default.trainable_parameters() == 5_379_858
     assert default.position_decoder is not None
     assert default.output_mode == "position_cross_attention"
+    assert default.pooling_mode == "direct_attention_k"
     assert default.pool_slots == 2
-    assert tuple(default.sharer_pool.q_layer.shape) == (28, 2, 8, 128)
+    assert tuple(default.sharer_pool.query.shape) == (28, 8, 2, 128)
+    assert tuple(default.receiver_pool.query.shape) == (28, 8, 2, 128)
+    assert default.sharer_pool.logit_scale.exp().item() == 1.0
+    assert default.receiver_pool.logit_scale.exp().item() == 1.0
     assert tuple(default.down.weight.shape) == (256, 8192)
     assert default.up_key.in_features == 256
     assert default.up_value.in_features == 256
+    assert not hasattr(default, "layer_gate")
+    assert not hasattr(default, "gate_tau")
     qwen_spec = SimpleNamespace(layers=28, kv_heads=8, head_dim=128, hidden=1024)
     dynamic_default = XKVTranslator.from_specs(qwen_spec, qwen_spec)
     assert dynamic_default.d_model == 128
-    assert dynamic_default.trainable_parameters() == 2_281_416
+    assert dynamic_default.trainable_parameters() == 2_224_018
     deeper = XKVTranslator(
         sharer_layers=28,
         sharer_kv_heads=8,
@@ -95,20 +101,60 @@ def main() -> None:
     receiver_mask = torch.tensor([[1, 1, 1, 1, 1], [0, 0, 1, 1, 1]])
 
     zero = XKVTranslator(**kwargs, zero_init=True).eval()
+    three_slot = XKVTranslator(**kwargs, pool_slots=3, zero_init=True).eval()
+    assert tuple(three_slot.sharer_pool.query.shape) == (3, 2, 3, 4)
+    assert tuple(three_slot.receiver_pool.query.shape) == (2, 1, 3, 6)
+    assert three_slot.down.in_features == 2 * 3 * (2 * 4 + 1 * 6)
     pooled = zero.sharer_pool(
         sharer,
         attention_mask=sharer_mask,
-        num_spans=2,
     )
     assert pooled.shape == (2, 3, 2 * 2 * 2 * 4)
     pooled_keys = pooled[..., : 2 * 2 * 4].reshape(2, 3, 2, 2, 4)
     assert not torch.allclose(pooled_keys[:, :, :, 0], pooled_keys[:, :, :, 1])
+    zero.set_pool_diagnostics(True)
+    zero.translate(
+        sharer,
+        receiver,
+        sharer_attention_mask=sharer_mask,
+        receiver_attention_mask=receiver_mask,
+    )
+    zero.set_pool_diagnostics(False)
+    diagnostics = zero.pool_diagnostics()
+    assert set(diagnostics) == {
+        "sharer_pool_entropy",
+        "sharer_pool_slot_cosine",
+        "sharer_pool_scale",
+        "receiver_pool_entropy",
+        "receiver_pool_slot_cosine",
+        "receiver_pool_scale",
+    }
+    assert 0.0 <= diagnostics["sharer_pool_entropy"] <= 1.000001
+    assert 0.0 <= diagnostics["receiver_pool_entropy"] <= 1.000001
+    assert -1.000001 <= diagnostics["sharer_pool_slot_cosine"] <= 1.000001
+    assert -1.000001 <= diagnostics["receiver_pool_slot_cosine"] <= 1.000001
+    assert diagnostics["sharer_pool_scale"] == 1.0
+    assert diagnostics["receiver_pool_scale"] == 1.0
+    receiver_pooled = zero.receiver_pool(
+        receiver,
+        attention_mask=receiver_mask,
+    )
+    assert receiver_pooled.shape == (2, 2, 2 * 2 * 1 * 6)
+    assert torch.isfinite(receiver_pooled).all()
+    receiver_corrupt = [(key.clone(), value.clone()) for key, value in receiver]
+    for key, value in receiver_corrupt:
+        key[1, :, :2, :] = 10_000
+        value[1, :, :2, :] = -10_000
+    receiver_pooled_corrupt = zero.receiver_pool(
+        receiver_corrupt,
+        attention_mask=receiver_mask,
+    )
+    assert torch.allclose(receiver_pooled[1], receiver_pooled_corrupt[1])
     residual = zero.translate(
         sharer,
         receiver,
         sharer_attention_mask=sharer_mask,
         receiver_attention_mask=receiver_mask,
-        num_spans=2,
     )
     assert len(residual) == 2
     assert residual[0][0].shape == (2, 1, 5, 6)
@@ -126,7 +172,6 @@ def main() -> None:
         receiver,
         sharer_attention_mask=sharer_mask,
         receiver_attention_mask=receiver_mask,
-        num_spans=2,
     )
     loss = sum(key.square().mean() + value.square().mean() for key, value in residual)
     loss.backward()
@@ -147,18 +192,13 @@ def main() -> None:
     # Receiver-shaped residual with zeros over each full layer's older prefix.
     hybrid_sharer = _variable_cache(2, 2, [5, 7, 5], 4)
     hybrid_receiver = _variable_cache(2, 1, [5, 7], 6)
-    hybrid_mask = torch.tensor(
-        [[1, 1, 1, 1, 1, 1, 1], [0, 0, 0, 1, 1, 1, 1]]
-    )
+    hybrid_mask = torch.tensor([[1, 1, 1, 1, 1, 1, 1], [0, 0, 0, 1, 1, 1, 1]])
     trained.zero_grad(set_to_none=True)
     hybrid_residual = trained.translate(
         hybrid_sharer,
         hybrid_receiver,
         sharer_attention_mask=hybrid_mask,
         receiver_attention_mask=hybrid_mask,
-        num_spans=2,
-        sharer_span_boundaries=[[0, 3], [0, 2]],
-        receiver_span_boundaries=[[0, 4], [0, 2]],
         sharer_windowed_cache=True,
         receiver_windowed_cache=True,
     )
@@ -167,8 +207,7 @@ def main() -> None:
     assert hybrid_residual[1][0][:, :, :2].count_nonzero() == 0
     assert hybrid_residual[1][1][:, :, :2].count_nonzero() == 0
     hybrid_loss = sum(
-        key.square().mean() + value.square().mean()
-        for key, value in hybrid_residual
+        key.square().mean() + value.square().mean() for key, value in hybrid_residual
     )
     hybrid_loss.backward()
     assert all(
@@ -177,7 +216,7 @@ def main() -> None:
         if parameter.requires_grad
     )
     try:
-        trained.translate(hybrid_sharer, hybrid_receiver, num_spans=2)
+        trained.translate(hybrid_sharer, hybrid_receiver)
     except ValueError as exc:
         assert "Gemma-3 hybrid cache" in str(exc)
     else:
@@ -202,7 +241,7 @@ def main() -> None:
     assert dynamic.d_model == 8
     with tempfile.TemporaryDirectory() as directory:
         path = str(Path(directory) / "translator.pt")
-        save_translator(trained, path, specs, num_spans=2, span_scheme="fixed")
+        save_translator(trained, path, specs)
         loaded = load_translator(
             path,
             specs,
@@ -215,7 +254,7 @@ def main() -> None:
         assert loaded.arch_config() == trained.arch_config()
         legacy_path = str(Path(directory) / "legacy.pt")
         legacy = torch.load(path, map_location="cpu", weights_only=True)
-        legacy["format"] = 4
+        legacy["format"] = 8
         torch.save(legacy, legacy_path)
         try:
             load_translator(
@@ -228,9 +267,9 @@ def main() -> None:
                 dropout=0.0,
             )
         except ValueError as exc:
-            assert "format=4, expected 5" in str(exc)
+            assert "format=8, expected 9" in str(exc)
         else:
-            raise AssertionError("legacy one-slot checkpoint format was accepted")
+            raise AssertionError("legacy asymmetric-pool checkpoint was accepted")
     print("stamped checkpoint round trip / legacy rejection OK")
 
 

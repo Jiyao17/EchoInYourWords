@@ -12,7 +12,6 @@ from methods.common.prompts import build_receiver_prompt, build_sharer_encode_te
 from .cache import extract_kv
 from .model import XKVPair
 from .schema import XKVExample
-from .spans import chat_paragraph_span_starts, paragraph_span_starts
 from .translator import XKVTranslator
 
 ScoreFn = Callable[[str, str], dict[str, Any]]
@@ -69,8 +68,6 @@ def run_xkv_example(
     pair: XKVPair,
     translator: XKVTranslator,
     *,
-    num_spans: int = 5,
-    span_scheme: str = "paragraphs",
     max_new_tokens: int = 64,
     score_fn: ScoreFn | None = None,
 ) -> XKVResult:
@@ -81,16 +78,6 @@ def run_xkv_example(
     sharer_cache, sharer_tokens = pair.sharer_summary(sharer_text)
     sharer_ms = (perf_counter() - started) * 1000.0
 
-    sharer_boundaries = (
-        [paragraph_span_starts(pair.sharer_tok, sharer_text)]
-        if span_scheme == "paragraphs"
-        else None
-    )
-    receiver_boundaries = (
-        [chat_paragraph_span_starts(pair.receiver_tok, receiver_prompt)]
-        if span_scheme == "paragraphs"
-        else None
-    )
     translator_times: list[float] = []
 
     def residual_fn(receiver_dynamic_cache: Any) -> list[tuple[Any, Any]]:
@@ -98,9 +85,6 @@ def run_xkv_example(
         residual = translator.translate(
             sharer_cache,
             extract_kv(receiver_dynamic_cache),
-            num_spans=num_spans,
-            sharer_span_boundaries=sharer_boundaries,
-            receiver_span_boundaries=receiver_boundaries,
             sharer_windowed_cache=pair.sharer_spec.is_gemma3,
             receiver_windowed_cache=pair.receiver_spec.is_gemma3,
         )
@@ -121,15 +105,14 @@ def run_xkv_example(
 
     prediction = parse_choice_answer(output, example.choices)
     is_correct, scores = _score(prediction, example.answer, score_fn)
-    spans = len(sharer_boundaries[0]) if sharer_boundaries else num_spans
     return XKVResult(
         id=example.id,
         method="xkv",
         sharer_prompt=sharer_text,
         sharer_message=(
             f"[XKV dual-cache update: {len(sharer_cache)} Sharer layers, "
-            f"{translator.receiver_layers} Receiver layers, {spans} spans, "
-            f"{translator.pool_slots} pooled slots/layer]"
+            f"{translator.receiver_layers} Receiver layers, "
+            f"{translator.pool_slots} direct attention slots/layer and side]"
         ),
         receiver_prompt=receiver_prompt,
         receiver_output=output,

@@ -17,13 +17,13 @@ from .training import (
     save_translator,
     train_translator,
 )
-from .translator import TwoStagePool, XKVTranslator
+from .translator import AttentionPool, XKVTranslator
 
 write_run_outputs = partial(_write_run_outputs, method="xkv")
 
 __all__ = [
     "ModelSpec",
-    "TwoStagePool",
+    "AttentionPool",
     "XKVExample",
     "XKVPair",
     "XKVResult",

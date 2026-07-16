@@ -63,10 +63,13 @@ def main() -> None:
     parser.add_argument("--num-blocks", type=int, default=1)
     parser.add_argument("--num-heads", type=int, default=8)
     parser.add_argument("--dropout", type=float, default=0.1)
-    parser.add_argument("--pool-slots", type=int, default=2)
-    parser.add_argument("--num-spans", type=int, default=5)
     parser.add_argument(
-        "--span-scheme", choices=["paragraphs", "fixed"], default="paragraphs"
+        "--pool-k",
+        "--pool-slots",
+        dest="pool_slots",
+        type=int,
+        default=2,
+        help="Learned direct-attention summaries per layer/head and cache side.",
     )
     parser.add_argument("--allow-model-mismatch", action="store_true")
     parser.add_argument("--num-examples", type=int, default=None)
@@ -148,8 +151,6 @@ def main() -> None:
                 example,
                 pair,
                 translator,
-                num_spans=args.num_spans,
-                span_scheme=args.span_scheme,
                 max_new_tokens=args.max_new_tokens,
                 score_fn=score_fn,
             )
@@ -172,14 +173,14 @@ def main() -> None:
             "sharer_model": args.sharer_model,
             "receiver_model": args.receiver_model,
             "num_examples": len(examples),
-            "num_spans": args.num_spans,
-            "span_scheme": args.span_scheme,
             "d_model": translator.d_model,
             "d_model_spec": args.d_model,
             "num_blocks": args.num_blocks,
             "num_heads": translator.num_heads,
             "dropout": args.dropout,
             "pool_slots": translator.pool_slots,
+            "pool_k": translator.pool_slots,
+            "pooling_mode": translator.pooling_mode,
             "output_mode": translator.output_mode,
             "translator_checkpoint": str(args.translator_checkpoint)
             if args.translator_checkpoint

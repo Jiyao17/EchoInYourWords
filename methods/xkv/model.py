@@ -210,7 +210,7 @@ def load_xkv_pair(
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token
         model = AutoModelForCausalLM.from_pretrained(
-            name, dtype=resolved_dtype, trust_remote_code=trust_remote_code
+            name, torch_dtype=resolved_dtype, trust_remote_code=trust_remote_code
         )
         model.to(torch_device)
         model.eval()

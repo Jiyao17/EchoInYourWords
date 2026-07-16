@@ -38,7 +38,7 @@ The scripts:
 | `run_lcfx.py` | Run the LCF-X latent cache communication method (Sharer cache → pooled summary → fused into Receiver). |
 | `run_eiyw.py` | Run EIYW (Sharer context → LCF-X's pooling unmodified → k·L_s slots cross-attend into the Receiver's own context *embeddings* (lookup only, no Receiver forward) → soft tokens in the Receiver's embedding width → prepended to the Receiver's input). |
 | `run_kvtok.py` | Run KVTok (Sharer cache → Stage-1 pool → factorized feature/token-axis projection → Receiver embedding memory, with no initial Receiver forward/cache → `--num-tokens` soft tokens prepended to the Receiver's input). |
-| `run_xkv.py` | Run XKV (dual expanded LCF-X `N→P→2` cache pools → layer map → bottleneck/attention translation → Receiver KV residual). |
+| `run_xkv.py` | Run XKV (dual vectorized `N→k` attention pools → layer map → bottleneck/attention translation → Receiver KV residual). |
 | `run_single_model.py` | Run the single-model inference baseline (one model answers from the full context — no Sharer, no communication). |
 | `train_lcfx_fuser.py` | Train the LCF-X fuser (frozen Sharer/Receiver; only the fuser learns). |
 | `train_eiyw.py` | Train the EIYW translator (frozen Sharer/Receiver; only the translator learns). |
@@ -373,13 +373,18 @@ same `MAX_TRAIN` / `MAX_STEPS` / `BATCH_SIZE` / `GRAD_ACCUM` knobs work via
 
 ### Test F — XKV dual-cache KV update
 
-XKV runs the frozen Sharer and Receiver prefix once, pools both caches with an
-expanded LCF-X `N → P → 2` process, and applies the learned layer-axis map
-when `L_s != L_r`. The two K/V summaries per layer and side double the joint
-bottleneck input width while its output remains `[B,L_r,d]`. Raw Receiver K/V
+XKV runs the frozen Sharer and Receiver prefix once. Both caches use the same
+vectorized learned-query attention pool, reducing raw positions directly from
+`N → k` per layer/head with no intermediate spans (`k=2` by default). After the learned
+Sharer layer-axis map when `L_s != L_r`, the joint bottleneck input has width
+`2*k*(H_s*D_s + H_r*D_r)` and its output remains `[B,L_r,d]`. Raw Receiver K/V
 positions then query the translated layer memory through shared
-cross-attention. Two shared K/V up-projections produce distinct gated updates
-at different cache positions.
+cross-attention. Two shared K/V up-projections produce distinct updates at
+different cache positions, scaled by learned per-head sigmoids. There is no
+stochastic layer/type gate. Each pool has one learned positive attention-logit
+scale initialized to `1.0`; queries use unshrunk Kaiming initialization. Train
+events log normalized entropy, inter-slot map cosine, and scale for both sides
+at the existing `--log-every` cadence, without adding inference work.
 For `DATASET=ropes`, `make xkv-train` defaults to batch 32 / accumulation 8;
 full sweeps halve/double those values through the existing model-size tiers.
 
@@ -388,14 +393,14 @@ python scripts/train_xkv.py \
   --train-data data/tasks/hotpotqa_bridge_train.jsonl \
   --sharer-model unsloth/Llama-3.2-1B-Instruct \
   --receiver-model Qwen/Qwen3-0.6B \
-  --d-model eighth --num-blocks 1 --pool-slots 2 \
+  --d-model eighth --num-blocks 1 --pool-k 2 \
   --checkpoint-out data/checkpoints/xkv/translator.pt
 
 python scripts/run_xkv.py \
   --dataset data/tasks/hotpotqa_bridge_val.jsonl \
   --sharer-model unsloth/Llama-3.2-1B-Instruct \
   --receiver-model Qwen/Qwen3-0.6B \
-  --d-model eighth --num-blocks 1 --pool-slots 2 \
+  --d-model eighth --num-blocks 1 --pool-k 2 \
   --translator-checkpoint data/checkpoints/xkv/translator.pt \
   --output-dir results/xkv
 ```

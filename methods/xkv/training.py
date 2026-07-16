@@ -15,10 +15,9 @@ from .cache import add_residual_inplace, extract_kv
 from .model import XKVPair
 from .runner import run_xkv_example
 from .schema import XKVExample
-from .spans import chat_paragraph_span_starts, paragraph_span_starts
 from .translator import XKVTranslator, _resolve_d_model, _safe_num_heads
 
-CHECKPOINT_FORMAT = 5
+CHECKPOINT_FORMAT = 9
 
 
 def _freeze(model: Any) -> None:
@@ -62,9 +61,7 @@ def batched_example_loss(
     pair: XKVPair,
     translator: XKVTranslator,
     examples: list,
-    num_spans: int,
     *,
-    span_scheme: str = "paragraphs",
     reduction: str = "mean",
 ) -> "Any | None":
     """Teacher-forced CE through an XKV-updated Receiver prefix cache."""
@@ -96,21 +93,11 @@ def batched_example_loss(
         )
         if prompt.numel() < 2 or answer.numel() < 1 or sharer.numel() < 1:
             continue
-        sharer_bounds = (
-            paragraph_span_starts(pair.sharer_tok, sharer_text)
-            if span_scheme == "paragraphs"
-            else None
-        )
-        receiver_bounds = (
-            chat_paragraph_span_starts(pair.receiver_tok, receiver_prompt)
-            if span_scheme == "paragraphs"
-            else None
-        )
-        rows.append((prompt, answer, sharer, sharer_bounds, receiver_bounds))
+        rows.append((prompt, answer, sharer))
     if not rows:
         return None
 
-    prompts, answers, sharers, sharer_bounds, receiver_bounds = zip(*rows)
+    prompts, answers, sharers = zip(*rows)
     sharer_side = "left" if pair.sharer_spec.is_gemma3 else "right"
     sharer_ids, sharer_mask = _pad(
         list(sharers), pair.sharer_tok.pad_token_id, sharer_side
@@ -143,9 +130,6 @@ def batched_example_loss(
         extract_kv(receiver_dynamic_cache),
         sharer_attention_mask=sharer_mask,
         receiver_attention_mask=prefix_mask,
-        num_spans=num_spans,
-        sharer_span_boundaries=list(sharer_bounds),
-        receiver_span_boundaries=list(receiver_bounds),
         sharer_windowed_cache=pair.sharer_spec.is_gemma3,
         receiver_windowed_cache=pair.receiver_spec.is_gemma3,
     )
@@ -181,15 +165,11 @@ def example_loss(
     pair: XKVPair,
     translator: XKVTranslator,
     example: XKVExample,
-    num_spans: int,
-    span_scheme: str = "paragraphs",
 ) -> "Any | None":
     return batched_example_loss(
         pair,
         translator,
         [example],
-        num_spans,
-        span_scheme=span_scheme,
         reduction="mean",
     )
 
@@ -199,8 +179,6 @@ def evaluate(
     translator: XKVTranslator,
     eval_data: list[Any],
     *,
-    num_spans: int = 5,
-    span_scheme: str = "paragraphs",
     batch_size: int = 16,
     max_examples: int | None = None,
 ) -> float:
@@ -218,8 +196,6 @@ def evaluate(
                 pair,
                 translator,
                 chunk,
-                num_spans,
-                span_scheme=span_scheme,
                 reduction="none",
             )
             if losses is not None:
@@ -235,8 +211,6 @@ def evaluate_em_f1(
     translator: XKVTranslator,
     eval_data: list[Any],
     *,
-    num_spans: int = 5,
-    span_scheme: str = "paragraphs",
     max_new_tokens: int = 64,
     max_examples: int | None = None,
     brief_path: "str | Any | None" = None,
@@ -260,8 +234,6 @@ def evaluate_em_f1(
                         example,
                         pair,
                         translator,
-                        num_spans=num_spans,
-                        span_scheme=span_scheme,
                         max_new_tokens=max_new_tokens,
                         score_fn=score_free_form,
                     )
@@ -298,8 +270,6 @@ def save_translator(
     translator: XKVTranslator,
     path: str,
     pair: XKVPair,
-    num_spans: int | None = None,
-    span_scheme: str | None = None,
 ) -> None:
     import torch
 
@@ -313,8 +283,6 @@ def save_translator(
             "arch": translator.arch_config(),
             "sharer_model": pair.sharer_spec.name,
             "receiver_model": pair.receiver_spec.name,
-            "num_spans": num_spans,
-            "span_scheme": span_scheme,
         },
         path,
     )
@@ -350,6 +318,7 @@ def load_translator(
         "num_heads": _safe_num_heads(resolved_d_model, int(num_heads)),
         "dropout": float(dropout),
         "pool_slots": int(pool_slots),
+        "pooling_mode": "direct_attention_k",
         "output_mode": "position_cross_attention",
     }
     mismatches: list[str] = []
@@ -383,8 +352,6 @@ def train_translator(
     train_data: Iterable[Any],
     *,
     eval_data: Iterable[Any] | None = None,
-    num_spans: int = 5,
-    span_scheme: str = "paragraphs",
     lr: float = 1e-4,
     epochs: int = 1,
     batch_size: int = 16,
@@ -420,9 +387,6 @@ def train_translator(
         max_steps if max_steps is not None else max(1, epochs * steps_per_epoch)
     )
 
-    def gate_temperature(step: int) -> float:
-        return 1.0 - 0.5 * min(1.0, step / total_steps)
-
     if log_path is None and checkpoint_path:
         log_path = str(Path(checkpoint_path).with_name("training_log.jsonl"))
     logger = ProgressLogger(
@@ -438,12 +402,12 @@ def train_translator(
             "grad_accum": grad_accum,
             "effective_batch": batch_size * grad_accum,
             "warmup": warmup,
-            "num_spans": num_spans,
-            "span_scheme": span_scheme,
             "d_model": translator.d_model,
             "num_blocks": translator.num_blocks,
             "num_heads": translator.num_heads,
             "pool_slots": translator.pool_slots,
+            "pool_k": translator.pool_slots,
+            "pooling_mode": translator.pooling_mode,
             "output_mode": translator.output_mode,
             "checkpoint_path": checkpoint_path,
             "total_steps": total_steps,
@@ -482,8 +446,6 @@ def train_translator(
             pair,
             translator,
             evaluation,
-            num_spans=num_spans,
-            span_scheme=span_scheme,
             batch_size=batch_size,
             max_examples=eval_max_examples,
         )
@@ -498,8 +460,6 @@ def train_translator(
                 pair,
                 translator,
                 evaluation,
-                num_spans=num_spans,
-                span_scheme=span_scheme,
                 max_examples=eval_em_examples,
                 brief_path=brief,
             )
@@ -509,9 +469,7 @@ def train_translator(
         if is_best:
             best_eval = eval_loss
             if checkpoint_path:
-                save_translator(
-                    translator, checkpoint_path, pair, num_spans, span_scheme
-                )
+                save_translator(translator, checkpoint_path, pair)
                 saved_best = True
                 marker = " (new best -> saved)"
         metric_text = f" | em {em:.4f} f1 {f1:.4f}" if em is not None else ""
@@ -529,15 +487,19 @@ def train_translator(
         if shuffle:
             rng.shuffle(order)
         for indices in _chunks(order, batch_size):
-            translator.gate_tau = gate_temperature(opt_step)
+            will_log = bool(
+                log_every
+                and (micro_step + 1) % grad_accum == 0
+                and (opt_step + 1) % log_every == 0
+            )
+            translator.set_pool_diagnostics(will_log)
             loss = batched_example_loss(
                 pair,
                 translator,
                 [training[index] for index in indices],
-                num_spans,
-                span_scheme=span_scheme,
                 reduction="mean",
             )
+            translator.set_pool_diagnostics(False)
             if loss is None:
                 continue
             (loss / grad_accum).backward()
@@ -555,10 +517,24 @@ def train_translator(
             if log_every and opt_step % log_every == 0:
                 train_loss = running_total / max(1, running_count)
                 current_lr = scheduler.get_last_lr()[0]
+                pool_diagnostics = translator.pool_diagnostics()
+                pool_text = ""
+                if pool_diagnostics:
+                    pool_text = (
+                        " | pool H(s/r) "
+                        f"{pool_diagnostics['sharer_pool_entropy']:.4f}/"
+                        f"{pool_diagnostics['receiver_pool_entropy']:.4f}"
+                        " cos(s/r) "
+                        f"{pool_diagnostics['sharer_pool_slot_cosine']:.4f}/"
+                        f"{pool_diagnostics['receiver_pool_slot_cosine']:.4f}"
+                        " scale(s/r) "
+                        f"{pool_diagnostics['sharer_pool_scale']:.3f}/"
+                        f"{pool_diagnostics['receiver_pool_scale']:.3f}"
+                    )
                 print(
                     f"epoch {epoch + 1}/{epochs} opt_step {opt_step}"
                     f" | train_loss {train_loss:.4f} | lr {current_lr:.2e}"
-                    f" | gate_tau {translator.gate_tau:.3f}",
+                    f"{pool_text}",
                     flush=True,
                 )
                 logger.log(
@@ -567,7 +543,7 @@ def train_translator(
                     opt_step=opt_step,
                     train_loss=train_loss,
                     lr=current_lr,
-                    gate_tau=translator.gate_tau,
+                    **pool_diagnostics,
                 )
                 running_total = 0.0
                 running_count = 0
@@ -578,8 +554,6 @@ def train_translator(
                     translator,
                     checkpoint_path + ".latest",
                     pair,
-                    num_spans,
-                    span_scheme,
                 )
             if max_steps is not None and opt_step >= max_steps:
                 stop = True
@@ -589,7 +563,7 @@ def train_translator(
             break
 
     if checkpoint_path and not saved_best:
-        save_translator(translator, checkpoint_path, pair, num_spans, span_scheme)
+        save_translator(translator, checkpoint_path, pair)
         print(f"Saved XKV checkpoint -> {checkpoint_path}")
     elif checkpoint_path:
         print(f"Best XKV checkpoint (eval_loss {best_eval:.4f}) -> {checkpoint_path}")

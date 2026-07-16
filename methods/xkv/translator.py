@@ -1,19 +1,23 @@
 """XKV dual-cache attention translator.
 
-Both raw caches are independently reduced by an expanded LCF-X
-``N -> P -> Q`` pool, with ``Q=2`` independent cross-span summaries by default.
+Both caches are reduced directly from ``N -> k`` by vectorized learned-query
+attention, with ``k=2`` independent summaries per layer and KV head by default.
+Each cache side has a learned positive attention-logit scale, initialized to
+one, and its pool queries use an unshrunk Kaiming initialization.
 A learned linear map aligns the Sharer layer axis to the Receiver layer count,
-the two pooled cache vectors are concatenated and bottlenecked, and
+the pooled cache vectors are concatenated and bottlenecked, and
 ``num_blocks`` self-attention blocks translate the resulting joint layer
 memory. Raw Receiver cache positions then query that memory through a shared
-cross-attention decoder. A shared gated output head emits Receiver-shaped
-key/value residuals through separate K and V up-projections.
+cross-attention decoder. A shared output head emits Receiver-shaped key/value
+residuals through position-dependent per-head scaling and separate K/V
+up-projections.
 """
 
 from __future__ import annotations
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 
 def _resolve_d_model(spec: "str | int", receiver_hidden: int) -> int:
@@ -41,37 +45,6 @@ def _safe_num_heads(d_model: int, num_heads: int) -> int:
     return 1
 
 
-def _span_starts(n: int, num_spans: int, boundaries: "list[int] | None") -> list[int]:
-    if boundaries:
-        starts = sorted({min(max(int(value), 0), n - 1) for value in boundaries})
-        if not starts or starts[0] != 0:
-            starts.insert(0, 0)
-        return starts
-    count = max(1, min(int(num_spans), n))
-    base, extra = divmod(n, count)
-    starts, pos = [], 0
-    for index in range(count):
-        starts.append(pos)
-        pos += base + (1 if index < extra else 0)
-    return starts
-
-
-def _window_boundaries(
-    boundaries: "list[int] | None", dropped_tokens: int, retained_tokens: int
-) -> "list[int] | None":
-    """Move full-sequence span starts onto a retained suffix window."""
-
-    if not boundaries:
-        return boundaries
-    shifted = {
-        min(max(int(boundary) - dropped_tokens, 0), retained_tokens - 1)
-        for boundary in boundaries
-        if int(boundary) >= dropped_tokens
-    }
-    shifted.add(0)
-    return sorted(shifted)
-
-
 def _cache_width(
     cache: list[tuple[torch.Tensor, torch.Tensor]], *, windowed_cache: bool
 ) -> int:
@@ -88,16 +61,8 @@ def _cache_width(
     return min(widths)
 
 
-def _gumbel_sigmoid(logit: torch.Tensor, training: bool, tau: float) -> torch.Tensor:
-    if training:
-        uniform = torch.rand_like(logit).clamp_(1e-6, 1 - 1e-6)
-        noise = torch.log(uniform) - torch.log1p(-uniform)
-        return torch.sigmoid((logit + noise) / tau)
-    return (logit > 0).to(logit.dtype)
-
-
-class TwoStagePool(nn.Module):
-    """One side of the LCF-X pool, returning pooled KV slots per layer."""
+class AttentionPool(nn.Module):
+    """Vectorized learned-query attention reducing raw positions to ``k`` slots."""
 
     def __init__(
         self, layers: int, kv_heads: int, head_dim: int, output_slots: int = 2
@@ -109,105 +74,132 @@ class TwoStagePool(nn.Module):
         self.kv_heads = int(kv_heads)
         self.head_dim = int(head_dim)
         self.output_slots = int(output_slots)
-        self.q_base = nn.Parameter(torch.empty(layers, kv_heads, head_dim))
-        self.q_layer = nn.Parameter(
-            torch.empty(layers, self.output_slots, kv_heads, head_dim)
+        # [L,H,k,D] follows the pooled-cache layout requested by XKV.
+        self.query = nn.Parameter(
+            torch.empty(layers, kv_heads, self.output_slots, head_dim)
         )
-        for query in (self.q_base, self.q_layer):
-            nn.init.kaiming_normal_(query)
-            with torch.no_grad():
-                query.mul_(0.02)
+        nn.init.kaiming_normal_(self.query)
+        # A positive learned temperature lets each cache side tune how selective
+        # its pooling should be.  Initial scale 1.0 keeps the Kaiming logits
+        # unchanged; unlike v9, the query is not collapsed by an extra x0.02.
+        self.logit_scale = nn.Parameter(torch.zeros(()))
+        self._diagnostics_enabled = False
+        self._last_diagnostics: dict[str, torch.Tensor] | None = None
 
-    def _pool(
-        self, query: torch.Tensor, keys: torch.Tensor, values: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        scores = torch.einsum("hd,bhnd->bhn", query, keys) / self.head_dim**0.5
-        weights = scores.softmax(dim=-1).to(keys.dtype)
-        return (
-            torch.einsum("bhn,bhnd->bhd", weights, keys),
-            torch.einsum("bhn,bhnd->bhd", weights, values),
-        )
+    def set_diagnostics(self, enabled: bool) -> None:
+        """Enable one-forward attention diagnostics without changing outputs."""
+
+        self._diagnostics_enabled = bool(enabled)
+
+    def diagnostics(self) -> dict[str, float] | None:
+        """Return the most recently collected scalar diagnostics."""
+
+        if self._last_diagnostics is None:
+            return None
+        return {
+            name: float(value.detach().float().cpu().item())
+            for name, value in self._last_diagnostics.items()
+        }
+
+    def _record_diagnostics(
+        self,
+        weights: torch.Tensor,
+        valid: "torch.Tensor | None",
+    ) -> None:
+        """Record normalized entropy and mean off-diagonal slot cosine."""
+
+        with torch.no_grad():
+            probabilities = weights.detach().float()
+            entropy = -(
+                probabilities
+                * probabilities.clamp_min(torch.finfo(probabilities.dtype).tiny).log()
+            ).sum(dim=-1)
+            if valid is None:
+                valid_count = torch.full(
+                    (probabilities.shape[0],),
+                    probabilities.shape[-1],
+                    device=probabilities.device,
+                    dtype=probabilities.dtype,
+                )
+            else:
+                valid_count = valid.sum(dim=-1).to(probabilities.dtype)
+            entropy_denominator = valid_count.clamp_min(2).log()[:, None, None, None]
+            normalized_entropy = torch.where(
+                valid_count[:, None, None, None] > 1,
+                entropy / entropy_denominator,
+                torch.zeros_like(entropy),
+            ).mean()
+
+            if self.output_slots > 1:
+                unit_weights = F.normalize(probabilities, dim=-1)
+                similarity = torch.einsum(
+                    "blhkn,blhjn->blhkj", unit_weights, unit_weights
+                )
+                off_diagonal = ~torch.eye(
+                    self.output_slots,
+                    device=similarity.device,
+                    dtype=torch.bool,
+                )
+                slot_cosine = similarity[..., off_diagonal].mean()
+            else:
+                slot_cosine = probabilities.new_tensor(1.0)
+
+            self._last_diagnostics = {
+                "entropy": normalized_entropy,
+                "slot_cosine": slot_cosine,
+                "scale": self.logit_scale.detach().exp(),
+            }
 
     def forward(
         self,
         cache: list[tuple[torch.Tensor, torch.Tensor]],
         *,
         attention_mask: "torch.Tensor | None" = None,
-        num_spans: int = 5,
-        span_boundaries: "list[list[int] | None] | None" = None,
         windowed_cache: bool = False,
     ) -> torch.Tensor:
-        """Pool ``L x (K,V)[B,H,N,D]`` into ``[B,L,2*Q*H*D]``.
+        """Pool ``L x (K,V)[B,H,N,D]`` into ``[B,L,2*H*k*D]``.
 
-        ``attention_mask`` may be left- or right-padded; real cache positions
-        are selected before span offsets are applied. ``Q=output_slots`` is the
-        number of independent cross-span summaries retained per layer.
+        Keys determine the attention weights. The same weights reduce K and V,
+        yielding separate pooled tensors ``[B,L,H,k,D]`` before flattening.
+        ``attention_mask`` may be left- or right-padded.
         """
 
         if len(cache) != self.layers:
             raise ValueError(f"cache has {len(cache)} layers, expected {self.layers}")
-        batch = cache[0][0].shape[0]
         common_n = _cache_width(cache, windowed_cache=windowed_cache)
-        original_n = max(int(key.shape[2]) for key, _ in cache)
-        dtype = self.q_base.dtype
-        rows: list[torch.Tensor] = []
-        for batch_index in range(batch):
-            if attention_mask is None:
-                position_mask = None
-                n = common_n
-                dropped_tokens = max(0, original_n - common_n)
-            else:
-                full_mask = attention_mask[batch_index].to(torch.bool)
-                if not windowed_cache and full_mask.numel() != common_n:
-                    raise ValueError(
-                        f"attention mask width {full_mask.numel()} != cache width {common_n}"
-                    )
-                if full_mask.numel() < common_n:
-                    raise ValueError(
-                        f"attention mask width {full_mask.numel()} < cache width {common_n}"
-                    )
-                position_mask = full_mask[-common_n:]
-                n = int(position_mask.sum().item())
-                dropped_tokens = max(0, int(full_mask.sum().item()) - n)
-            if n < 1:
-                raise ValueError("cache window contains no unmasked token positions")
-            boundaries = span_boundaries[batch_index] if span_boundaries else None
-            boundaries = _window_boundaries(boundaries, dropped_tokens, n)
-            starts = _span_starts(n, num_spans, boundaries)
-            ends = starts[1:] + [n]
-            layer_rows: list[torch.Tensor] = []
-            for layer_index, (key, value) in enumerate(cache):
-                key_row = key[batch_index : batch_index + 1, :, -common_n:, :]
-                value_row = value[batch_index : batch_index + 1, :, -common_n:, :]
-                if position_mask is not None:
-                    key_row = key_row[:, :, position_mask, :]
-                    value_row = value_row[:, :, position_mask, :]
-                key_row = key_row[:, :, :n, :].to(dtype)
-                value_row = value_row[:, :, :n, :].to(dtype)
-                spans = [
-                    self._pool(
-                        self.q_base[layer_index],
-                        key_row[:, :, start:end, :],
-                        value_row[:, :, start:end, :],
-                    )
-                    for start, end in zip(starts, ends)
-                ]
-                span_keys = torch.stack([item[0] for item in spans], dim=2)
-                span_values = torch.stack([item[1] for item in spans], dim=2)
-                pooled = [
-                    self._pool(query, span_keys, span_values)
-                    for query in self.q_layer[layer_index]
-                ]
-                pooled_key = torch.stack([item[0] for item in pooled], dim=2)
-                pooled_value = torch.stack([item[1] for item in pooled], dim=2)
-                layer_rows.append(
-                    torch.cat(
-                        [pooled_key.reshape(1, -1), pooled_value.reshape(1, -1)],
-                        dim=-1,
-                    )
+        keys = torch.stack([key[:, :, -common_n:, :] for key, _ in cache], dim=1)
+        values = torch.stack([value[:, :, -common_n:, :] for _, value in cache], dim=1)
+        keys = keys.to(self.query.dtype)
+        values = values.to(self.query.dtype)
+        scores = torch.einsum("lhkd,blhnd->blhkn", self.query, keys)
+        scores = scores * self.logit_scale.exp() / self.head_dim**0.5
+        valid = None
+        if attention_mask is not None:
+            if attention_mask.shape[-1] < common_n:
+                raise ValueError(
+                    f"attention mask width {attention_mask.shape[-1]} < cache width {common_n}"
                 )
-            rows.append(torch.stack(layer_rows, dim=1))
-        return torch.cat(rows, dim=0)
+            if not windowed_cache and attention_mask.shape[-1] != common_n:
+                raise ValueError(
+                    f"attention mask width {attention_mask.shape[-1]} != cache width {common_n}"
+                )
+            valid = attention_mask[:, -common_n:].to(
+                device=scores.device, dtype=torch.bool
+            )
+            scores = scores.masked_fill(~valid[:, None, None, None, :], float("-inf"))
+        weights = scores.softmax(dim=-1).to(keys.dtype)
+        if self._diagnostics_enabled:
+            self._record_diagnostics(weights, valid)
+        pooled_key = torch.einsum("blhkn,blhnd->blhkd", weights, keys)
+        pooled_value = torch.einsum("blhkn,blhnd->blhkd", weights, values)
+        batch = keys.shape[0]
+        return torch.cat(
+            [
+                pooled_key.reshape(batch, self.layers, -1),
+                pooled_value.reshape(batch, self.layers, -1),
+            ],
+            dim=-1,
+        )
 
 
 class _TranslatorBlock(nn.Module):
@@ -294,6 +286,7 @@ class XKVTranslator(nn.Module):
         num_heads: int = 8,
         dropout: float = 0.1,
         pool_slots: int = 2,
+        pooling_mode: str = "direct_attention_k",
         output_mode: str = "position_cross_attention",
         zero_init: bool = True,
     ) -> None:
@@ -304,6 +297,8 @@ class XKVTranslator(nn.Module):
             raise ValueError("num_blocks must be >= 1")
         if pool_slots < 1:
             raise ValueError("pool_slots must be >= 1")
+        if pooling_mode != "direct_attention_k":
+            raise ValueError(f"unsupported XKV pooling_mode: {pooling_mode!r}")
         if output_mode != "position_cross_attention":
             raise ValueError(f"unsupported XKV output_mode: {output_mode!r}")
         self.sharer_layers = int(sharer_layers)
@@ -317,17 +312,18 @@ class XKVTranslator(nn.Module):
         self.num_heads = _safe_num_heads(self.d_model, num_heads)
         self.dropout = float(dropout)
         self.pool_slots = int(pool_slots)
+        self.pooling_mode = pooling_mode
         self.output_mode = output_mode
 
         sharer_feature = self.sharer_kv_heads * self.sharer_head_dim
         receiver_feature = self.receiver_kv_heads * self.receiver_head_dim
-        self.sharer_pool = TwoStagePool(
+        self.sharer_pool = AttentionPool(
             self.sharer_layers,
             self.sharer_kv_heads,
             self.sharer_head_dim,
             self.pool_slots,
         )
-        self.receiver_pool = TwoStagePool(
+        self.receiver_pool = AttentionPool(
             self.receiver_layers,
             self.receiver_kv_heads,
             self.receiver_head_dim,
@@ -364,8 +360,6 @@ class XKVTranslator(nn.Module):
         self.head_gate = nn.Linear(self.d_model, 2 * self.receiver_kv_heads)
         self.up_key = nn.Linear(self.d_model, receiver_feature)
         self.up_value = nn.Linear(self.d_model, receiver_feature)
-        self.layer_gate = nn.Parameter(torch.ones(self.receiver_layers, 2))
-        self.gate_tau = 1.0
 
         if zero_init:
             for projection in (self.up_key, self.up_value):
@@ -382,6 +376,30 @@ class XKVTranslator(nn.Module):
         if self.layer_map is None:
             return slots
         return self.layer_map(slots.transpose(1, 2)).transpose(1, 2)
+
+    def set_pool_diagnostics(self, enabled: bool) -> None:
+        """Collect pooling statistics on the next translation when enabled."""
+
+        self.sharer_pool.set_diagnostics(enabled)
+        self.receiver_pool.set_diagnostics(enabled)
+
+    def pool_diagnostics(self) -> dict[str, float]:
+        """Return flattened Sharer/Receiver statistics for progress logging."""
+
+        result: dict[str, float] = {}
+        for side, pool in (
+            ("sharer", self.sharer_pool),
+            ("receiver", self.receiver_pool),
+        ):
+            diagnostics = pool.diagnostics()
+            if diagnostics is not None:
+                result.update(
+                    {
+                        f"{side}_pool_{name}": value
+                        for name, value in diagnostics.items()
+                    }
+                )
+        return result
 
     def _receiver_rows(
         self,
@@ -405,9 +423,6 @@ class XKVTranslator(nn.Module):
         *,
         sharer_attention_mask: "torch.Tensor | None" = None,
         receiver_attention_mask: "torch.Tensor | None" = None,
-        num_spans: int = 5,
-        sharer_span_boundaries: "list[list[int] | None] | None" = None,
-        receiver_span_boundaries: "list[list[int] | None] | None" = None,
         sharer_windowed_cache: bool = False,
         receiver_windowed_cache: bool = False,
     ) -> list[tuple[torch.Tensor, torch.Tensor]]:
@@ -416,15 +431,11 @@ class XKVTranslator(nn.Module):
         sharer_slots = self.sharer_pool(
             sharer_cache,
             attention_mask=sharer_attention_mask,
-            num_spans=num_spans,
-            span_boundaries=sharer_span_boundaries,
             windowed_cache=sharer_windowed_cache,
         )
         receiver_slots = self.receiver_pool(
             receiver_cache,
             attention_mask=receiver_attention_mask,
-            num_spans=num_spans,
-            span_boundaries=receiver_span_boundaries,
             windowed_cache=receiver_windowed_cache,
         )
         sharer_slots = self._map_sharer_layers(sharer_slots)
@@ -438,9 +449,7 @@ class XKVTranslator(nn.Module):
             receiver_cache, windowed_cache=receiver_windowed_cache
         )
         receiver_rows = self._receiver_rows(receiver_cache, receiver_common_n)
-        latent = self.position_decoder(
-            receiver_rows, memory, self.layer_embedding
-        )
+        latent = self.position_decoder(receiver_rows, memory, self.layer_embedding)
         batch, layers, positions, _ = latent.shape
         alpha = torch.sigmoid(self.head_gate(latent)).view(
             batch, layers, positions, 2, self.receiver_kv_heads
@@ -453,13 +462,8 @@ class XKVTranslator(nn.Module):
             self.receiver_head_dim,
         )
         delta_value = self.up_value(latent).view_as(delta_key)
-        gates = _gumbel_sigmoid(
-            self.layer_gate, self.training, max(float(self.gate_tau), 1e-6)
-        )
         delta_key = delta_key * alpha[..., 0, :].unsqueeze(-1)
         delta_value = delta_value * alpha[..., 1, :].unsqueeze(-1)
-        delta_key = delta_key * gates[None, :, None, 0, None, None]
-        delta_value = delta_value * gates[None, :, None, 1, None, None]
 
         if receiver_attention_mask is not None:
             real = receiver_attention_mask[:, -receiver_common_n:].to(
@@ -492,7 +496,9 @@ class XKVTranslator(nn.Module):
         receiver_spec: object,
         **kwargs,
     ) -> "XKVTranslator":
-        d_model = _resolve_d_model(kwargs.pop("d_model", "eighth"), receiver_spec.hidden)
+        d_model = _resolve_d_model(
+            kwargs.pop("d_model", "eighth"), receiver_spec.hidden
+        )
         return cls(
             sharer_layers=sharer_spec.layers,
             sharer_kv_heads=sharer_spec.kv_heads,
@@ -517,6 +523,7 @@ class XKVTranslator(nn.Module):
             "num_heads": self.num_heads,
             "dropout": self.dropout,
             "pool_slots": self.pool_slots,
+            "pooling_mode": self.pooling_mode,
             "output_mode": self.output_mode,
         }
 
@@ -534,4 +541,4 @@ class XKVTranslator(nn.Module):
         )
 
 
-__all__ = ["TwoStagePool", "XKVTranslator"]
+__all__ = ["AttentionPool", "XKVTranslator"]

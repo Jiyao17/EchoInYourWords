@@ -22,13 +22,15 @@ standardized experiment/output contract:
   linear projections to produce `--num-tokens` slots. Processed Receiver
   embeddings condition those slots without an initial Receiver prefill/cache;
   an EIYW-v2-style head emits prepended soft tokens (*implemented*).
-- **XKV (`methods/xkv/`)** — pools both raw caches with an expanded LCF-X
-  two-stage pool (`N → P → 2` by default), applies the current learned
-  `L_s → L_r` layer-axis map, translates the doubled-width concatenated layer
-  summaries with configurable attention blocks, then uses
+- **XKV (`methods/xkv/`)** — pools both Sharer and Receiver KV with vectorized
+  learned-query attention (`N → k`, no spans, `k=2` by default), applies the
+  current learned `L_s → L_r` layer-axis
+  map, translates the concatenated layer summaries with configurable attention
+  blocks, then uses
   raw Receiver positions as queries in a shared cross-attention decoder and
-  emits a gated, position-specific Receiver-native KV residual through two
-  shared K/V up-projections (*implemented*).
+  emits a per-head-scaled, position-specific Receiver-native KV residual
+  through two shared K/V up-projections, without layer/type Gumbel gates
+  (*implemented*).
 
 **Scope decision:** shared-context, token-position-aligned cache-transfer methods
 (**C2C** and the original shared-context **LCF**) are **out of scope**. They

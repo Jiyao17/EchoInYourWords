@@ -6,9 +6,10 @@ XKV is a Sharer-to-Receiver communication method that reads the **KV caches of
 both models** and predicts a **Receiver-native KV-cache update**. It combines
 three ideas:
 
-1. reuse LCF-X's position-free, two-stage attention pooling on both caches;
+1. use the same vectorized learned-query attention pool on both caches;
 2. translate the resulting joint representation with attention; and
-3. reuse LCF-X's gated residual-update semantics at the output.
+3. emit a position-specific Receiver residual through shared K/V projections
+   with deterministic per-head scaling.
 
 Both language models remain frozen. Only the XKV pools, bottleneck, translator,
 and update head are trained.
@@ -24,8 +25,8 @@ and update head are trained.
 - `N_s^l`, `N_r^l`: real per-layer Sharer and Receiver cache lengths. These are
   normally constant over layers; Gemma-3 mixes sliding and full attention, so
   they may differ.
-- `P_s`, `P_r`: numbers of spans used by the LCF-X pools.
-- `Q`: retained cross-span summaries per layer and side (`Q=2` by default).
+- `k`: direct-attention summaries retained per layer and KV head on both sides
+  (`k=2` by default).
 - `d`: XKV bottleneck/translator width (default: Receiver hidden width divided
   by 8).
 
@@ -40,30 +41,32 @@ zero-update equivalence check.
 
 ## 3. Architecture
 
-### 3.1 Dual LCF-X pooling
+### 3.1 Symmetric direct dual-cache pooling
 
-Apply independent copies of the existing LCF-X two-stage pool to the two raw
-caches. The copies do not share queries because their KV geometries and roles
-differ.
+For each side `a in {s,r}`, learn `k` queries per layer and KV head,
+`Q_a in R^(L_a x H_a x k x D_a)`. Apply one vectorized scaled dot-product
+attention directly over all retained raw cache positions:
 
-For side `a in {s,r}` and layer `l`:
+```text
+A_a = softmax(gamma_a Q_a K_a^T / sqrt(D_a)) # [B,L_a,H_a,k,N_a]
+K_a* = A_a K_a,  V_a* = A_a V_a           # [B,L_a,H_a,k,D_a]
+```
 
-1. **Within-span attention:** learned `q_base,a^l` pools the real token positions
-   in every span, `N_a -> P_a`.
-2. **Cross-span attention:** `Q` independent learned queries
-   `q_layer,a^(l,j)` pool the `P_a` span summaries to `Q` summaries,
-   `P_a -> Q` (default `Q=2`).
+`gamma_a=exp(g_a)>0` is one learned scalar per cache side, initialized to
+`1.0`. Pool queries use an unshrunk Kaiming-normal initialization; applying an
+additional `x0.02` makes the initial logits nearly zero and collapses the
+default two slots into duplicate global averages.
 
-This yields `(K_a*^l,V_a*^l)` with shape `[B,H_a,Q,D_a]`. Each query has its
-own parameters, so the two default slots can retain different information;
-they are not copies or broadcasts of one pooled value. Padding is excluded
-with per-example lengths. Natural paragraph boundaries should be supported in
-addition to fixed, near-equal token spans.
+The K-derived attention weights reduce K and V consistently. There is no
+intermediate span axis and no Python loop over layers or slots. Each learned
+query has its own parameters, so the default two slots can retain different
+information rather than broadcasting one pooled value. Padding is masked.
+The raw Receiver K/V positions remain available to the position decoder in
+Section 3.4.
 
 For Gemma-3 only, define `N_a* = min_l N_a^l` and pool the most recent `N_a*`
-positions from every layer. Crop the mask to the same suffix and shift natural
-span boundaries by the number of discarded real tokens. Non-Gemma caches keep
-the strict requirement that every layer has the same width.
+positions from every layer and crop each side's mask to the same suffix.
+Non-Gemma caches keep the strict requirement that every layer has the same width.
 
 ### 3.2 Layer alignment, concatenation, and bottleneck
 
@@ -73,8 +76,7 @@ then concatenate the two pooled sides:
 
 ```text
 x_l = [flat(K_s*^l), flat(V_s*^l), flat(K_r*^l), flat(V_r*^l)]
-      in R^(2 Q H_s D_s + 2 Q H_r D_r)
-      = R^(Q * (2 H_s D_s + 2 H_r D_r))
+      in R^(2 k H_s D_s + 2 k H_r D_r)
 
 z_l = LN(MLP(W_down x_l)) in R^d
 ```
@@ -91,7 +93,7 @@ does not treat the layer tokens as an unordered set.
 ### 3.3 Attention translator
 
 Process `Z` with a stack of `n` pre-norm Transformer encoder blocks. Use
-`n=1` by default and expose it as `--num-attention-blocks`. Each block has its
+`n=1` by default and expose it as `--num-blocks`. Each block has its
 own parameters unless an explicit weight-tied recurrent ablation is selected:
 
 ```text
@@ -117,37 +119,37 @@ U_l = U_l + FFN(LN(U_l))
 alpha_K, alpha_V = sigmoid(W_gate U_l)       # per Receiver KV head
 Delta_K = reshape(W_up,K U_l)                # [B,H_r,N_r,D_r]
 Delta_V = reshape(W_up,V U_l)                # [B,H_r,N_r,D_r]
-g_K, g_V = layer/type Gumbel-sigmoid gates
 
-K_r' = K_r + g_K * alpha_K * Delta_K
-V_r' = V_r + g_V * alpha_V * Delta_V
+K_r' = K_r + alpha_K * Delta_K
+V_r' = V_r + alpha_V * Delta_V
 ```
 
 Use separate `W_up,K` and `W_up,V`, but **share both projections and
 `W_gate` across Receiver layers**. The query projection, cross-attention, and
 decoder FFN are shared as well; learned Receiver-layer embeddings and
-`g_K^l,g_V^l` retain layer identity. For Gemma-3, decode the recent common
-window and left-pad full-attention layers with zeros so older cache positions
-are preserved. Padding positions also receive zero updates.
+raw position queries retain layer/position identity. For Gemma-3, decode the
+recent common window and left-pad full-attention layers with zeros so older
+cache positions are preserved. Padding positions also receive zero updates.
 
-During training, anneal the layer/type gates from soft Gumbel-sigmoid
-(`tau: 1.0 -> 0.5`); at evaluation use hard `{0,1}` gates, matching LCF-X.
-Zero-initialize the two up-projections so an untrained XKV produces exactly zero
-residual and therefore reproduces Receiver-only decoding.
+Do not use layer/type Gumbel gates: completed runs left every logit at its
+positive initialization, so the gates introduced stochastic fractional scaling
+during training but became all-on at evaluation. Zero-initialize the two
+up-projections so an untrained XKV produces exactly zero residual and therefore
+reproduces Receiver-only decoding.
 
 ## 4. End-to-end execution
 
 1. Tokenize the two private contexts independently.
 2. Run frozen Sharer prefill under `no_grad`; retain raw `C_s`.
 3. Run frozen Receiver prefix prefill under `no_grad`; retain raw `C_r`.
-4. Pool `C_s` and `C_r` independently with the two-stage LCF-X pools.
+4. Pool both caches with independent vectorized `N -> k` attention modules.
 5. Align the layer axes, concatenate the pooled side features, and bottleneck to
    `[B,L_r,d]`.
 6. Run self-attention translation over the joint layer memory.
 7. Use raw Receiver K/V positions as queries in the shared cross-attention
    decoder, then generate position-specific `(Delta K, Delta V)` through the
    two shared full-width up-projections.
-8. Add the gated residual to `C_r`.
+8. Add the per-head-scaled residual to `C_r`.
 9. Feed the held-out last Receiver prompt token, then decode autoregressively.
 
 The update is computed once at the prompt boundary. Generated-token KV entries
@@ -170,8 +172,8 @@ changes latency, causality, and the comparison with LCF-X.
   selection, and the same effective-batch protocol as the baselines.
 - Regularize update magnitude with a small optional term
   `lambda_delta * mean(||Delta K||_2 + ||Delta V||_2)` and log per-layer update
-  RMS/gate activity. Start with `lambda_delta=0`; enable it only if update norms
-  become unstable.
+  RMS/per-head-alpha activity. Start with `lambda_delta=0`; enable it only if
+  update norms become unstable.
 
 ## 6. Proposed repository layout
 
@@ -180,11 +182,10 @@ than coupling the two methods through inheritance:
 
 | File | Responsibility |
 |---|---|
-| `pool.py` | Reusable two-stage pool for one cache side; accepts lengths and span boundaries. |
-| `translator.py` | Dual pools, layer bridge, joint bottleneck, self-attention translator, Receiver-position cross-attention decoder, and shared KV update head. |
+| `translator.py` | Symmetric vectorized direct-attention pools, layer bridge, joint bottleneck, self-attention translator, Receiver-position cross-attention decoder, and shared KV update head. |
 | `cache.py` | Reuse or wrap `extract_kv` and `add_residual_inplace`; validate layer/shape/dtype/device invariants. |
 | `model.py` | Frozen pair loading and Receiver prefix-cache decode boundary. |
-| `training.py` | Batched loss, evaluation, checkpoint save/load, gate-temperature schedule, and training loop. |
+| `training.py` | Batched loss, evaluation, checkpoint save/load, and training loop. |
 | `runner.py` | One-example/batched inference and standardized timing/result records. |
 | `schema.py` | Alias the common cross-context example schema. |
 | `__init__.py` | Public exports. |
@@ -193,16 +194,15 @@ Add `scripts/train_xkv.py`, `scripts/run_xkv.py`, Makefile targets
 `xkv-train`/`xkv-eval`/`xkv`, and model-stamped checkpoints under
 `data/checkpoints/xkv/<dataset>/<sharer>/<receiver>/<architecture>/translator.pt`.
 The architecture stamp must include all cache geometry, `d`, attention heads,
-`n`, `Q`, whether the blocks/heads are shared, span schemes/counts, and gate
-configuration.
+`n`, `k`, and whether the blocks/heads are shared.
 
 ## 7. Implementation phases
 
 ### Phase A — shape-safe MVP
 
 1. Extract and batch both caches, with correct real lengths.
-2. Factor the LCF-X two-stage pooling algorithm into an XKV-local two-sided
-   module and verify `Q=1` parity against `LCFXFuser.align` on the Sharer path.
+2. Implement one vectorized `N -> k` learned-query attention pool and apply an
+   independent instance to each cache.
 3. Implement layer alignment, concatenation, bottleneck, translator blocks,
    position cross-attention decoder, and zero-initialized shared update head.
 4. Integrate the Receiver prefix-cache injection/decode path.
@@ -223,14 +223,14 @@ prefill/translator/decode latency, time to first token, and update RMS.
 Required ablations:
 
 - Sharer-only pool versus dual-cache pool;
+- direct pooling versus legacy two-stage pooling;
 - concatenation+MLP versus attention translator;
 - shared versus per-layer update decoder;
 - shared position MLP versus position cross-attention;
 - split K/V latents versus full-latent up-projections;
-- soft gates versus hard-at-eval gates;
-- Stage 1 span tokens retained versus full two-stage summaries;
-- one versus two cross-span summaries (`Q=1,2`);
-- bottleneck width, translator depth, and span count/scheme.
+- learned per-head scaling versus no output scaling;
+- one, two, or four direct summaries (`k=1,2,4`);
+- bottleneck width and translator depth.
 
 ## 8. Verification gates
 
@@ -238,13 +238,12 @@ Required ablations:
    `L_s != L_r`, `H_s != H_r`, `D_s != D_r`, unequal sequence lengths, and
    batch rows with different real lengths. Include Gemma-3 hybrid caches with
    unequal sliding/full layer widths on either side.
-2. **Pool correctness:** padded tokens receive zero attention; fixed and natural
-   span schemes produce finite summaries; the full-pooling output contains `Q`
-   independently queried summaries per layer and side.
+2. **Pool correctness:** padded tokens receive zero attention; both outputs
+   contain `k` finite, independently parameterized summaries per layer/head.
 3. **Zero-update equivalence:** zero-init XKV logits and greedy output match the
    Receiver-only cache path within dtype tolerance.
 4. **Gradient isolation:** finite nonzero gradients reach both pools, bottleneck,
-   attention blocks, gates, and up-projections; no base-model
+   attention blocks, per-head scaling, and up-projections; no base-model
    parameter receives a gradient or optimizer state.
 5. **Cache safety:** updates exactly match every Receiver cache layer's
    shape/dtype/device and never alter the Sharer cache.
@@ -262,14 +261,17 @@ Required ablations:
 - **Translator cost:** never self-attend over all `L_r*N_r` raw cache positions.
   Self-attention sees only `L_r` pooled tokens; the position decoder performs
   cross-attention from `N_r` queries to `L_r` memory tokens per layer.
-- **Pooling removes useful locality:** keep the Stage-1-only ablation, which
-  exposes `L*P` memory tokens to the translator at a higher compute cost.
+- **Pooling removes useful locality:** log normalized attention entropy and
+  inter-slot attention-map cosine separately for the Sharer and Receiver. The
+  learned positive logit scales correct under-selective pooling; if slots still
+  collapse, add an attention-map diversity regularizer before restoring span
+  pooling.
 - **Updates overpower the frozen Receiver:** zero-init the up-projections, log
   update/cache RMS ratios, clip gradients, and optionally enable update-norm
   regularization.
 - **Attention learns identity instead of communication:** compare against the
   Receiver-only-pool and Sharer-only-pool ablations and inspect cross-side
-  attention/gate activity.
+  attention/per-head-alpha activity.
 
 ### Recommended design choices
 
@@ -280,19 +282,14 @@ Required ablations:
    projection emits K and one emits V from the full decoded latent. Raw Receiver
    K/V provides position identity; layer embeddings and layer-specific K/V
    gates retain layer identity without independent per-layer heads.
-3. **Normalize the two sides before concatenation.** A parameter-free RMS
-   normalization of each flattened pooled side prevents a larger-magnitude cache
-   from dominating `W_down` and does not change the estimate below.
-4. **Treat retained Stage-1 span tokens as an architecture ablation.** The
-   default two-stage pool retains two summaries per layer before flattening,
-   while the translator still sees one width-`d` token per Receiver layer.
-   Keeping all `P` span summaries would give attention evidence-level choices
-   at roughly unchanged parameter count, but raises
-   attention activation/compute from `O(L_r^2)` toward
-   `O(((L_s+L_r)*P)^2)` if all tokens self-attend globally.
-5. **Develop with deterministic sigmoid gates first.** Once shape, gradients,
-   and zero-update equivalence pass, enable the LCF-X Gumbel schedule. This
-   separates stochastic-gate instability from translator bugs.
+3. **Use the joint bottleneck normalization first.** The existing
+   `W_down -> MLP -> LayerNorm` controls the concatenated scale. Add side-specific
+   normalization only if measured cache-scale imbalance warrants it.
+4. **Keep `k=2` symmetric by default.** This preserves two independent views
+   of each cache while retaining a single vectorized attention operation.
+5. **Keep only deterministic per-head sigmoid scaling.** Do not restore the
+   layer/type Gumbel gates unless a separate ablation demonstrates learned
+   sparsity and removes the train/evaluation scaling mismatch.
 6. **Write updates directly in the Receiver cache's stored key space.** Cached
    keys have already received the Receiver's positional transform; do not apply
    RoPE a second time to `Delta K`. The position-query path supplies the relevant
@@ -300,55 +297,54 @@ Required ablations:
 
 ## 10. Parameter estimate
 
-Let `F_s=H_s*D_s`, `F_r=H_r*D_r`, and let `Q` be the number of cross-span
-summaries per layer and side. With PyTorch-style linear/MHA biases,
+Let `F_s=H_s*D_s`, `F_r=H_r*D_r`, and let `k` be the direct-attention slot
+count used on both sides. With PyTorch-style linear/MHA biases,
 FFN width `4d`, a shared position decoder, two shared full-width up-projections,
 and no optional side normalization, the trainable count is:
 
 | Component | Parameters |
 |---|---:|
-| Dual LCF-X pools | `(1+Q)*(L_s*F_s + L_r*F_r)` |
+| Dual direct-attention pools | `k*(L_s*F_s + L_r*F_r) + 2` |
 | Optional layer map (`L_s != L_r`) | `L_s*L_r + L_r` |
-| Joint down-projection | `(2*Q*F_s + 2*Q*F_r)*d + d` |
+| Joint down-projection | `2*k*(F_s + F_r)*d + d` |
 | Joint bottleneck MLP + LayerNorm | `8*d^2 + 7*d` |
 | Shared Receiver-layer embedding | `L_r*d` |
 | Each independent translator block | `12*d^2 + 13*d` |
 | Position query projection | `2*F_r*d + d` |
 | Position cross-attention + FFN + norms | `12*d^2 + 13*d` |
 | Shared update head | `2*H_r*d + 2*H_r + 2*(d*F_r + F_r)` |
-| Layer/type gates | `2*L_r` |
 
 For the repository default `Qwen3-0.6B -> Qwen3-0.6B`
-(`L_s=L_r=28`, `H_s=H_r=8`, `D_s=D_r=128`) with `Q=2` and
+(`L_s=L_r=28`, `H_s=H_r=8`, `D_s=D_r=128`) with `k=2` and
 `d=1024//8=128`:
 
 | Component | Parameters |
 |---|---:|
-| Dual pools | 172,032 |
+| Dual direct-attention pools | 114,690 |
 | Joint bottleneck, norm, and layer embedding | 1,184,256 |
 | `n=1` attention translator | 198,272 |
 | Shared Receiver-position decoder | 460,544 |
-| Shared update head + layer gates | 266,312 |
-| **Total (`n=1`)** | **2,281,416 (~2.28M)** |
+| Shared update head | 266,256 |
+| **Total (`n=1`)** | **2,224,018 (~2.22M)** |
 
 With independent attention blocks, each extra repetition adds **198,272**
 parameters:
 
 ```text
-P_shared(n) = 2,083,144 + 198,272*n
+P_shared(n) = 2,025,746 + 198,272*n
 ```
 
-Thus `n=2` is 2,479,688 parameters and `n=4` is 2,876,232. If the same block is
+Thus `n=2` is 2,422,290 parameters and `n=4` is 2,818,834. If the same block is
 recurrently applied `n` times with tied weights, the parameter count stays at
-2,281,416 while attention compute grows approximately linearly with `n`.
+2,224,018 while attention compute grows approximately linearly with `n`.
 
-The previous fixed-`d=256`, `Q=2` v5 adapter had 5,437,256 parameters for this
-pair. At either width, the second summary changes only the pool queries and
-down-projection input; it does not change the translator sequence length or the
-`[B,L_r,d]` bottleneck output.
+The current symmetric direct-pool design has 5,379,858 parameters at fixed
+`d=256,k=2` for this pair. Changing `k` affects only the learned pool queries
+and the joint down-projection input; it does not alter the translator sequence
+length or the `[B,L_r,d]` bottleneck output.
 
-At the previous `Q=1,d=128` Qwen geometry, the same Receiver-position decoder
-had 460,544 parameters and the complete XKV adapter had 1,699,784 parameters.
+At `k=1,d=128`, the same Receiver-position decoder has 460,544 parameters and
+the complete XKV adapter has 1,642,386 parameters.
 
 These totals exclude frozen Sharer/Receiver weights, optimizer state, and
 activation memory. Different model cache geometries change the pool, input, and
@@ -357,15 +353,17 @@ from `sum(p.numel() for p in xkv.parameters() if p.requires_grad)`.
 
 ## 11. MVP defaults
 
-Use `d=receiver_hidden//8`, `Q=2` independent cross-span queries per layer and
-side, 8 attention heads (or the largest divisor of `d` not exceeding 8), `n=1`
+Use `d=receiver_hidden//8`, `k=2` independent direct-attention queries per
+layer/head and side, 8 attention heads
+(or the largest divisor of `d` not exceeding 8), `n=1`
 independently parameterized self-attention block, a shared position
 cross-attention decoder, two shared full-width up-projections, FFN width `4d`,
-dropout `0.1`,
-`P_s=P_r=5` for fixed spans (natural paragraphs when available), and LCF-X gate
-temperature `1.0 -> 0.5`. Treat these as sweep defaults, not claims of
-optimality. An optional tied-block implementation can separate depth from
-parameter count. The current CLI names are `--d-model` (`eighth` by default,
-or an explicit integer), `--num-blocks`, and `--pool-slots`
-(`XKV_DMODEL`, `XKV_BLOCKS`, and `XKV_POOL_SLOTS` in the Makefile). `Q` is
+dropout `0.1`, deterministic per-head sigmoid scaling, and no layer/type gate.
+Treat these as
+sweep defaults, not claims of optimality. An optional tied-block implementation
+can separate depth from parameter count. The current CLI names are `--d-model`
+(`eighth` by default, or an explicit integer), `--num-blocks`, and `--pool-k`
+(`--pool-slots` remains an alias)
+(`XKV_DMODEL`, `XKV_BLOCKS`, and `XKV_POOL_K` in the Makefile;
+`XKV_POOL_SLOTS` is an alias). `k` is
 checkpoint-shape metadata and must match at training and evaluation.

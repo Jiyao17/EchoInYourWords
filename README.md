@@ -125,11 +125,12 @@ make single DATASET=hotpotqa_bridge MODEL=Qwen/Qwen3-0.6B                       
 `DATASET=` to test every dataset, omit both to test the full model × dataset
 grid.
 
-Every such run is isolated automatically by **dataset + pair + pooling-span
-count** — results go to `results/<method>/<dataset>/<sharer>/<receiver>/sp<SPANS>/`
-and the checkpoint to `data/checkpoints/lcfx/<dataset>/<sharer>/<receiver>/
-sp<SPANS>/fuser.pt` (model id `/` → `--`), so runs never overwrite each other,
-including across a `SPANS=` sweep. `SHARER`/`RECEIVER` move every method at
+Every run is isolated automatically by **dataset + pair + method-specific
+architecture settings**. For example, LCF-X results go to
+`results/lcfx/<dataset>/<sharer>/<receiver>/sp<SPANS>/` and its checkpoint to
+`data/checkpoints/lcfx/<dataset>/<sharer>/<receiver>/sp<SPANS>/fuser.pt`
+(model id `/` → `--`), so architecture sweeps never overwrite each other.
+`SHARER`/`RECEIVER` move every method at
 once; the per-method `LCFX_*`/`EIYW_*`/`KVTOK_*`/`XKV_*`/`T2T_*` vars override a single method.
 EIYW reuses LCF-X's pooling design (and hence its `SPANS` knob) on the Sharer —
 there's no separate `EIYW_SPANS`. Its own shape knobs are `EIYW_DMODEL`
@@ -612,19 +613,27 @@ python scripts/run_kvtok.py --dataset data/tasks/hotpotqa_bridge_val.jsonl \
 
 ## Run XKV
 
-XKV prefills both frozen models and independently applies an expanded LCF-X
-two-stage pool to both caches. Within-span attention still maps `N → P`, but
-two independent learned cross-span queries now map `P → 2`, producing K and
-V summaries of shape `[B,H,2,D]` per layer and side. After the optional learned
-`L_s → L_r` layer-axis map, the two flattened slots double the concatenated
-width to `2*(2*H_s*D_s + 2*H_r*D_r)`. A learned bottleneck returns this to
+XKV prefills both frozen models and applies the same vectorized learned-query
+attention pool directly to each cache. For every layer and KV head, `k`
+independent queries reduce raw positions `N → k`, producing separate pooled K
+and V tensors `[B,H,k,D]`; `k=2` by default. There are no intermediate spans.
+Each side applies its own learned positive logit scale
+`gamma=exp(logit_scale)`, initialized to `1.0`, to the usual
+`QK^T/sqrt(D)` scores. Pool queries use their full Kaiming initialization (the
+former extra `x0.02` shrink is removed), so the slots start with enough score
+variation to select different positions instead of duplicating a global
+average.
+After the optional learned `L_s → L_r` layer-axis map, concatenation has width
+`2*k*(H_s*D_s + H_r*D_r)`. A learned bottleneck returns this to
 `[B,L_r,d]`, with `d=receiver_hidden//8`, before `n=1` attention block by
 default. This resolves to 128/144/384 for the Qwen-0.6B, Gemma-1B, and
 Llama-3B receivers. After attention, each
 raw Receiver K/V position is projected into a query and cross-attends to the
-translated layer memory. The resulting position-aware latent is gated per
-Receiver KV head and passed through one shared K up-projection and one shared V
-up-projection. Output weights remain shared across Receiver layers.
+translated layer memory. The resulting position-aware latent is scaled by a
+learned sigmoid per Receiver KV head and passed through one shared K
+up-projection and one shared V up-projection. Output weights remain shared
+across Receiver layers; the former stochastic layer/type gates have been
+removed.
 
 Gemma-3's hybrid cache is handled explicitly. When its sliding and full-attention
 layers have different token widths, XKV uses the shortest layer width as a
@@ -642,16 +651,21 @@ make xkv DATASET=hotpotqa_bridge \
 make exp METHOD=xkv DATASET=hotpotqa_bridge
 ```
 
-Key settings are `XKV_DMODEL=eighth` (`receiver_hidden//8`), `XKV_BLOCKS=1`, `XKV_HEADS=8`,
-`XKV_POOL_SLOTS=2`, `XKV_DROPOUT=0.1`, plus the shared
-`SPANS`/`SPAN_SCHEME` training knobs. An explicit integer such as
-`XKV_DMODEL=256` still selects a fixed width. Set `XKV_POOL_SLOTS=1` to
-reproduce the previous one-summary pooling width.
+Key settings are `XKV_DMODEL=eighth` (`receiver_hidden//8`), `XKV_BLOCKS=1`,
+`XKV_HEADS=8`, `XKV_POOL_K=2` (`XKV_POOL_SLOTS` is an alias; `k` applies to
+both caches), and
+`XKV_DROPOUT=0.1`. The CLI accepts either `--pool-slots` or `--pool-k`.
+An explicit integer such as `XKV_DMODEL=256` still selects a fixed width.
+Every `LOG_EVERY` optimizer steps, `training_log.jsonl` records normalized
+attention entropy, inter-slot attention-map cosine, and the learned scale for
+both pools as `sharer_pool_*` and `receiver_pool_*`. Entropy or cosine near
+`1.0` indicates nearly uniform or collapsed slots, respectively. Diagnostics
+are disabled on other training steps and throughout normal inference.
 On ROPES, XKV defaults to `BATCH_SIZE=32` and `GRAD_ACCUM=8` for the reference
 pair (effective batch 256); the experiment sweep keeps its existing rule of
 halving the batch and doubling accumulation as pair size increases.
 Checkpoints and results are isolated under
-`sp<SPANS>_dh8_n<XKV_BLOCKS>_h<XKV_HEADS>_do<XKV_DROPOUT>_p<XKV_POOL_SLOTS>_v6`
+`dh8_n<XKV_BLOCKS>_h<XKV_HEADS>_do<XKV_DROPOUT>_k<XKV_POOL_SLOTS>_v10`
 for the dynamic default (`d256` replaces `dh8` for an explicit width of 256;
 the dropout decimal point is rendered as `p`).
 
@@ -663,7 +677,7 @@ Once you've got some results on disk, render a Markdown comparison table with
 ```bash
 make visual DATASET=hotpotqa_bridge                  # EM+F1 grid (default ITEM=scores)
 make visual DATASET=hotpotqa_bridge ITEM=scores       # same, explicit
-make visual DATASET=hotpotqa_bridge ITEM=params       # trainable-parameter grid (lcfx/eiyw/kvtok/xkv)
+make visual DATASET=hotpotqa_bridge ITEM=params       # trainable-parameter grid (lcfx/xkv)
 make visual DATASET=hotpotqa_bridge ITEM=latency      # average per-example latency grid
 make visual ITEM=datasets                              # dataset overview (DATASET= ignored)
 ```
@@ -672,12 +686,12 @@ make visual ITEM=datasets                              # dataset overview (DATAS
 
 - `scores` (default) — Sharer × Receiver grid (primary roster, 3×3; 4×4 with
   `EXTRA_MODELS=TRUE`, matching `exp`/`sweep`) for one
-  `DATASET=`, with LCF-X / EIYW / KVTok / XKV / T2T EM+F1 per cell (best EM and best F1 in
+  `DATASET=`, with LCF-X / XKV / T2T EM+F1 per cell (best EM and best F1 in
   each cell bolded). Read from `results/<method>/<dataset>/<sharer>/<receiver>/metrics.json`.
 - `params` — the same Sharer × Receiver grid, but trainable-parameter counts
-  for LCF-X / EIYW / KVTok / XKV (T2T trains nothing, so it's omitted). Read from the
+  for LCF-X / XKV (T2T trains nothing, so it's omitted). Read from the
   `training_log.jsonl` under each checkpoint dir.
-- `latency` — the same Sharer × Receiver grid, but LCF-X / EIYW / KVTok / XKV / T2T average
+- `latency` — the same Sharer × Receiver grid, but LCF-X / XKV / T2T average
   per-example total latency (fastest of each cell bolded). Read from the
   `average.total_ms` field of `results/<method>/<dataset>/<sharer>/<receiver>/latency.json`.
 - `datasets` — one overview table across *every* dataset (`DATASET=` is
@@ -686,15 +700,9 @@ make visual ITEM=datasets                              # dataset overview (DATAS
 
 Any method/checkpoint/result that hasn't been run yet is left blank rather
 than erroring, so you can call `make visual` at any point mid-sweep. Tables
-use the active `SPANS`, `EIYW_DMODEL`, `EIYW_QPL`, `EIYW_ADAPT`, KVTok, and
-XKV shape settings. By default, KVTok selects the globally newest completed
-configuration for the grid and uses it strictly for every cell, so a partial
-1024-width sweep is never mixed with legacy 512-width cells. Pass
-`KVTOK_DMODEL`/`KVTOK_HEADS` for an exact shape, or
-`KVTOK_VISUAL_HP=sp5_tok8` to select the legacy layout explicitly. The chosen
-KVTok configuration is printed and embedded in the table caption. XKV uses
-the exact active `XKV_DMODEL`, `XKV_BLOCKS`, `XKV_HEADS`,
-`XKV_POOL_SLOTS`, and `XKV_DROPOUT` configuration, which is also embedded in
+use the active LCF-X `SPANS` and XKV shape settings. XKV uses the exact active
+`XKV_DMODEL`, `XKV_BLOCKS`, `XKV_HEADS`,
+`XKV_POOL_K`/`XKV_POOL_SLOTS`, and `XKV_DROPOUT` configuration, which is also embedded in
 the table caption. The
 tables are written
 to `results/comparison/<dataset>[_params|_latency].md` (or

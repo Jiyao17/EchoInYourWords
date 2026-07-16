@@ -1,20 +1,20 @@
 #!/usr/bin/env python
-"""Build comparison tables for the EIYW/LCF-X/KVTok/XKV/T2T experiments.
+"""Build comparison tables for the LCF-X/XKV/T2T experiments.
 
-ITEM=scores (default): Sharer x Receiver grid of lcfx / eiyw / kvtok / xkv / t2t
+ITEM=scores (default): Sharer x Receiver grid of lcfx / xkv / t2t
 EM+F1 for one DATASET, read from
 results/<method>/<dataset>/<sharer>/<receiver>/metrics.json
-(lcfx/eiyw/kvtok/xkv have extra hyperparameter subdirs).
+(lcfx/xkv have extra hyperparameter subdirs).
 
-ITEM=params: Sharer x Receiver grid of lcfx / eiyw / kvtok / xkv trainable
+ITEM=params: Sharer x Receiver grid of lcfx / xkv trainable
 parameter counts (t2t trains nothing) for one DATASET, read from the "start" event of
 data/checkpoints/<method>/<dataset>/<sharer>/<receiver>/training_log.jsonl
-(lcfx/eiyw/kvtok/xkv again have extra hyperparameter subdirs).
+(lcfx/xkv again have extra hyperparameter subdirs).
 
-ITEM=latency: Sharer x Receiver grid of lcfx / eiyw / kvtok / xkv / t2t average
+ITEM=latency: Sharer x Receiver grid of lcfx / xkv / t2t average
 per-example total latency (ms) for one DATASET, read from the "average.total_ms" field of
 results/<method>/<dataset>/<sharer>/<receiver>/latency.json
-(lcfx/eiyw/kvtok/xkv have extra hyperparameter subdirs; fastest of each cell is
+(lcfx/xkv have extra hyperparameter subdirs; fastest of each cell is
 bolded).
 
 ITEM=datasets: one overview table across every known dataset (DATASET is
@@ -28,6 +28,7 @@ labels) showing WHEN each result was produced -- the mtime of its result
 file (metrics.json/latency.json), or the training run's "created_at" for
 ITEM=params -- so stale results are easy to spot. All times are UTC.
 """
+
 import argparse
 import glob
 import json
@@ -52,7 +53,14 @@ EXTRA_MODELS = [
 ]
 
 # Mirrors ALL_DATASETS in the Makefile.
-ALL_DATASETS = ["hotpotqa_bridge", "musique", "qasc", "2wikimultihop", "ropes", "strategyqa"]
+ALL_DATASETS = [
+    "hotpotqa_bridge",
+    "musique",
+    "qasc",
+    "2wikimultihop",
+    "ropes",
+    "strategyqa",
+]
 
 # Representative sizes drawn from PRIMARY_MODELS, used for the ITEM=datasets
 # "typical score" columns (single-model oracle: one model, all evidence).
@@ -64,31 +72,24 @@ SIZE_MODELS = [
 
 METHODS = [
     ("lcfx", "L"),
-    ("eiyw", "E"),
-    ("kvtok", "K"),
     ("xkv", "X"),
     ("t2t", "T"),
 ]
 TRAINED_METHODS = [
     ("lcfx", "L"),
-    ("eiyw", "E"),
-    ("kvtok", "K"),
     ("xkv", "X"),
 ]
 
-# LCF-X and EIYW checkpoint/result dirs nest a hyperparam path under the pair
-# dir (mirroring the Makefile's LCFX_SLUG/EIYW_SLUG): sp<SPANS> for LCF-X,
-# sp<SPANS>_dm<EIYW_DMODEL>_k<EIYW_QPL>[_ad<EIYW_ADAPT>] for EIYW. Candidates
-# are tried in order — the Makefile's CURRENT defaults first, then legacy
-# default layouts — for a stable pick when several hyperparam sweeps (or
-# stale dirs from older designs, e.g. EIYW's pre-redesign sp*_bn* / k<K> /
-# sp*_dmhalf_* layouts) exist side by side.
+# LCF-X and XKV checkpoint/result dirs nest a hyperparameter path under the
+# pair directory. Candidates are tried in order — current defaults first, then
+# legacy layouts — for a stable pick when several sweeps exist side by side.
 PREFERRED_HP = {
     "lcfx": ["sp5"],
-    # d_model default became a fixed 512 (was 'half'); older runs live on.
-    "eiyw": ["sp5_dm512_k1", "sp5_dmhalf_k1"],
-    "kvtok": ["sp5_tok8_dm512_h8", "sp5_tok8"],
     "xkv": [
+        "dh8_n1_h8_do0p1_k2_v10",
+        "dh8_n1_h8_do0p1_k2_v9",
+        "sp5_dh8_n1_h8_do0p1_p2_v8",
+        "sp5_dh8_n1_h8_do0p1_p2_v7",
         "sp5_dh8_n1_h8_do0p1_p2_v6",
         "sp5_d256_n1_h8_do0p1_p2_v5",
         "sp5_d256_n1_h8_do0p1_v4",
@@ -139,39 +140,6 @@ def find_method_file(method, base, filename):
         path = os.path.join(base, SELECTED_HP[method], filename)
         return path if os.path.isfile(path) else None
     return find_nested_file(base, filename, preferred_hp=PREFERRED_HP.get(method))
-
-
-def find_latest_kvtok_hp(dataset, models):
-    """Newest completed KVTok layout across the grid, selected once globally.
-
-    Selecting once prevents a partially completed width sweep from mixing its
-    new cells with legacy-width cells. Metrics are authoritative; training logs
-    are only a fallback when the dataset has no completed KVTok result yet.
-    """
-
-    candidates = {}
-    for sharer in models:
-        for receiver in models:
-            pair_dir = os.path.join(
-                RESULTS_DIR, "kvtok", dataset, slug(sharer), slug(receiver)
-            )
-            for path in glob.glob(os.path.join(pair_dir, "*", "metrics.json")):
-                hp = os.path.basename(os.path.dirname(path))
-                candidates[hp] = max(candidates.get(hp, 0.0), os.path.getmtime(path))
-    if not candidates:
-        for sharer in models:
-            for receiver in models:
-                pair_dir = os.path.join(
-                    CHECKPOINTS_DIR, "kvtok", dataset, slug(sharer), slug(receiver)
-                )
-                for path in glob.glob(
-                    os.path.join(pair_dir, "*", "training_log.jsonl")
-                ):
-                    hp = os.path.basename(os.path.dirname(path))
-                    candidates[hp] = max(
-                        candidates.get(hp, 0.0), os.path.getmtime(path)
-                    )
-    return max(candidates, key=lambda hp: (candidates[hp], hp)) if candidates else None
 
 
 def find_metrics_path(method, dataset, sharer, receiver):
@@ -226,7 +194,12 @@ def cell_text(dataset, sharer, receiver):
         if em is None and f1 is None:
             lines.append(label)
         else:
-            pair = fmt_pair(em, f1, em is not None and em == best_em, f1 is not None and f1 == best_f1)
+            pair = fmt_pair(
+                em,
+                f1,
+                em is not None and em == best_em,
+                f1 is not None and f1 == best_f1,
+            )
             lines.append(f"{label} {pair}")
     return "<br>".join(lines)
 
@@ -330,7 +303,9 @@ def cell_scores_time_text(dataset, sharer, receiver):
 def cell_params_time_text(dataset, sharer, receiver):
     lines = []
     for method, label in TRAINED_METHODS:
-        t = load_training_start_time(find_training_log_path(method, dataset, sharer, receiver))
+        t = load_training_start_time(
+            find_training_log_path(method, dataset, sharer, receiver)
+        )
         lines.append(f"{label} {fmt_time(t)}".rstrip())
     return "<br>".join(lines)
 
@@ -351,10 +326,7 @@ def build_grid(models, cell_fn, title, caption):
         for receiver in models:
             row.append(cell_fn(sharer, receiver))
         rows.append(row)
-    selected_configs = [
-        ("KVTok", SELECTED_HP.get("kvtok")),
-        ("XKV", SELECTED_HP.get("xkv")),
-    ]
+    selected_configs = [("XKV", SELECTED_HP.get("xkv"))]
     for method_name, config in selected_configs:
         if config:
             caption += f" Selected {method_name} configuration: `{config}`."
@@ -368,8 +340,8 @@ def build_scores_table(dataset, models):
     return build_grid(
         models,
         lambda sharer, receiver: cell_text(dataset, sharer, receiver),
-        f"{dataset}: lcfx / eiyw / kvtok / xkv / t2t (EM/F1, %)",
-        "Each cell: L=lcfx, E=eiyw, K=kvtok, X=xkv, T=t2t, values are EM/F1 (best of each in a cell is bolded). Missing results are left blank.",
+        f"{dataset}: lcfx / xkv / t2t (EM/F1, %)",
+        "Each cell: L=lcfx, X=xkv, T=t2t, values are EM/F1 (best of each in a cell is bolded). Missing results are left blank.",
     )
 
 
@@ -377,8 +349,8 @@ def build_params_table(dataset, models):
     return build_grid(
         models,
         lambda sharer, receiver: cell_params_text(dataset, sharer, receiver),
-        f"{dataset}: trainable parameters (lcfx / eiyw / kvtok / xkv)",
-        "Each cell: L=lcfx, E=eiyw, K=kvtok, X=xkv trainable parameter count (t2t trains nothing). Missing checkpoints are left blank.",
+        f"{dataset}: trainable parameters (lcfx / xkv)",
+        "Each cell: L=lcfx, X=xkv trainable parameter count (t2t trains nothing). Missing checkpoints are left blank.",
     )
 
 
@@ -386,8 +358,8 @@ def build_latency_table(dataset, models):
     return build_grid(
         models,
         lambda sharer, receiver: cell_latency_text(dataset, sharer, receiver),
-        f"{dataset}: lcfx / eiyw / kvtok / xkv / t2t average latency per example",
-        "Each cell: L=lcfx, E=eiyw, K=kvtok, X=xkv, T=t2t, average total latency per example (fastest of each in a cell is bolded). Missing results are left blank.",
+        f"{dataset}: lcfx / xkv / t2t average latency per example",
+        "Each cell: L=lcfx, X=xkv, T=t2t, average total latency per example (fastest of each in a cell is bolded). Missing results are left blank.",
     )
 
 
@@ -395,8 +367,8 @@ def build_scores_time_table(dataset, models):
     return build_grid(
         models,
         lambda sharer, receiver: cell_scores_time_text(dataset, sharer, receiver),
-        f"{dataset}: time of result (lcfx / eiyw / kvtok / xkv / t2t)",
-        "Each cell: L=lcfx, E=eiyw, K=kvtok, X=xkv, T=t2t, UTC mtime of the metrics.json backing the scores table above. Missing results are left blank.",
+        f"{dataset}: time of result (lcfx / xkv / t2t)",
+        "Each cell: L=lcfx, X=xkv, T=t2t, UTC mtime of the metrics.json backing the scores table above. Missing results are left blank.",
     )
 
 
@@ -404,8 +376,8 @@ def build_params_time_table(dataset, models):
     return build_grid(
         models,
         lambda sharer, receiver: cell_params_time_text(dataset, sharer, receiver),
-        f"{dataset}: time of result (lcfx / eiyw / kvtok / xkv)",
-        "Each cell: L=lcfx, E=eiyw, K=kvtok, X=xkv, UTC start time (created_at) of the training run backing the params table above. Missing checkpoints are left blank.",
+        f"{dataset}: time of result (lcfx / xkv)",
+        "Each cell: L=lcfx, X=xkv, UTC start time (created_at) of the training run backing the params table above. Missing checkpoints are left blank.",
     )
 
 
@@ -413,8 +385,8 @@ def build_latency_time_table(dataset, models):
     return build_grid(
         models,
         lambda sharer, receiver: cell_latency_time_text(dataset, sharer, receiver),
-        f"{dataset}: time of result (lcfx / eiyw / kvtok / xkv / t2t)",
-        "Each cell: L=lcfx, E=eiyw, K=kvtok, X=xkv, T=t2t, UTC mtime of the latency.json backing the latency table above. Missing results are left blank.",
+        f"{dataset}: time of result (lcfx / xkv / t2t)",
+        "Each cell: L=lcfx, X=xkv, T=t2t, UTC mtime of the latency.json backing the latency table above. Missing results are left blank.",
     )
 
 
@@ -433,11 +405,15 @@ def fmt_int(n):
 
 
 def find_single_metrics_path(dataset, model):
-    return find_nested_file(os.path.join(RESULTS_DIR, "single", dataset, slug(model)), "metrics.json")
+    return find_nested_file(
+        os.path.join(RESULTS_DIR, "single", dataset, slug(model)), "metrics.json"
+    )
 
 
 def build_datasets_table(datasets):
-    header = ["Dataset", "Train", "Val"] + [f"{size} oracle EM/F1" for size, _ in SIZE_MODELS]
+    header = ["Dataset", "Train", "Val"] + [
+        f"{size} oracle EM/F1" for size, _ in SIZE_MODELS
+    ]
     rows = [header, ["---"] * len(header)]
     for dataset in datasets:
         train_n = count_lines(os.path.join(TASKS_DIR, f"{dataset}_train.jsonl"))
@@ -460,7 +436,9 @@ def build_datasets_table(datasets):
     for row in rows:
         lines.append("| " + " | ".join(row) + " |")
 
-    time_header = ["Dataset"] + [f"{size} oracle result time" for size, _ in SIZE_MODELS]
+    time_header = ["Dataset"] + [
+        f"{size} oracle result time" for size, _ in SIZE_MODELS
+    ]
     time_rows = [time_header, ["---"] * len(time_header)]
     for dataset in datasets:
         row = [dataset]
@@ -485,17 +463,21 @@ def main():
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset")
-    parser.add_argument("--item", choices=["scores", "params", "latency", "datasets"], default="scores")
+    parser.add_argument(
+        "--item", choices=["scores", "params", "latency", "datasets"], default="scores"
+    )
     parser.add_argument("--models", nargs="+", default=None)
     parser.add_argument(
         "--extra-models",
         action="store_true",
         help="Also include the opt-in large tier (Qwen3-8B) in the grid, matching `make exp EXTRA_MODELS=TRUE`",
     )
-    parser.add_argument("--lcfx-hp", help="Exact LCF-X hyperparameter subdirectory to display")
-    parser.add_argument("--eiyw-hp", help="Exact EIYW hyperparameter subdirectory to display")
-    parser.add_argument("--kvtok-hp", help="Exact KVTok hyperparameter subdirectory to display")
-    parser.add_argument("--xkv-hp", help="Exact XKV hyperparameter subdirectory to display")
+    parser.add_argument(
+        "--lcfx-hp", help="Exact LCF-X hyperparameter subdirectory to display"
+    )
+    parser.add_argument(
+        "--xkv-hp", help="Exact XKV hyperparameter subdirectory to display"
+    )
     parser.add_argument("--output")
     args = parser.parse_args()
 
@@ -504,17 +486,10 @@ def main():
     elif args.extra_models:
         args.models = args.models + [m for m in EXTRA_MODELS if m not in args.models]
 
-    kvtok_hp = args.kvtok_hp
-    if kvtok_hp == "latest":
-        kvtok_hp = find_latest_kvtok_hp(args.dataset, args.models)
-        if kvtok_hp:
-            print(f"Selected latest KVTok configuration: {kvtok_hp}")
     SELECTED_HP = {
         method: hp
         for method, hp in (
             ("lcfx", args.lcfx_hp),
-            ("eiyw", args.eiyw_hp),
-            ("kvtok", kvtok_hp),
             ("xkv", args.xkv_hp),
         )
         if hp is not None
@@ -527,7 +502,9 @@ def main():
         output = args.output or os.path.join(RESULTS_DIR, "comparison", "datasets.md")
     else:
         suffix = "" if args.item == "scores" else f"_{args.item}"
-        output = args.output or os.path.join(RESULTS_DIR, "comparison", f"{args.dataset}{suffix}.md")
+        output = args.output or os.path.join(
+            RESULTS_DIR, "comparison", f"{args.dataset}{suffix}.md"
+        )
     os.makedirs(os.path.dirname(output), exist_ok=True)
 
     if args.item == "scores":

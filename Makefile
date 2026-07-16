@@ -77,7 +77,7 @@ help:
 	@echo "  LCF-X-only bottleneck dim: BOTTLENECK=  (default: 128; a hidden projection width, not a token count)"
 	@echo "  EIYW-only knobs: EIYW_DMODEL= (default: half=receiver_hidden//2; also 'hidden' or int)  EIYW_QPL= (default: 1; cross-span queries/layer k, tokens=k*(Ls+Lr))  EIYW_BLOCKS= (default: 2; self-attn blocks)"
 	@echo "  KVTok knobs: KVTOK_TOKENS= (default: 8)  KVTOK_DMODEL= (default: 512)  KVTOK_HEADS= (default: 8; resolved down if it does not divide d_model)"
-	@echo "  XKV knobs: XKV_DMODEL= (default: eighth=receiver_hidden//8; or int)  XKV_BLOCKS= (default: 1 attention block)  XKV_HEADS= (default: 8)  XKV_POOL_SLOTS= (default: 2 cross-span slots/layer)"
+	@echo "  XKV knobs: XKV_DMODEL= (default: eighth=receiver_hidden//8; or int)  XKV_BLOCKS= (default: 1 attention block)  XKV_HEADS= (default: 8)  XKV_POOL_K= (default: 2 direct-attention slots/layer/head/side; XKV_POOL_SLOTS alias)"
 	@echo "Quick smoke:   make lcfx MAX_TRAIN=200 MAX_STEPS=5 EVAL_N=50 BATCH_SIZE=4 GRAD_ACCUM=2"
 
 # ===== Config =================================================================
@@ -128,7 +128,7 @@ XKV_RECEIVER ?= $(RECEIVER)
 # combinations land in their own folders instead of overwriting each other. Layout is
 # <method>/<dataset>/<sharer>/<receiver> (model id "/" -> "--"), e.g.
 #   results/lcfx/hotpotqa_bridge/unsloth--Llama-3.2-1B-Instruct/Qwen--Qwen3-0.6B
-# Both also carry the pooling span count (SPANS, defined below; the fixed-scheme
+# Span-pooling methods also carry the pooling span count (SPANS, defined below; the fixed-scheme
 # chunk count — under the default SPAN_SCHEME=paragraphs the pool has no
 # P-dependent parameters, so sp<SPANS> is just a folder label) so sweeping it
 # lands each run in its own folder instead of overwriting a previous span
@@ -140,7 +140,7 @@ T2T_SLUG   = $(DATASET)/$(subst /,--,$(T2T_SHARER))/$(subst /,--,$(T2T_RECEIVER)
 EIYW_SLUG  = $(DATASET)/$(subst /,--,$(EIYW_SHARER))/$(subst /,--,$(EIYW_RECEIVER))/sp$(SPANS)_dm$(EIYW_DMODEL)_k$(EIYW_QPL)$(if $(filter-out 0,$(EIYW_ADAPT)),_ad$(EIYW_ADAPT),)
 KVTOK_SLUG = $(DATASET)/$(subst /,--,$(KVTOK_SHARER))/$(subst /,--,$(KVTOK_RECEIVER))/sp$(SPANS)_tok$(KVTOK_TOKENS)_dm$(KVTOK_DMODEL)_h$(KVTOK_HEADS)
 XKV_DMODEL_TAG = $(if $(filter eighth hidden/8 hidden//8 receiver/8,$(XKV_DMODEL)),h8,$(XKV_DMODEL))
-XKV_SLUG   = $(DATASET)/$(subst /,--,$(XKV_SHARER))/$(subst /,--,$(XKV_RECEIVER))/sp$(SPANS)_d$(XKV_DMODEL_TAG)_n$(XKV_BLOCKS)_h$(XKV_HEADS)_do$(subst .,p,$(XKV_DROPOUT))_p$(XKV_POOL_SLOTS)_v6
+XKV_SLUG   = $(DATASET)/$(subst /,--,$(XKV_SHARER))/$(subst /,--,$(XKV_RECEIVER))/d$(XKV_DMODEL_TAG)_n$(XKV_BLOCKS)_h$(XKV_HEADS)_do$(subst .,p,$(XKV_DROPOUT))_k$(XKV_POOL_SLOTS)_v10
 LCFX_OUT   ?= results/lcfx/$(LCFX_SLUG)
 T2T_OUT    ?= results/t2t/$(T2T_SLUG)
 EIYW_OUT   ?= results/eiyw/$(EIYW_SLUG)
@@ -237,7 +237,8 @@ XKV_DMODEL ?= eighth
 XKV_BLOCKS ?= 1
 XKV_HEADS  ?= 8
 XKV_DROPOUT ?= 0.1
-XKV_POOL_SLOTS ?= 2
+XKV_POOL_K ?=
+XKV_POOL_SLOTS ?= $(if $(strip $(XKV_POOL_K)),$(XKV_POOL_K),2)
 XKV_CKPT ?= data/checkpoints/xkv/$(XKV_SLUG)/translator.pt
 
 # --- T2T baseline: caps the Sharer message at SHARER_MAX tokens (paper default
@@ -522,8 +523,7 @@ xkv-train: data
 	$(OFFLINE) $(PY) scripts/train_xkv.py \
 	  --train-data $(TRAIN) \
 	  --sharer-model $(XKV_SHARER) --receiver-model $(XKV_RECEIVER) \
-	  --num-spans $(SPANS) --span-scheme $(SPAN_SCHEME) \
-	  --d-model $(XKV_DMODEL) --num-blocks $(XKV_BLOCKS) --num-heads $(XKV_HEADS) --dropout $(XKV_DROPOUT) --pool-slots $(XKV_POOL_SLOTS) \
+	  --d-model $(XKV_DMODEL) --num-blocks $(XKV_BLOCKS) --num-heads $(XKV_HEADS) --dropout $(XKV_DROPOUT) --pool-k $(XKV_POOL_SLOTS) \
 	  --lr $(LR) --epochs $(EPOCHS) --batch-size $(BATCH_SIZE) --grad-accum $(GRAD_ACCUM) --warmup $(WARMUP) \
 	  --val-frac $(VAL_FRAC) --eval-max-examples $(EVAL_MAX) --eval-em-examples $(EVAL_EM) \
 	  --log-every $(LOG_EVERY) --eval-every $(EVAL_EVERY) --save-every $(SAVE_EVERY) \
@@ -533,9 +533,8 @@ xkv-train: data
 
 xkv-eval: data
 	$(OFFLINE) $(PY) scripts/run_xkv.py --dataset $(VAL) \
-	  --num-spans $(SPANS) --span-scheme $(SPAN_SCHEME) \
 	  --sharer-model $(XKV_SHARER) --receiver-model $(XKV_RECEIVER) \
-	  --d-model $(XKV_DMODEL) --num-blocks $(XKV_BLOCKS) --num-heads $(XKV_HEADS) --dropout $(XKV_DROPOUT) --pool-slots $(XKV_POOL_SLOTS) \
+	  --d-model $(XKV_DMODEL) --num-blocks $(XKV_BLOCKS) --num-heads $(XKV_HEADS) --dropout $(XKV_DROPOUT) --pool-k $(XKV_POOL_SLOTS) \
 	  $(if $(EVAL_N),--num-examples $(EVAL_N),) \
 	  --translator-checkpoint $(XKV_CKPT) --output-dir $(XKV_OUT)
 
@@ -698,17 +697,17 @@ SWEEP_ARGS ?=
 sweep: prepare
 	$(PY) scripts/run_all.py --stage $(EXP_STAGE) $(if $(METHOD),--method $(METHOD),) $(EXTRA_MODELS_FLAG) $(SWEEP_ARGS)
 
-# ===== Visual comparison table (lcfx vs eiyw vs kvtok vs xkv vs t2t) ===========
+# ===== Visual comparison table (lcfx vs xkv vs t2t) ============================
 # Sharer x Receiver grid over the primary model roster (3x3 = 9 cells; 4x4 = 16
 # with EXTRA_MODELS=TRUE, matching exp/sweep) for one dataset. Missing
 # results/checkpoints (method not run, or whole cell not run) are left blank
 # rather than erroring. Four views via ITEM=:
-#   ITEM=scores              lcfx/eiyw/kvtok/xkv/t2t EM+F1 from results/<method>/.../metrics.json
+#   ITEM=scores              lcfx/xkv/t2t EM+F1 from results/<method>/.../metrics.json
 #                           (best EM and best F1 in each cell are bolded)
-#   ITEM=params             lcfx/eiyw/kvtok/xkv trainable parameter counts from
+#   ITEM=params             lcfx/xkv trainable parameter counts from
 #                           data/checkpoints/<method>/.../training_log.jsonl (t2t
 #                           trains nothing, so it's not shown)
-#   ITEM=latency             lcfx/eiyw/kvtok/xkv/t2t average per-example total latency from
+#   ITEM=latency             lcfx/xkv/t2t average per-example total latency from
 #                           results/<method>/.../latency.json (fastest of each
 #                           cell is bolded)
 #   ITEM=datasets            one overview table, every dataset (DATASET= ignored):
@@ -735,18 +734,8 @@ ITEM       ?= scores
 VISUAL_SUFFIX = $(if $(filter params latency,$(ITEM)),_$(ITEM),)
 VISUAL_OUT ?= $(if $(filter datasets,$(ITEM)),results/comparison/datasets.md,results/comparison/$(DATASET)$(VISUAL_SUFFIX).md)
 ALL_VISUAL_ITEMS := scores params latency
-KVTOK_VISUAL_HP = sp$(SPANS)_tok$(KVTOK_TOKENS)_dm$(KVTOK_DMODEL)_h$(KVTOK_HEADS)
-KVTOK_VISUAL_EXPLICIT = $(or \
-	$(filter command line environment,$(origin KVTOK_VISUAL_HP)), \
-	$(filter command line environment,$(origin SPANS)), \
-	$(filter command line environment,$(origin KVTOK_TOKENS)), \
-	$(filter command line environment,$(origin KVTOK_DMODEL)), \
-	$(filter command line environment,$(origin KVTOK_HEADS)))
-KVTOK_VISUAL_SELECTOR = $(if $(KVTOK_VISUAL_EXPLICIT),$(KVTOK_VISUAL_HP),latest)
-XKV_VISUAL_HP = sp$(SPANS)_d$(XKV_DMODEL_TAG)_n$(XKV_BLOCKS)_h$(XKV_HEADS)_do$(subst .,p,$(XKV_DROPOUT))_p$(XKV_POOL_SLOTS)_v6
+XKV_VISUAL_HP = d$(XKV_DMODEL_TAG)_n$(XKV_BLOCKS)_h$(XKV_HEADS)_do$(subst .,p,$(XKV_DROPOUT))_k$(XKV_POOL_SLOTS)_v10
 VISUAL_HP_FLAGS = --lcfx-hp sp$(SPANS) \
-	--eiyw-hp sp$(SPANS)_dm$(EIYW_DMODEL)_k$(EIYW_QPL)$(if $(filter-out 0,$(EIYW_ADAPT)),_ad$(EIYW_ADAPT),) \
-	--kvtok-hp $(KVTOK_VISUAL_SELECTOR) \
 	--xkv-hp $(XKV_VISUAL_HP)
 
 .PHONY: visual

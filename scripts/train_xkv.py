@@ -40,10 +40,13 @@ def main() -> None:
     parser.add_argument("--num-blocks", type=int, default=1)
     parser.add_argument("--num-heads", type=int, default=8)
     parser.add_argument("--dropout", type=float, default=0.1)
-    parser.add_argument("--pool-slots", type=int, default=2)
-    parser.add_argument("--num-spans", type=int, default=5)
     parser.add_argument(
-        "--span-scheme", choices=["paragraphs", "fixed"], default="paragraphs"
+        "--pool-k",
+        "--pool-slots",
+        dest="pool_slots",
+        type=int,
+        default=2,
+        help="Learned direct-attention summaries per layer/head and cache side.",
     )
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--batch-size", type=int, default=16)
@@ -110,8 +113,6 @@ def main() -> None:
         translator,
         training,
         eval_data=evaluation,
-        num_spans=args.num_spans,
-        span_scheme=args.span_scheme,
         lr=args.lr,
         epochs=args.epochs,
         batch_size=args.batch_size,
