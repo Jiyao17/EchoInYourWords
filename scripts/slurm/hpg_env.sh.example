@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Copy this file to scripts/slurm/hpg_env.sh and edit it for your real HPG setup.
+
+# Example: module-based setup
+# module purge
+# module load cuda
+# module load gcc
+
+# Example: conda
+# source /home/zi605672.ucf/miniconda3/etc/profile.d/conda.sh
+# conda activate your-env-name
+
+# Example: venv
+# source /blue/so589980.ucf/zi605672.ucf/venvs/eiyw/bin/activate
+
+echo "Edit scripts/slurm/hpg_env.sh before use." >&2
+exit 1

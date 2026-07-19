@@ -1,0 +1,78 @@
+# HPG/Slurm wrappers for EchoInYourWords.
+#
+# This file intentionally does not modify the project's main Makefile.
+# It only submits Slurm jobs that activate an environment and then call the
+# repository's existing make/python entrypoints with Qwen excluded by default.
+
+ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+SLURM_DIR := $(ROOT)/scripts/slurm
+
+ENV_SCRIPT ?= $(SLURM_DIR)/hpg_env.sh
+PARTITION ?= hpg-turin
+ACCOUNT ?=
+TIME ?= 24:00:00
+GRES ?= gpu:1
+CPUS ?= 8
+MEM ?= 64G
+
+DATASET ?=
+METHOD ?=
+EXP_STAGE ?= smoke
+CONCURRENCY_PER_GPU ?= 1
+RESUME ?= 0
+INCLUDE_8B ?= 0
+
+SAFE_MODELS_BASE := unsloth/Llama-3.2-1B-Instruct unsloth/gemma-3-4b-it
+SAFE_MODELS_8B := mistralai/Ministral-8B-Instruct-2410
+SAFE_MODELS := $(SAFE_MODELS_BASE) $(if $(filter 1 TRUE true yes YES,$(INCLUDE_8B)),$(SAFE_MODELS_8B),)
+SAFE_MODELS_CSV := $(subst $(space),:,$(strip $(SAFE_MODELS)))
+space := $(empty) $(empty)
+empty :=
+
+.DEFAULT_GOAL := help
+
+.PHONY: help
+help:
+	@echo "HPG wrappers for EchoInYourWords (Qwen skipped by default)."
+	@echo ""
+	@echo "Targets:"
+	@echo "  make -f Makefile.hpg submit-prepare"
+	@echo "  make -f Makefile.hpg submit-method METHOD=lcfx DATASET=hotpotqa_bridge"
+	@echo "  make -f Makefile.hpg submit-exp METHOD=t2t DATASET=ropes"
+	@echo "  make -f Makefile.hpg submit-sweep"
+	@echo ""
+	@echo "Common knobs:"
+	@echo "  ENV_SCRIPT=$(ENV_SCRIPT)"
+	@echo "  PARTITION=$(PARTITION) GRES=$(GRES) CPUS=$(CPUS) MEM=$(MEM) TIME=$(TIME)"
+	@echo "  INCLUDE_8B=$(INCLUDE_8B)    # 0 => Llama/Gemma only, 1 => add Ministral-8B"
+	@echo "  DATASET=<dataset>           # for submit-method / submit-exp"
+	@echo "  METHOD=<lcfx|xkv|t2t>       # for submit-method / submit-exp / submit-sweep"
+	@echo "  EXP_STAGE=<smoke|full>      # for submit-exp / submit-sweep"
+	@echo "  RESUME=1                    # continue from results/sweep_manifest.jsonl"
+	@echo ""
+	@echo "Before first use, copy scripts/slurm/hpg_env.sh.example -> scripts/slurm/hpg_env.sh"
+	@echo "and edit it to source your HPG Python environment."
+
+.PHONY: check-env
+check-env:
+	@test -f "$(ENV_SCRIPT)" || (echo "Missing $(ENV_SCRIPT). Copy hpg_env.sh.example first." && exit 1)
+
+.PHONY: submit-prepare
+submit-prepare: check-env
+	sbatch $(if $(ACCOUNT),--account=$(ACCOUNT),) --partition=$(PARTITION) --gres=$(GRES) --cpus-per-task=$(CPUS) --mem=$(MEM) --time=$(TIME) --export=ALL,ENV_SCRIPT=$(ENV_SCRIPT),SAFE_MODELS="$(SAFE_MODELS)" $(SLURM_DIR)/run_safe_prepare.slurm
+
+.PHONY: submit-method
+submit-method: check-env
+	@test -n "$(METHOD)" || (echo "METHOD is required" && exit 1)
+	@test -n "$(DATASET)" || (echo "DATASET is required" && exit 1)
+	sbatch $(if $(ACCOUNT),--account=$(ACCOUNT),) --partition=$(PARTITION) --gres=$(GRES) --cpus-per-task=$(CPUS) --mem=$(MEM) --time=$(TIME) --export=ALL,ENV_SCRIPT=$(ENV_SCRIPT),METHOD=$(METHOD),DATASET=$(DATASET),SAFE_MODELS="$(SAFE_MODELS)" $(SLURM_DIR)/run_safe_method.slurm
+
+.PHONY: submit-exp
+submit-exp: check-env
+	@test -n "$(METHOD)" || (echo "METHOD is required" && exit 1)
+	@test -n "$(DATASET)" || (echo "DATASET is required" && exit 1)
+	sbatch $(if $(ACCOUNT),--account=$(ACCOUNT),) --partition=$(PARTITION) --gres=$(GRES) --cpus-per-task=$(CPUS) --mem=$(MEM) --time=$(TIME) --export=ALL,ENV_SCRIPT=$(ENV_SCRIPT),METHOD=$(METHOD),DATASET=$(DATASET),EXP_STAGE=$(EXP_STAGE),CONCURRENCY_PER_GPU=$(CONCURRENCY_PER_GPU),RESUME=$(RESUME),SAFE_MODELS="$(SAFE_MODELS)" $(SLURM_DIR)/run_safe_exp.slurm
+
+.PHONY: submit-sweep
+submit-sweep: check-env
+	sbatch $(if $(ACCOUNT),--account=$(ACCOUNT),) --partition=$(PARTITION) --gres=$(GRES) --cpus-per-task=$(CPUS) --mem=$(MEM) --time=$(TIME) --export=ALL,ENV_SCRIPT=$(ENV_SCRIPT),EXP_STAGE=$(EXP_STAGE),CONCURRENCY_PER_GPU=$(CONCURRENCY_PER_GPU),RESUME=$(RESUME),METHOD=$(METHOD),SAFE_MODELS="$(SAFE_MODELS)" $(SLURM_DIR)/run_safe_sweep.slurm

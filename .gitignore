@@ -232,5 +232,8 @@ APIKey.txt
 # Data: HF cache.
 /data/*
 
-# Run outputs.
-/results/*
+# Run outputs are tracked for HPG experiment upload.
+
+# Slurm/stdout logs are local runtime artifacts.
+/logs/*
+!/logs/.gitkeep
