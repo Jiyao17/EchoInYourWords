@@ -3,14 +3,11 @@
 Research codebase for **flexible, cross-context communication between language
 models** for multi-agent collaboration: a *Sharer* and *Receiver* hold different
 evidence (and may differ in size/architecture), and we study how the Sharer can
-help the Receiver answer. It compares five methods under one standardized
-output contract: **T2T** (text message), **LCF-X** (position-free latent cache
-communication), and **EIYW** — a variant that reuses LCF-X's pooling design on
-the Sharer, cross-attends the pooled slots into the Receiver's own context
-embeddings, and feeds the Receiver `k·L_s` soft input tokens instead of a
-KV-cache residual — plus the compact Stage-1-only **KVTok** baseline and
-**XKV**, which translates pooled Sharer and Receiver caches into Receiver KV
-updates.
+help the Receiver answer. The main experiment sweep compares three methods
+under one standardized output contract: **LCF-X** (position-free latent cache
+communication), **XKV** (pooled Sharer and Receiver caches translated into
+Receiver KV updates), and **T2T** (text message). EIYW and KVTok remain in the
+repository for legacy/manual runs but are excluded from experiment sweeps.
 
 - Architecture & contracts: [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)
 - Full run reference (every flag): [scripts/README.md](scripts/README.md)
@@ -55,7 +52,7 @@ One-time, idempotent (skipped if already present) — do it all with a single
 command, no `DATASET=`/`MODEL=` means "all of them":
 
 ```bash
-make prepare     # = make data + make model: every dataset, primary roster + pair-testing extras
+make prepare     # = make data + make model: every dataset + 0.6/1/4/8B experiment roster
 ```
 
 Or pick just the axis you need:
@@ -64,31 +61,41 @@ Or pick just the axis you need:
 make data                            # every dataset: hotpotqa_bridge, musique, qasc, 2wikimultihop, ropes, strategyqa
 make data  DATASET=hotpotqa_bridge   # ...or just one: train (~70.7K) + val (5,899)
 
-make model                                    # fetch every known-good model into data/hf_cache (primary roster + pair-testing extras)
+make model                                    # fetch the 0.6/1/4/8B experiment roster into data/hf_cache
 make model MODEL=unsloth/Llama-3.2-1B-Instruct   # ...or just one
+make model MODEL=mistralai/Ministral-8B-Instruct-2410 # ...or fetch only the 8B model
 ```
+
+Model downloads retry transient Hugging Face timeouts, rate limits, and 5xx
+responses three times with exponential backoff. If Hugging Face remains
+unavailable, Ministral automatically falls back to the Transformers-format
+`AI-ModelScope/Ministral-8B-Instruct-2410` mirror and installs it into the same
+project Hugging Face cache. Override retry behavior with
+`HF_MODEL_DOWNLOAD_ATTEMPTS` and `HF_MODEL_DOWNLOAD_RETRY_DELAY` if needed.
 
 Full lists: [Available datasets](#available-datasets-dataset) /
 [Available models](#available-models-sharer--receiver) below.
 
 ### 2. Run experiments
 
-**Sweep the whole grid** — every method (T2T, LCF-X, EIYW, KVTok, XKV) × every model
+**Sweep the whole grid** — every method (LCF-X, XKV, T2T) × every model
 pair from the primary roster × every dataset — with `make exp`, split
-**method-major, then dataset-minor**. A single command runs everything (270
-runs: 5 methods × 9 pairs × 6 datasets; `EXTRA_MODELS=TRUE` adds the 8B tier
-for 16 pairs / 480 runs):
+**method-major, then dataset-minor**. A single command runs everything (162
+runs: 3 methods × 9 pairs × 6 datasets). `make exp-extend` runs only the seven
+new pairs touching the 8B model; `make exp-all` runs the complete 16-pair grid:
 
 ```bash
 make exp     # every method, every dataset, every pair
+make exp-extend  # only 0.6/1/4B <-> 8B plus 8B -> 8B (7 pairs)
+make exp-all     # full 0.6/1/4/8B x 0.6/1/4/8B grid (16 pairs)
 ```
 
-Or `make sweep` to also run Step 1 first and spread the grid across GPUs
+Or `make sweep` to also run Step 1 first, select the full 4×4 model grid, and spread it across GPUs
 (reads `CUDA_VISIBLE_DEVICES` — one worker per GPU id, each running its
 share of datasets one after another, workers in parallel):
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep     # prepare, then sweep, 4-way parallel
+CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep     # prepare, then all 288 cells, 4-way parallel
 ```
 
 Pick an axis on `exp` (`METHOD=` and `DATASET=` each: give one to run just
@@ -98,15 +105,15 @@ that, omit either to run all):
 make exp METHOD=t2t                                             # t2t only, every dataset
 make exp DATASET=hotpotqa_bridge                                # every method, one dataset
 make exp METHOD=t2t DATASET=hotpotqa_bridge                     # t2t only, one dataset
-make exp METHOD=kvtok DATASET=hotpotqa_bridge                   # KVTok only, one dataset
 make exp METHOD=xkv DATASET=hotpotqa_bridge                     # XKV only, one dataset
-make exp EXTRA_MODELS=TRUE                                      # add the 8B tier: 4x4=16 pairs
-CUDA_VISIBLE_DEVICES=0,1,2,3 make exp METHOD=kvtok DATASET=ropes # one cell worker per visible GPU
+make exp-extend METHOD=xkv DATASET=ropes                        # only the 7 new XKV cells
+make exp-all METHOD=xkv DATASET=ropes                           # all 16 XKV cells
+CUDA_VISIBLE_DEVICES=0,1,2,3 make exp METHOD=xkv DATASET=ropes   # one cell worker per visible GPU
 make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_GPUS=1,2,3      # pin to specific GPUs
 make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--dry-run"       # preview the cell list only
 make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--resume"  # continue a crashed sweep (skip cells already ok)
-make exp METHOD=t2t DATASET=hotpotqa_bridge EXTRA_MODELS=TRUE \
-  EXP_ARGS="--sharer Qwen/Qwen3-8B --receiver Qwen/Qwen3-8B"    # narrow to one pair
+make exp-all METHOD=t2t DATASET=hotpotqa_bridge \
+  EXP_ARGS="--sharer mistralai/Ministral-8B-Instruct-2410 --receiver mistralai/Ministral-8B-Instruct-2410" # narrow to one pair
 ```
 
 Or run **one exact model pair** directly (skip the sweep grid entirely),
@@ -114,14 +121,13 @@ naming `DATASET=` plus a `SHARER=`/`RECEIVER=` pair explicitly:
 
 ```bash
 make lcfx   DATASET=hotpotqa_bridge SHARER=unsloth/Llama-3.2-1B-Instruct RECEIVER=Qwen/Qwen3-0.6B  # train -> eval
-make eiyw   DATASET=hotpotqa_bridge SHARER=unsloth/Llama-3.2-1B-Instruct RECEIVER=Qwen/Qwen3-0.6B  # ours: train -> eval
 make xkv    DATASET=hotpotqa_bridge SHARER=unsloth/Llama-3.2-1B-Instruct RECEIVER=Qwen/Qwen3-0.6B  # dual-cache KV update
 make t2t    DATASET=hotpotqa_bridge SHARER=unsloth/Llama-3.2-1B-Instruct RECEIVER=Qwen/Qwen3-0.6B  # baseline (no training)
 make single DATASET=hotpotqa_bridge MODEL=Qwen/Qwen3-0.6B                                        # upper bound: one model, all evidence
 ```
 
 `make single` follows the same "given=one, unset=all" pattern on both axes
-(`MODEL=`/`DATASET=`): omit `MODEL=` to test every known-good model, omit
+(`MODEL=`/`DATASET=`): omit `MODEL=` to test every primary-roster model, omit
 `DATASET=` to test every dataset, omit both to test the full model × dataset
 grid.
 
@@ -175,10 +181,10 @@ you want to separate training from evaluation.
 Train/Val are example counts. "Oracle" = **single-model upper bound** (`make
 single`): one model answers from the Sharer's and Receiver's evidence
 *combined*, no split — a rough per-size ceiling for the split-input methods
-(T2T/LCF-X/EIYW), which must clear this bar to prove the communication itself
+(T2T/LCF-X/XKV), which must clear this bar to prove the communication itself
 is adding value rather than just the model's own capability. Sizes: 1B =
 `unsloth/Llama-3.2-1B-Instruct`, 4B = `unsloth/gemma-3-4b-it`, 8B =
-`Qwen/Qwen3-8B`. `qasc`/`strategyqa` are classification-style and report a
+`mistralai/Ministral-8B-Instruct-2410`. `qasc`/`strategyqa` are classification-style and report a
 single accuracy number instead of EM/F1. `—` = not yet run. This is a
 point-in-time snapshot from the results on disk, not a fixed spec — regenerate
 it as coverage grows:
@@ -192,27 +198,31 @@ make visual ITEM=datasets   # writes results/comparison/datasets.md
 Any id below works as **either** the Sharer or the Receiver — mix families and
 sizes freely (the LCF-X fuser bridges differing shapes; specs in
 [Models](#models-sharer--receiver)). This is the **primary model roster** —
-one model per size from 0.6B to 3B, different families — used by `make exp`/
-`make sweep`/`make single` when no `MODEL=`/`SHARER=`/`RECEIVER=` is given.
+one model per size from 0.6B to 4B, different families — used by `make exp`
+and `make single` when no `MODEL=`/`SHARER=`/`RECEIVER=` is given. `make sweep`
+adds the 8B large tier for the complete grid.
 All ids are **ungated** (no `HF_TOKEN` needed). Fetch one with
 `make model MODEL=<id>` (or let the first run download it):
 
 - `Qwen/Qwen3-0.6B` — 0.6B; used by LCF-X
-- `unsloth/gemma-3-1b-it` — 1B; ungated mirror of Gemma-3-1B
-- `unsloth/Llama-3.2-3B-Instruct` — 3B; ungated mirror of Llama-3.2-3B
-
-Opt-in large tier — added to `make exp`/`make sweep`/`make single`/`make
-visual` with `EXTRA_MODELS=TRUE` (grid grows from 3×3=9 to 4×4=16 pairs):
-
-- `Qwen/Qwen3-8B` — 8B tier
-
-Pair-testing extras, available for manual `SHARER=`/`RECEIVER=` runs and
-downloaded by `make model`, but **not** included in `make exp`/`make sweep`
-(the former 1B/4B roster members live here now):
-
 - `unsloth/Llama-3.2-1B-Instruct` — 1B; ungated mirror of Llama-3.2-1B
 - `unsloth/gemma-3-4b-it` — 4B; ungated mirror of Gemma-3-4B
+
+Large tier — `make exp-extend` runs only its seven new pairings, `make exp-all`
+runs the complete 4×4 experiment grid, and `make visual-all` renders the 4×4
+reports. It remains opt-in for `make single` and the unchanged `make visual`
+command through `EXTRA_MODELS=TRUE`; bare `make sweep` includes it because
+that target means the complete experiment matrix:
+
+- `mistralai/Ministral-8B-Instruct-2410` — 8.02B; interleaved full/32K sliding attention; Mistral Research License
+
+Pair-testing extras, available for manual `SHARER=`/`RECEIVER=` runs but
+**not** included in `make exp`/`make sweep` or downloaded by bare `make model`:
+
+- `unsloth/gemma-3-1b-it` — 1B; ungated mirror of Gemma-3-1B
+- `unsloth/Llama-3.2-3B-Instruct` — 3B; ungated mirror of Llama-3.2-3B
 - `Qwen/Qwen3-4B` — 4B tier
+- `Qwen/Qwen3-8B` — previous 8B option
 
 Defaults follow the paper (per-device batch 16 × grad-accum 16 = effective batch
 256), which needs a large GPU. On a smaller GPU, override to keep the effective
@@ -244,24 +254,24 @@ id works as either role.
 
 Primary roster (mix freely as Sharer/Receiver) — all **ungated**, no `HF_TOKEN`
 needed. Note both Qwen3 and Gemma-3 decouple `head_dim` from
-`hidden/attn heads`, and gemma-3-1b is pure MQA (1 KV head), so its per-layer
-pooled slot (2·KV heads·head_dim = 512) is the narrowest in the pool:
+`hidden/attn heads`:
 
 | Model | hidden | head_dim | layers | attn heads | KV heads | notes |
 |---|---|---|---|---|---|---|
 | `Qwen/Qwen3-0.6B` | 1024 | 128 | 28 | 16 | 8 | used by LCF-X |
-| `unsloth/gemma-3-1b-it` | 1152 | 256 | 26 | 4 | 1 | **1B tier**; ungated mirror of Gemma-3-1B; MQA |
-| `unsloth/Llama-3.2-3B-Instruct` | 3072 | 128 | 28 | 24 | 8 | **3B tier**; ungated mirror of Llama-3.2-3B |
-| `Qwen/Qwen3-8B` | 4096 | 128 | 36 | 32 | 8 | **8B tier** — opt-in via `EXTRA_MODELS=TRUE`; not in the default `exp`/`sweep` grid |
+| `unsloth/Llama-3.2-1B-Instruct` | 2048 | 64 | 16 | 32 | 8 | **1B tier**; ungated mirror of Llama-3.2-1B |
+| `unsloth/gemma-3-4b-it` | 2560 | 256 | 34 | 8 | 4 | **4B tier**; ungated mirror of Gemma-3-4B; multimodal wrapper (dims under `text_config`) |
+| `mistralai/Ministral-8B-Instruct-2410` | 4096 | 128 | 36 | 32 | 8 | **8B tier**; interleaved full/32K sliding attention; MRL; used by `exp-extend`/`exp-all` |
 
 Pair-testing extras (manual `SHARER=` / `RECEIVER=` use; not part of the
-primary roster — the former 1B/4B roster members live here):
+primary roster):
 
 | Model | hidden | head_dim | layers | attn heads | KV heads | notes |
 |---|---|---|---|---|---|---|
-| `unsloth/Llama-3.2-1B-Instruct` | 2048 | 64 | 16 | 32 | 8 | ungated mirror of Llama-3.2-1B |
-| `unsloth/gemma-3-4b-it` | 2560 | 256 | 34 | 8 | 4 | ungated mirror of Gemma-3-4B; multimodal wrapper (dims under `text_config`) |
+| `unsloth/gemma-3-1b-it` | 1152 | 256 | 26 | 4 | 1 | ungated mirror of Gemma-3-1B; MQA |
+| `unsloth/Llama-3.2-3B-Instruct` | 3072 | 128 | 28 | 24 | 8 | ungated mirror of Llama-3.2-3B |
 | `Qwen/Qwen3-4B` | 2560 | 128 | 36 | 32 | 8 | |
+| `Qwen/Qwen3-8B` | 4096 | 128 | 36 | 32 | 8 | previous 8B option |
 
 Trained fuser checkpoints are **stamped** with the Sharer/Receiver they were
 trained for, and `run_lcfx.py` hard-errors if you load one against a different
@@ -616,18 +626,16 @@ python scripts/run_kvtok.py --dataset data/tasks/hotpotqa_bridge_val.jsonl \
 XKV prefills both frozen models and applies the same vectorized learned-query
 attention pool directly to each cache. For every layer and KV head, `k`
 independent queries reduce raw positions `N → k`, producing separate pooled K
-and V tensors `[B,H,k,D]`; `k=2` by default. There are no intermediate spans.
-Each side applies its own learned positive logit scale
-`gamma=exp(logit_scale)`, initialized to `1.0`, to the usual
-`QK^T/sqrt(D)` scores. Pool queries use their full Kaiming initialization (the
-former extra `x0.02` shrink is removed), so the slots start with enough score
-variation to select different positions instead of duplicating a global
-average.
+and V tensors `[B,H,k,D]`. The default follows Receiver size: `k=1` for 0.6B,
+`k=2` for 1B, and `k=3` for 4B. There are no intermediate spans. Pool queries
+use the v9 initialization, Kaiming-normal followed by `x0.02`; there is no
+learned attention temperature.
 After the optional learned `L_s → L_r` layer-axis map, concatenation has width
 `2*k*(H_s*D_s + H_r*D_r)`. A learned bottleneck returns this to
 `[B,L_r,d]`, with `d=receiver_hidden//8`, before `n=1` attention block by
-default. This resolves to 128/144/384 for the Qwen-0.6B, Gemma-1B, and
-Llama-3B receivers. After attention, each
+default for every Receiver. The width resolves to
+128/144/384 for the Qwen-0.6B, Gemma-1B, and
+Gemma-4B receivers. After attention, each
 raw Receiver K/V position is projected into a query and cross-attends to the
 translated layer memory. The resulting position-aware latent is scaled by a
 learned sigmoid per Receiver KV head and passed through one shared K
@@ -635,12 +643,13 @@ up-projection and one shared V up-projection. Output weights remain shared
 across Receiver layers; the former stochastic layer/type gates have been
 removed.
 
-Gemma-3's hybrid cache is handled explicitly. When its sliding and full-attention
-layers have different token widths, XKV uses the shortest layer width as a
-recent common window for pooling/translation. Updates are scattered back into
-each Receiver layer's original shape; older full-attention positions receive a
-zero update and remain available to the frozen Receiver. Other model families
-retain the strict equal-layer-width behavior.
+Hybrid caches are handled explicitly for Gemma-3, Ministral, and any model
+whose config declares both full- and sliding-attention layers. When layer token
+widths differ, XKV uses the shortest width as a recent common suffix for
+pooling/translation. Updates are scattered back into each Receiver layer's
+original shape; older full-attention positions receive a zero update and remain
+available to the frozen Receiver. Uniform-cache models retain strict
+equal-layer-width validation.
 
 ```bash
 # train -> eval
@@ -652,21 +661,23 @@ make exp METHOD=xkv DATASET=hotpotqa_bridge
 ```
 
 Key settings are `XKV_DMODEL=eighth` (`receiver_hidden//8`), `XKV_BLOCKS=1`,
-`XKV_HEADS=8`, `XKV_POOL_K=2` (`XKV_POOL_SLOTS` is an alias; `k` applies to
-both caches), and
-`XKV_DROPOUT=0.1`. The CLI accepts either `--pool-slots` or `--pool-k`.
+`XKV_HEADS=8`, and `XKV_POOL_K` (`XKV_POOL_SLOTS` is an alias; `k` applies to
+both caches). When unset, `k` is 1/2/3/4 for a 0.6B/1B/4B/8B Receiver; an explicit
+`XKV_BLOCKS` or pool value overrides its respective default. The remaining
+default is `XKV_DROPOUT=0.1`. The CLI accepts either `--pool-slots` or
+`--pool-k`.
 An explicit integer such as `XKV_DMODEL=256` still selects a fixed width.
 Every `LOG_EVERY` optimizer steps, `training_log.jsonl` records normalized
-attention entropy, inter-slot attention-map cosine, and the learned scale for
-both pools as `sharer_pool_*` and `receiver_pool_*`. Entropy or cosine near
-`1.0` indicates nearly uniform or collapsed slots, respectively. Diagnostics
+attention entropy and, when `k>1`, inter-slot attention-map cosine for both pools as
+`sharer_pool_*` and `receiver_pool_*`. Entropy or cosine near `1.0` indicates
+nearly uniform or collapsed slots, respectively. Diagnostics
 are disabled on other training steps and throughout normal inference.
 On ROPES, XKV defaults to `BATCH_SIZE=32` and `GRAD_ACCUM=8` for the reference
 pair (effective batch 256); the experiment sweep keeps its existing rule of
 halving the batch and doubling accumulation as pair size increases.
 Checkpoints and results are isolated under
-`dh8_n<XKV_BLOCKS>_h<XKV_HEADS>_do<XKV_DROPOUT>_k<XKV_POOL_SLOTS>_v10`
-for the dynamic default (`d256` replaces `dh8` for an explicit width of 256;
+`dh8_n1_h<XKV_HEADS>_do<XKV_DROPOUT>_k<resolved-k>_v11`
+by default (`d256` replaces `dh8` for an explicit width of 256;
 the dropout decimal point is rendered as `p`).
 
 ## Visual comparison table
@@ -679,21 +690,29 @@ make visual DATASET=hotpotqa_bridge                  # EM+F1 grid (default ITEM=
 make visual DATASET=hotpotqa_bridge ITEM=scores       # same, explicit
 make visual DATASET=hotpotqa_bridge ITEM=params       # trainable-parameter grid (lcfx/xkv)
 make visual DATASET=hotpotqa_bridge ITEM=latency      # average per-example latency grid
+make visual-all DATASET=hotpotqa_bridge               # all three views, including 8B (4x4)
 make visual ITEM=datasets                              # dataset overview (DATASET= ignored)
 ```
+
+`make visual` remains the primary-model 3×3 view. `make visual-all` supports
+the same `DATASET=`, `ITEM=`, `MODELS=`, and `OUT=` options, but always appends
+the opt-in 8B model.
 
 `ITEM=` picks what gets rendered:
 
 - `scores` (default) — Sharer × Receiver grid (primary roster, 3×3; 4×4 with
-  `EXTRA_MODELS=TRUE`, matching `exp`/`sweep`) for one
+  `make visual-all` or `EXTRA_MODELS=TRUE`, matching `exp`/`sweep`) for one
   `DATASET=`, with LCF-X / XKV / T2T EM+F1 per cell (best EM and best F1 in
   each cell bolded). Read from `results/<method>/<dataset>/<sharer>/<receiver>/metrics.json`.
 - `params` — the same Sharer × Receiver grid, but trainable-parameter counts
   for LCF-X / XKV (T2T trains nothing, so it's omitted). Read from the
   `training_log.jsonl` under each checkpoint dir.
 - `latency` — the same Sharer × Receiver grid, but LCF-X / XKV / T2T average
-  per-example total latency (fastest of each cell bolded). Read from the
-  `average.total_ms` field of `results/<method>/<dataset>/<sharer>/<receiver>/latency.json`.
+  per-example latency. LCF-X and XKV use fuser-or-translator/total format (for
+  example, `6ms/141ms`), while T2T shows total only; the fastest component and
+  total in each cell are bolded independently. Read from the `average.total_ms`
+  and `average.fuser_ms` fields of
+  `results/<method>/<dataset>/<sharer>/<receiver>/latency.json`.
 - `datasets` — one overview table across *every* dataset (`DATASET=` is
   ignored): train/val split sizes plus the single-model-oracle EM+F1 for a
   representative 1B/4B/8B model (`make single`'s results).

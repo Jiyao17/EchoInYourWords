@@ -2,7 +2,7 @@
 
 ## Goal
 
-Systematically evaluate all three methods (T2T, LCF-X, EIYW) across every
+Systematically evaluate all three methods (LCF-X, XKV, T2T) across every
 Sharer/Receiver pair drawn from the project's primary model roster, on every
 one of the six prepared datasets, so we have one comparable results grid to
 analyze.
@@ -17,10 +17,11 @@ One model per size from 0.6B to 4B, different families, all ungated:
 - `unsloth/Llama-3.2-1B-Instruct` (1B)
 - `unsloth/gemma-3-4b-it` (4B)
 
-**Opt-in large tier** — `Qwen/Qwen3-8B` (8B) is no longer in the default
+**Opt-in large tier** — `mistralai/Ministral-8B-Instruct-2410` (8B) is not in the default
 grid (its cells dominate the sweep's wall time/memory); pass
-`EXTRA_MODELS=TRUE` (make) / `--extra-models` (run_sweep.py / run_all.py)
-to add it on both axes, growing the grid from 3x3=9 to 4x4=16 pairs.
+`make exp-extend` for only the seven new pairs touching it, or `make exp-all`
+for the complete 4x4=16 grid. The legacy `EXTRA_MODELS=TRUE` option still
+selects the full grid.
 
 `Qwen/Qwen2.5-0.5B-Instruct` was dropped from the roster (LCF-X's own
 cross-context scenario only considered two 0.6B models, so the 0.5B tier
@@ -33,11 +34,11 @@ sweep targets).
   `ropes`, `strategyqa`
 - **Sharer x Receiver pairs** (3 x 3 = 9 default, includes symmetric
   self-pairs; 4 x 4 = 16 with `EXTRA_MODELS=TRUE`)
-- **Methods** (3): T2T (eval only, no training), LCF-X (train fuser + eval),
-  EIYW (train translator + eval)
+- **Methods** (3): LCF-X (train fuser + eval), XKV (train translator + eval),
+  T2T (eval only, no training). EIYW and KVTok are excluded.
 
 **Grid size:** 9 pairs x 6 datasets = **54 configs**; x 3 methods = **162
-experiment cells** (108 of them, LCF-X + EIYW, need a training run first;
+experiment cells** (108 of them, LCF-X + XKV, need a training run first;
 the other 54, T2T, are eval-only). With `EXTRA_MODELS=TRUE`: 16 pairs x 6
 datasets x 3 methods = **288 cells**.
 
@@ -74,7 +75,7 @@ Proposed budget overrides (vs. Makefile defaults):
 | `BATCH_SIZE` / `GRAD_ACCUM` | scaled down for 8B pairs | Keep the 8B<->8B cell inside ~40GB free per GPU (see Risk notes) |
 
 **Execution:** `scripts/run_sweep.py` (see "Sweep driver script" below)
-iterates `make lcfx` / `make eiyw` / `make t2t` over every roster pair (9, or
+iterates `make lcfx` / `make xkv` / `make t2t` over every roster pair (9, or
 16 with `--extra-models`) for one
 dataset+method at a time, with the Stage 1 overrides, logs one manifest line
 per cell (ok / failed / oom + wall time), and is resumable (skips cells
@@ -99,7 +100,7 @@ don't blindly launch all 192 full trainings at once):
    understood.
 
 Budget: paper defaults (full train split, effective batch 256, full val
-EM/F1) — `make lcfx` / `make eiyw` / `make t2t` with no manual overrides.
+EM/F1) — `make lcfx` / `make xkv` / `make t2t` with no manual overrides.
 `run_sweep.py --stage full` now auto-picks `BATCH_SIZE`/`GRAD_ACCUM` per
 Sharer/Receiver pair (see `pick_batch_grad_accum` — sized for an ~80GB GPU,
 always keeping the effective batch at 256), so no per-tier manual tuning is
@@ -133,11 +134,11 @@ scope a full-stage run manually with `--sharer`/`--receiver` filters.
 The script enumerates cells (method x sharer x receiver, for the one
 `--dataset` it's given) from the fixed 4-model `PRIMARY_MODELS` roster,
 records every run in the manifest (used only by `--resume`), and shells out to the existing `make lcfx` /
-`make eiyw` / `make t2t` targets — so all of the project's existing budget
+`make xkv` / `make t2t` targets — so all of the project's existing budget
 knobs, checkpoint stamping, and results auto-separation keep working
 unmodified. The **Makefile `exp` target** splits tests **method-major,
 dataset-minor**: `METHOD=` selects one method (omit it to loop `t2t` ->
-`lcfx` -> `eiyw` in turn), and within that, `DATASET=` selects one dataset
+`lcfx` -> `xkv` -> `t2t` in turn), and within that, `DATASET=` selects one dataset
 (omit it to loop all six) — mirroring how `data`/`model` resolve
 `DATASET=`/`MODEL=`, just nested one level deeper. Internally this is two
 targets: `exp` resolves the method axis (recursing into itself once per
@@ -162,11 +163,12 @@ model`, now nested method -> dataset):**
 
 ```bash
 make exp                                                 # every method, every dataset (162 cells)
-make exp EXTRA_MODELS=TRUE                               # same, with Qwen3-8B added (288 cells)
+make exp-extend                                          # only the 7 pairs touching Ministral-8B
+make exp-all                                             # complete 4x4 grid
 make exp METHOD=t2t                                      # t2t only, every dataset (54 cells)
 make exp METHOD=t2t DATASET=hotpotqa_bridge              # t2t only, one dataset (9 cells)
 make exp DATASET=hotpotqa_bridge                          # every method, one dataset (27 cells)
-CUDA_VISIBLE_DEVICES=0,1,2,3 make exp METHOD=kvtok DATASET=ropes # auto: one worker per visible GPU
+CUDA_VISIBLE_DEVICES=0,1,2,3 make exp METHOD=xkv DATASET=ropes # auto: one worker per visible GPU
 make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_GPUS=1,2,3
 ```
 
@@ -175,8 +177,8 @@ make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_GPUS=1,2,3
 ```bash
 make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--dry-run"          # preview the cell list only
 make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--resume" EXP_GPUS=1,2,3   # continue a crashed sweep
-make exp DATASET=hotpotqa_bridge EXTRA_MODELS=TRUE \
-  EXP_ARGS="--sharer unsloth/gemma-3-4b-it --receiver Qwen/Qwen3-8B"      # narrow to one pair
+make exp-all DATASET=hotpotqa_bridge \
+  EXP_ARGS="--sharer unsloth/Llama-3.2-1B-Instruct --receiver mistralai/Ministral-8B-Instruct-2410" # narrow to one pair
 ```
 
 Every launch reruns every selected cell fresh by default (results and
@@ -207,7 +209,7 @@ adopt `exp`'s method-major recursion (each GPU's worker still runs all
 methods -- or just the one given -- for each of its assigned datasets).
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep                          # prepare everything, then sweep at full scale, 4-way parallel
+CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep                          # prepare everything, then sweep the full 4x4 grid, 4-way parallel
 CUDA_VISIBLE_DEVICES=1,2     make sweep SWEEP_ARGS="--dry-run"   # preview the whole plan, no GPUs touched
 CUDA_VISIBLE_DEVICES=1,2     make sweep SWEEP_ARGS="--resume"    # continue a crashed sweep
 make sweep                                                        # no GPUs pinned -> single sequential worker
@@ -234,7 +236,7 @@ Fixed to match.
 **Full flag list:** `--dataset` (required), `--stage {smoke,full}` (script's
 own default is `smoke`, but `make exp`/`make sweep` pass `--stage full` by
 default via `EXP_STAGE ?= full` in the Makefile -- pass `EXP_STAGE=smoke` to
-get the script's cheap default instead), `--method {t2t,lcfx,eiyw}`
+get the script's cheap default instead), `--method {lcfx,xkv,t2t}`
 (repeatable, default all 3),
 `--sharer`/`--receiver` (repeatable filters into the 4-model roster),
 `--gpus` (comma-separated ids; default: no `CUDA_VISIBLE_DEVICES` pinning,
@@ -257,7 +259,7 @@ separation by dataset+pair.
 
 - **Gemma pairs** (`head_dim=256`, vs. 64/128 for Llama/Qwen) exercise the
   LCF-X fuser's shape-bridging hardest — worth checking first in Stage 1.
-- **Qwen-8B <-> Qwen-8B** is the heaviest memory cell (two 8B models loaded
+- **Ministral-8B <-> Ministral-8B** is the heaviest memory cell (two 8B models loaded
   frozen simultaneously, plus the trainable fuser/translator) — automatically
   gets the smallest `BATCH_SIZE`/largest `GRAD_ACCUM` tier (1/256) at "full
   scale" (see Stage 2 above); still worth watching as the first real test of
@@ -282,8 +284,8 @@ separation by dataset+pair.
   examples so far. `make exp` will fail on those datasets until then.
 - The Stage 1 budget knobs (`MAX_TRAIN=800` etc.) are unvalidated at scale —
   the one real cell run so far was T2T (eval-only, no training knobs
-  exercised). Worth watching the first LCF-X/EIYW cell, and especially the
-  first Qwen-8B<->Qwen-8B cell, for OOM before launching the full 16-pair
+  exercised). Worth watching the first LCF-X/XKV cell, and especially the
+  first Ministral-8B<->Ministral-8B cell, for OOM before launching the full 16-pair
   sweep unattended.
 - Stage 2 (`--priority-tier`), Stage 3 (`aggregate_results.py`), and
   pre-existing-checkpoint reuse are still just planned, not built.

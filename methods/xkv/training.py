@@ -15,9 +15,14 @@ from .cache import add_residual_inplace, extract_kv
 from .model import XKVPair
 from .runner import run_xkv_example
 from .schema import XKVExample
-from .translator import XKVTranslator, _resolve_d_model, _safe_num_heads
+from .translator import (
+    XKVTranslator,
+    _default_pool_slots,
+    _resolve_d_model,
+    _safe_num_heads,
+)
 
-CHECKPOINT_FORMAT = 9
+CHECKPOINT_FORMAT = 10
 
 
 def _freeze(model: Any) -> None:
@@ -130,8 +135,8 @@ def batched_example_loss(
         extract_kv(receiver_dynamic_cache),
         sharer_attention_mask=sharer_mask,
         receiver_attention_mask=prefix_mask,
-        sharer_windowed_cache=pair.sharer_spec.is_gemma3,
-        receiver_windowed_cache=pair.receiver_spec.is_gemma3,
+        sharer_windowed_cache=pair.sharer_spec.has_hybrid_cache,
+        receiver_windowed_cache=pair.receiver_spec.has_hybrid_cache,
     )
     add_residual_inplace(receiver_dynamic_cache, residual)
 
@@ -298,7 +303,7 @@ def load_translator(
     num_blocks: int = 1,
     num_heads: int = 8,
     dropout: float = 0.1,
-    pool_slots: int = 2,
+    pool_slots: int | None = None,
 ) -> XKVTranslator:
     import torch
 
@@ -311,13 +316,18 @@ def load_translator(
             f"expected {CHECKPOINT_FORMAT}"
         )
     resolved_d_model = _resolve_d_model(d_model, pair.receiver_spec.hidden)
+    resolved_pool_slots = (
+        _default_pool_slots(pair.receiver_spec.name)
+        if pool_slots is None
+        else int(pool_slots)
+    )
     expected = {
         **_pair_arch(pair),
         "d_model": resolved_d_model,
         "num_blocks": int(num_blocks),
         "num_heads": _safe_num_heads(resolved_d_model, int(num_heads)),
         "dropout": float(dropout),
-        "pool_slots": int(pool_slots),
+        "pool_slots": resolved_pool_slots,
         "pooling_mode": "direct_attention_k",
         "output_mode": "position_cross_attention",
     }
@@ -524,13 +534,13 @@ def train_translator(
                         " | pool H(s/r) "
                         f"{pool_diagnostics['sharer_pool_entropy']:.4f}/"
                         f"{pool_diagnostics['receiver_pool_entropy']:.4f}"
-                        " cos(s/r) "
-                        f"{pool_diagnostics['sharer_pool_slot_cosine']:.4f}/"
-                        f"{pool_diagnostics['receiver_pool_slot_cosine']:.4f}"
-                        " scale(s/r) "
-                        f"{pool_diagnostics['sharer_pool_scale']:.3f}/"
-                        f"{pool_diagnostics['receiver_pool_scale']:.3f}"
                     )
+                    if "sharer_pool_slot_cosine" in pool_diagnostics:
+                        pool_text += (
+                            " cos(s/r) "
+                            f"{pool_diagnostics['sharer_pool_slot_cosine']:.4f}/"
+                            f"{pool_diagnostics['receiver_pool_slot_cosine']:.4f}"
+                        )
                 print(
                     f"epoch {epoch + 1}/{epochs} opt_step {opt_step}"
                     f" | train_loss {train_loss:.4f} | lr {current_lr:.2e}"

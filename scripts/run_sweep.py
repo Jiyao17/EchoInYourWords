@@ -10,8 +10,8 @@ crashed sweep), and a fixed-size GPU worker pool via
 ``CUDA_VISIBLE_DEVICES``. The **full** stage uses the Makefile's paper-scale
 defaults (full train split, full val EM/F1) except for BATCH_SIZE/GRAD_ACCUM,
 which are picked per (method, Sharer/Receiver pair, dataset) (see
-``pick_batch_grad_accum``; LCF-X defaults to batch16/accum16 while EIYW/KVTok
-use the soft-token batch tiers, and all halve the batch as pair size grows;
+``pick_batch_grad_accum``; trained methods default to batch16/accum16 and
+halve the batch as pair size grows;
 qasc's short contexts get an 8x batch multiplier on top — 128/2 for the LCF-X
 reference pair) so larger pairs don't OOM, always
 keeping the effective batch (BATCH_SIZE x GRAD_ACCUM) at 256. Stage 2's priority-tiering (symmetric pairs
@@ -40,33 +40,31 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Primary experiment model roster (one flat tier, no sub-tiers): the small
 # Qwen model LCF-X was developed against, plus one model per size at
-# 1B/3B, different families -- 3x3 = 9 pairs by default. (The former
-# Llama-1B / gemma-4b roster members remain available as pair-testing
-# extras for manual SHARER=/RECEIVER= runs.)
+# 1B/4B, different families -- 3x3 = 9 pairs by default.
 PRIMARY_MODELS = [
     "Qwen/Qwen3-0.6B",
-    "unsloth/gemma-3-1b-it",
-    "unsloth/Llama-3.2-3B-Instruct",
+    "unsloth/Llama-3.2-1B-Instruct",
+    "unsloth/gemma-3-4b-it",
 ]
-# Opt-in large tier: --extra-models (Makefile: EXTRA_MODELS=TRUE) appends these
-# to the grid on both axes, growing it to 4x4 = 16 pairs.
+# Opt-in large tier: pair scope "all" (or legacy --extra-models) appends these
+# to both axes. Scope "extend" selects only the seven cells touching this tier.
 EXTRA_MODELS = [
-    "Qwen/Qwen3-8B",
+    "mistralai/Ministral-8B-Instruct-2410",
 ]
-METHODS = ["t2t", "lcfx", "eiyw", "kvtok", "xkv"]
-SOFT_TOKEN_METHODS = {"eiyw", "kvtok"}
+METHODS = ["lcfx", "xkv", "t2t"]
 
 # Approx parameter count (billions) per roster model, used only to size
 # BATCH_SIZE/GRAD_ACCUM for the full stage (see pick_batch_grad_accum below).
 MODEL_PARAMS_B = {
     "Qwen/Qwen3-0.6B": 0.6,
-    "unsloth/gemma-3-1b-it": 1.0,
-    "unsloth/Llama-3.2-3B-Instruct": 3.2,
-    "Qwen/Qwen3-8B": 8.0,
-    # Pair-testing extras (manual --sharer/--receiver runs):
     "unsloth/Llama-3.2-1B-Instruct": 1.0,
     "unsloth/gemma-3-4b-it": 4.0,
+    "mistralai/Ministral-8B-Instruct-2410": 8.02,
+    # Pair-testing extras (manual --sharer/--receiver runs):
+    "unsloth/gemma-3-1b-it": 1.0,
+    "unsloth/Llama-3.2-3B-Instruct": 3.2,
     "Qwen/Qwen3-4B": 4.0,
+    "Qwen/Qwen3-8B": 8.0,
 }
 
 # Budget overrides passed to `make <method> ...` as command-line variables.
@@ -99,27 +97,11 @@ STAGE_OVERRIDES = {
 # (threshold_billions, batch_size, grad_accum), first match wins:
 BATCH_ACCUM_TIERS = [
     (2.5, 16, 16),   # up to 1B+1B
-    (5.5, 8, 32),    # up to 1B+3B / 0.6B+4B
-    (9.5, 4, 64),    # up to 3B+3B / 1B+8B
-    (13.0, 2, 128),  # up to 3B+8B / 4B+8B
+    (5.5, 8, 32),    # up to 1B+4B
+    (9.5, 4, 64),    # up to 4B+4B / 1B+8B
+    (13.0, 2, 128),  # up to 4B+8B
     (float("inf"), 1, 256),  # 8B+8B
 ]
-
-# EIYW/KVTok generation forwards are grad-enabled end to end (the soft tokens
-# lead the sequence, so every prompt/answer activation carries gradient --
-# unlike LCF-X's no_grad prompt prefill), plus translator activations and
-# AdamW state. With gradient checkpointing on they still target effective
-# batch 256: default batch16/accum16 for the reference pair, then halve the
-# batch and double the accumulation as combined pair size grows. Important for
-# unattended overnight `make exp` runs: an OOM kills the whole cell (the
-# run_cell auto-retry halves the batch once more on OOM as a backstop).
-EIYW_BATCH_ACCUM_TIERS = [
-    (2.5, 16, 16),   # up to 1B+1B
-    (5.5, 8, 32),    # up to 1B+3B / 0.6B+4B
-    (9.5, 4, 64),    # up to 3B+3B / 1B+8B
-    (float("inf"), 2, 128),  # 3B+8B and up
-]
-
 
 # Per-dataset batch multiplier on top of the pair-size tiers. Memory scales
 # with batch x sequence length, and the tiers above are sized for
@@ -136,7 +118,7 @@ def pick_batch_grad_accum(
 ) -> tuple[int, int]:
     """BATCH_SIZE/GRAD_ACCUM for a (method, pair, dataset), keeping effective batch at 256."""
 
-    tiers = EIYW_BATCH_ACCUM_TIERS if method in SOFT_TOKEN_METHODS else BATCH_ACCUM_TIERS
+    tiers = BATCH_ACCUM_TIERS
     combined = MODEL_PARAMS_B.get(sharer, 0.0) + MODEL_PARAMS_B.get(receiver, 0.0)
     batch, accum = tiers[-1][1], tiers[-1][2]
     for threshold, tier_batch, tier_accum in tiers:
@@ -158,17 +140,13 @@ def resolve_overrides(
 ) -> dict[str, str]:
     """Per-cell `make <method> ...` overrides.
 
-    smoke keeps its fixed reduced-budget knobs regardless of pair (halved for
-    EIYW/KVTok, whose grad-enabled forwards are ~2x heavier). full leaves data/step
-    budgets at the Makefile's paper defaults but still needs pair-size-aware
+    smoke keeps its fixed reduced-budget knobs regardless of pair. full leaves
+    data/step budgets at the Makefile's paper defaults but still needs pair-size-aware
     BATCH_SIZE/GRAD_ACCUM (t2t has no batch knob, so it's skipped there) so
     larger pairs don't OOM.
     """
 
     overrides = dict(STAGE_OVERRIDES[stage])
-    if stage == "smoke" and method in SOFT_TOKEN_METHODS:
-        overrides["BATCH_SIZE"] = "2"
-        overrides["GRAD_ACCUM"] = "16"
     if stage == "full" and method != "t2t":
         batch, accum = pick_batch_grad_accum(method, sharer, receiver, dataset)
         overrides["BATCH_SIZE"] = str(batch)
@@ -184,11 +162,25 @@ def _slug(model_id: str) -> str:
     return model_id.replace("/", "--")
 
 
-def resolve_pairs(extra_models: bool = False) -> list[tuple[str, str]]:
-    """Return every Sharer/Receiver pair in the roster (3x3, or 4x4 with extras)."""
+def resolve_pairs(scope: str = "base") -> list[tuple[str, str]]:
+    """Return the base 3x3, 8B-extension 7, or complete 4x4 pair grid."""
 
-    roster = PRIMARY_MODELS + (EXTRA_MODELS if extra_models else [])
-    return [(s, r) for s in roster for r in roster]
+    if scope == "base":
+        roster = PRIMARY_MODELS
+    elif scope in {"extend", "all"}:
+        roster = PRIMARY_MODELS + EXTRA_MODELS
+    else:
+        raise ValueError(f"unknown pair scope: {scope!r}")
+
+    pairs = [(sharer, receiver) for sharer in roster for receiver in roster]
+    if scope == "extend":
+        extras = set(EXTRA_MODELS)
+        pairs = [
+            (sharer, receiver)
+            for sharer, receiver in pairs
+            if sharer in extras or receiver in extras
+        ]
+    return pairs
 
 
 def load_manifest(path: Path) -> dict[tuple[str, str, str, str, str], dict]:
@@ -345,7 +337,7 @@ def main() -> None:
     parser.add_argument("--dataset", required=True, help="Single dataset name, e.g. hotpotqa_bridge")
     parser.add_argument("--stage", default="smoke", choices=sorted(STAGE_OVERRIDES))
     parser.add_argument(
-        "--method", action="append", choices=METHODS, help="Repeatable; default all 5 (t2t, lcfx, eiyw, kvtok, xkv)"
+        "--method", action="append", choices=METHODS, help="Repeatable; default all 3 (lcfx, xkv, t2t)"
     )
     parser.add_argument(
         "--sharer", action="append", help="Repeatable filter; default all models in PRIMARY_MODELS"
@@ -356,7 +348,13 @@ def main() -> None:
     parser.add_argument(
         "--extra-models",
         action="store_true",
-        help="Also sweep the opt-in large tier (EXTRA_MODELS, i.e. Qwen3-8B): 4x4=16 pairs instead of 3x3=9",
+        help="Legacy alias for --pair-scope all",
+    )
+    parser.add_argument(
+        "--pair-scope",
+        choices=["base", "extend", "all"],
+        default="base",
+        help="Pair grid: base=3x3 (9), extend=only pairs touching 8B (7), all=4x4 (16)",
     )
     parser.add_argument(
         "--gpus", default=None, help="Comma-separated GPU ids, e.g. 1,2,3 (default: no pinning, one worker)"
@@ -377,7 +375,8 @@ def main() -> None:
     parser.add_argument("--log-dir", type=Path, default=REPO_ROOT / "results" / "sweep_logs")
     args = parser.parse_args()
 
-    pairs = resolve_pairs(args.extra_models)
+    pair_scope = "all" if args.extra_models else args.pair_scope
+    pairs = resolve_pairs(pair_scope)
     if args.sharer:
         pairs = [(s, r) for s, r in pairs if s in args.sharer]
     if args.receiver:

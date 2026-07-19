@@ -45,6 +45,8 @@ def build_sweep_args(args: argparse.Namespace) -> list[str]:
         forwarded += ["--receiver", receiver]
     if args.extra_models:
         forwarded.append("--extra-models")
+    else:
+        forwarded += ["--pair-scope", args.pair_scope]
     if args.resume:
         forwarded.append("--resume")
     if args.dry_run:
@@ -78,11 +80,17 @@ def main() -> None:
     )
     parser.add_argument("--stage", default="smoke", choices=["smoke", "full"])
     parser.add_argument(
-        "--method", action="append", choices=["t2t", "lcfx", "eiyw", "kvtok", "xkv"]
+        "--method", action="append", choices=["lcfx", "xkv", "t2t"]
     )
     parser.add_argument("--sharer", action="append")
     parser.add_argument("--receiver", action="append")
     parser.add_argument("--extra-models", action="store_true")
+    parser.add_argument(
+        "--pair-scope",
+        choices=["base", "extend", "all"],
+        default="base",
+        help="Model-pair grid forwarded to run_sweep.py (default: base)",
+    )
     parser.add_argument("--concurrency-per-gpu", type=int, default=1)
     parser.add_argument(
         "--resume",

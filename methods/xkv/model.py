@@ -2,12 +2,63 @@
 
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from methods.common.decoding import resolve_stop_ids
 
 from .cache import add_residual_inplace, extract_kv
+
+
+MINISTRAL_8B = "mistralai/Ministral-8B-Instruct-2410"
+
+
+def _offline_enabled() -> bool:
+    return os.environ.get("HF_HUB_OFFLINE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _validate_ministral_offline_cache(name: str) -> None:
+    """Fail clearly when an interrupted download left a partial snapshot."""
+
+    if name != MINISTRAL_8B or not _offline_enabled():
+        return
+
+    from huggingface_hub import try_to_load_from_cache
+
+    hf_home = os.environ.get("HF_HOME")
+    cache_dir = str(Path(hf_home) / "hub") if hf_home else None
+
+    def cached(filename: str) -> str | None:
+        path = try_to_load_from_cache(name, filename, cache_dir=cache_dir)
+        return path if isinstance(path, str) else None
+
+    required = ("config.json", "tokenizer.json", "tokenizer_config.json")
+    missing = [filename for filename in required if cached(filename) is None]
+    index_path = cached("model.safetensors.index.json")
+    if index_path is None:
+        missing.append("model.safetensors.index.json")
+    else:
+        with Path(index_path).open(encoding="utf-8") as handle:
+            index = json.load(handle)
+        for shard in sorted(set(index.get("weight_map", {}).values())):
+            if cached(shard) is None:
+                missing.append(shard)
+
+    if missing:
+        missing_text = ", ".join(missing)
+        raise RuntimeError(
+            f"incomplete offline Ministral cache; missing: {missing_text}. "
+            "Run `HF_MODEL_DOWNLOAD_ATTEMPTS=1 make model "
+            "MODEL=mistralai/Ministral-8B-Instruct-2410` and retry."
+        )
 
 
 @dataclass(frozen=True)
@@ -19,6 +70,30 @@ class ModelSpec:
     n_heads: int
     hidden: int
     is_gemma3: bool = False
+    has_hybrid_cache: bool = False
+
+
+def _has_hybrid_cache(config: Any) -> bool:
+    """Whether layers can expose different full/sliding cache widths."""
+
+    model_type = getattr(config, "model_type", "")
+    if model_type in {"gemma3", "gemma3_text"}:
+        return True
+
+    layer_types = getattr(config, "layer_types", None)
+    if layer_types:
+        normalized = {str(layer_type).lower() for layer_type in layer_types}
+        if any("full" in layer_type for layer_type in normalized) and any(
+            "sliding" in layer_type for layer_type in normalized
+        ):
+            return True
+
+    sliding_window = getattr(config, "sliding_window", None)
+    return (
+        isinstance(sliding_window, (list, tuple))
+        and any(window is None for window in sliding_window)
+        and any(window is not None for window in sliding_window)
+    )
 
 
 def _spec_from_model(name: str, model: Any) -> ModelSpec:
@@ -28,6 +103,7 @@ def _spec_from_model(name: str, model: Any) -> ModelSpec:
     n_heads = config.num_attention_heads
     kv_heads = getattr(config, "num_key_value_heads", None) or n_heads
     head_dim = getattr(config, "head_dim", None) or (config.hidden_size // n_heads)
+    is_gemma3 = getattr(config, "model_type", "") in {"gemma3", "gemma3_text"}
     return ModelSpec(
         name=name,
         layers=config.num_hidden_layers,
@@ -35,7 +111,8 @@ def _spec_from_model(name: str, model: Any) -> ModelSpec:
         head_dim=head_dim,
         n_heads=n_heads,
         hidden=config.hidden_size,
-        is_gemma3=getattr(config, "model_type", "") in {"gemma3", "gemma3_text"},
+        is_gemma3=is_gemma3,
+        has_hybrid_cache=_has_hybrid_cache(config),
     )
 
 
@@ -171,12 +248,14 @@ def check_pair_compatible(pair: XKVPair) -> dict[str, Any]:
             "kv_heads": sharer.kv_heads,
             "head_dim": sharer.head_dim,
             "gemma3_hybrid_cache": sharer.is_gemma3,
+            "hybrid_cache": sharer.has_hybrid_cache,
         },
         "receiver": {
             "layers": receiver.layers,
             "kv_heads": receiver.kv_heads,
             "head_dim": receiver.head_dim,
             "gemma3_hybrid_cache": receiver.is_gemma3,
+            "hybrid_cache": receiver.has_hybrid_cache,
         },
         "same_layers": sharer.layers == receiver.layers,
         "same_kv_heads": sharer.kv_heads == receiver.kv_heads,
@@ -202,10 +281,20 @@ def load_xkv_pair(
     resolved_dtype = _resolve_dtype(dtype, torch)
 
     def _load(name: str) -> tuple[Any, Any]:
-        tokenizer = AutoTokenizer.from_pretrained(
-            name,
+        _validate_ministral_offline_cache(name)
+        tokenizer_kwargs = dict(
             trust_remote_code=trust_remote_code,
             clean_up_tokenization_spaces=False,
+            use_fast=True,
+        )
+        if name == MINISTRAL_8B:
+            # The repo labels its JSON/Tekken tokenizer as LlamaTokenizer.
+            # Forcing the fast path avoids a nonexistent SentencePiece model;
+            # legacy=False also suppresses the irrelevant Llama warning.
+            tokenizer_kwargs["legacy"] = False
+        tokenizer = AutoTokenizer.from_pretrained(
+            name,
+            **tokenizer_kwargs,
         )
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token

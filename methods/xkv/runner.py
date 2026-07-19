@@ -85,8 +85,8 @@ def run_xkv_example(
         residual = translator.translate(
             sharer_cache,
             extract_kv(receiver_dynamic_cache),
-            sharer_windowed_cache=pair.sharer_spec.is_gemma3,
-            receiver_windowed_cache=pair.receiver_spec.is_gemma3,
+            sharer_windowed_cache=pair.sharer_spec.has_hybrid_cache,
+            receiver_windowed_cache=pair.receiver_spec.has_hybrid_cache,
         )
         translator_times.append((perf_counter() - tic) * 1000.0)
         return residual

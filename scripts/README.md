@@ -375,16 +375,18 @@ same `MAX_TRAIN` / `MAX_STEPS` / `BATCH_SIZE` / `GRAD_ACCUM` knobs work via
 
 XKV runs the frozen Sharer and Receiver prefix once. Both caches use the same
 vectorized learned-query attention pool, reducing raw positions directly from
-`N → k` per layer/head with no intermediate spans (`k=2` by default). After the learned
+`N → k` per layer/head with no intermediate spans. The pool default is Receiver
+tiered (`k=1/2/3/4` for 0.6B/1B/4B/8B), while translation depth defaults to `n=1`
+for every Receiver; `--pool-k` and `--num-blocks` override them. After the learned
 Sharer layer-axis map when `L_s != L_r`, the joint bottleneck input has width
 `2*k*(H_s*D_s + H_r*D_r)` and its output remains `[B,L_r,d]`. Raw Receiver K/V
 positions then query the translated layer memory through shared
 cross-attention. Two shared K/V up-projections produce distinct updates at
 different cache positions, scaled by learned per-head sigmoids. There is no
-stochastic layer/type gate. Each pool has one learned positive attention-logit
-scale initialized to `1.0`; queries use unshrunk Kaiming initialization. Train
-events log normalized entropy, inter-slot map cosine, and scale for both sides
-at the existing `--log-every` cadence, without adding inference work.
+stochastic layer/type gate. Pooling uses the v9 Kaiming-normal `x0.02` query
+initialization and has no learned temperature. Train events log normalized
+entropy and, for `k>1`, inter-slot map cosine for both sides at the existing `--log-every`
+cadence, without adding inference work.
 For `DATASET=ropes`, `make xkv-train` defaults to batch 32 / accumulation 8;
 full sweeps halve/double those values through the existing model-size tiers.
 
@@ -393,14 +395,14 @@ python scripts/train_xkv.py \
   --train-data data/tasks/hotpotqa_bridge_train.jsonl \
   --sharer-model unsloth/Llama-3.2-1B-Instruct \
   --receiver-model Qwen/Qwen3-0.6B \
-  --d-model eighth --num-blocks 1 --pool-k 2 \
+  --d-model eighth \
   --checkpoint-out data/checkpoints/xkv/translator.pt
 
 python scripts/run_xkv.py \
   --dataset data/tasks/hotpotqa_bridge_val.jsonl \
   --sharer-model unsloth/Llama-3.2-1B-Instruct \
   --receiver-model Qwen/Qwen3-0.6B \
-  --d-model eighth --num-blocks 1 --pool-k 2 \
+  --d-model eighth \
   --translator-checkpoint data/checkpoints/xkv/translator.pt \
   --output-dir results/xkv
 ```

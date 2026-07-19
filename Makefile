@@ -15,8 +15,8 @@
 # Select the dataset with DATASET; $(TRAIN)/$(VAL) derive from it. With no
 # DATASET= given, `make data` prepares EVERY known dataset (hotpotqa_bridge,
 # musique, qasc, 2wikimultihop, ropes, strategyqa) instead of picking one.
-# Likewise, `make model` with no MODEL= downloads every known-good model (all
-# ungated -- no HF_TOKEN needed). Pick models with SHARER/RECEIVER (default:
+# Likewise, `make model` with no MODEL= downloads the four experiment models
+# (all ungated -- no HF_TOKEN needed). Pick models with SHARER/RECEIVER (default:
 # the paper's symmetric Qwen3-0.6B; latent dim 128, full ~5,899-example bridge
 # val, EM/F1). The common usage is one knob per axis -- DATASET for data,
 # SHARER/RECEIVER for methods:
@@ -34,18 +34,18 @@ help:
 	@echo "EchoInYourWords -- run experiments via make."
 	@echo ""
 	@echo "Main targets:"
-	@echo "  make prepare       One-shot setup: make data + make model (primary roster + pair-testing extras, or DATASET=/MODEL= for one)"
+	@echo "  make prepare       One-shot setup: make data + make model (all datasets + 0.6/1/4/8B experiment models, or DATASET=/MODEL= for one)"
 	@echo "  make data          Prepare train+val for ALL datasets (or just DATASET= if given)"
-	@echo "  make model         Download ALL known-good models (or just MODEL= if given; all ungated)"
+	@echo "  make model         Download the 0.6/1/4/8B experiment roster (or just MODEL= if given)"
 	@echo "  make lcfx          LCF-X: train fuser -> EM/F1 on val (train + eval)"
 	@echo "  make lcfx-train    LCF-X: train the fuser only"
 	@echo "  make lcfx-eval     LCF-X: eval a trained fuser (+ no-fusion floor)"
 	@echo "  make lcfx-hetero   LCF-X on a heterogeneous pair (Llama -> Qwen preset)"
-	@echo "  make eiyw          EIYW (ours): train translator -> EM/F1 on val (train + eval)"
+	@echo "  make eiyw          Legacy/manual only (excluded from exp/sweep): train translator -> eval"
 	@echo "  make eiyw-train    EIYW: train the translator only"
 	@echo "  make eiyw-eval     EIYW: eval a trained translator (or --no-fusion floor)"
 	@echo "  make eiyw-hetero   EIYW on a heterogeneous pair (Llama -> Qwen preset)"
-	@echo "  make kvtok         KVTok baseline: train translator -> EM/F1 on val (train + eval)"
+	@echo "  make kvtok         Legacy/manual only (excluded from exp/sweep): train translator -> eval"
 	@echo "  make kvtok-train   KVTok: train the translator only"
 	@echo "  make kvtok-eval    KVTok: eval a trained translator (or zero-init floor)"
 	@echo "  make kvtok-hetero  KVTok on a heterogeneous pair (Llama -> Qwen preset)"
@@ -55,21 +55,24 @@ help:
 	@echo "  make xkv-hetero    XKV on a heterogeneous pair (Llama -> Qwen preset)"
 	@echo "  make t2t           T2T baseline: EM/F1 on val (no training)"
 	@echo "  make single        Upper bound: MODEL answers with ALL evidence (MODEL=/DATASET= each: given=one, unset=all)"
-	@echo "  make exp           Sweep all model pairs, split by METHOD= then DATASET= (each: given=one, unset=all)"
-	@echo "  make sweep         Full pipeline: prepare + exp for every dataset, parallel across CUDA_VISIBLE_DEVICES"
+	@echo "  make exp           Sweep LCF-X/XKV/T2T over base model pairs, split by METHOD= then DATASET= (each: given=one, unset=all)"
+	@echo "  make exp-extend    Sweep only the 7 pairs where Sharer and/or Receiver is Ministral-8B"
+	@echo "  make exp-all       Sweep the full 0.6B/1B/4B/8B 4x4 grid (16 pairs)"
+	@echo "  make sweep         Full pipeline: prepare + 4x4 exp-all for every dataset, parallel across CUDA_VISIBLE_DEVICES"
 	@echo "  make visual        Comparison table: DATASET= (ITEM= given=one of scores/params/latency, unset=all three); ITEM=datasets for a size/oracle-score overview of every dataset"
+	@echo "  make visual-all    Same reports as visual, with the opt-in 8B model included (4x4 grid)"
 	@echo ""
 	@echo "Pick models with SHARER=/RECEIVER= (default Qwen/Qwen3-0.6B both sides):"
 	@echo "  make lcfx-train SHARER=<id> RECEIVER=<id>   train a pair"
 	@echo "  make lcfx-eval  SHARER=<id> RECEIVER=<id>   eval that pair (same CKPT)"
 	@echo "  make lcfx       SHARER=<id> RECEIVER=<id>   train -> eval end to end"
 	@echo "  (SHARER/RECEIVER apply to every method target; LCFX_*/EIYW_*/KVTOK_*/XKV_*/T2T_* set one method only)"
-	@echo "  primary model roster (used by exp/sweep; all ungated -- no HF_TOKEN needed):"
-	@echo "    Qwen/Qwen3-0.6B  unsloth/gemma-3-1b-it  unsloth/Llama-3.2-3B-Instruct"
-	@echo "  opt-in large tier (EXTRA_MODELS=TRUE adds it to exp/sweep/single/visual: 4x4=16 pairs instead of 3x3=9):"
-	@echo "    Qwen/Qwen3-8B"
-	@echo "  pair-testing extras (available for manual SHARER=/RECEIVER= use; not in exp/sweep):"
-	@echo "    unsloth/Llama-3.2-1B-Instruct  unsloth/gemma-3-4b-it  Qwen/Qwen3-4B"
+	@echo "  base model roster (used by exp; sweep adds the large tier; all ungated):"
+	@echo "    Qwen/Qwen3-0.6B  unsloth/Llama-3.2-1B-Instruct  unsloth/gemma-3-4b-it"
+	@echo "  large tier (exp-all/sweep include it; EXTRA_MODELS=TRUE adds it to exp/single/visual):"
+	@echo "    mistralai/Ministral-8B-Instruct-2410"
+	@echo "  pair-testing extras (available for manual SHARER=/RECEIVER= use; not in exp/sweep or bare make model):"
+	@echo "    unsloth/gemma-3-1b-it  unsloth/Llama-3.2-3B-Instruct  Qwen/Qwen3-4B  Qwen/Qwen3-8B"
 	@echo "  results + checkpoints auto-separate (results/<method>/<dataset>/<sharer>/<receiver>/sp<SPANS>)."
 	@echo ""
 	@echo "Common knobs:  DATASET=  CKPT=  EVAL_N=  MAX_TRAIN=  MAX_STEPS=  BATCH_SIZE=  GRAD_ACCUM="
@@ -77,7 +80,7 @@ help:
 	@echo "  LCF-X-only bottleneck dim: BOTTLENECK=  (default: 128; a hidden projection width, not a token count)"
 	@echo "  EIYW-only knobs: EIYW_DMODEL= (default: half=receiver_hidden//2; also 'hidden' or int)  EIYW_QPL= (default: 1; cross-span queries/layer k, tokens=k*(Ls+Lr))  EIYW_BLOCKS= (default: 2; self-attn blocks)"
 	@echo "  KVTok knobs: KVTOK_TOKENS= (default: 8)  KVTOK_DMODEL= (default: 512)  KVTOK_HEADS= (default: 8; resolved down if it does not divide d_model)"
-	@echo "  XKV knobs: XKV_DMODEL= (default: eighth=receiver_hidden//8; or int)  XKV_BLOCKS= (default: 1 attention block)  XKV_HEADS= (default: 8)  XKV_POOL_K= (default: 2 direct-attention slots/layer/head/side; XKV_POOL_SLOTS alias)"
+	@echo "  XKV knobs: XKV_DMODEL= (default: eighth=receiver_hidden//8; or int)  XKV_BLOCKS= (default: 1)  XKV_POOL_K= (Receiver default: 0.6B->1, 1B->2, 4B->3, 8B->4; XKV_POOL_SLOTS alias)  XKV_HEADS= (default: 8)"
 	@echo "Quick smoke:   make lcfx MAX_TRAIN=200 MAX_STEPS=5 EVAL_N=50 BATCH_SIZE=4 GRAD_ACCUM=2"
 
 # ===== Config =================================================================
@@ -94,11 +97,12 @@ VAL        ?= $(TASKS)/$(DATASET)_val.jsonl
 # reads its OWN sharer/receiver below, which fall back to these globals when not
 # set. Mix sizes / families / tokenizers freely (the fuser bridges differing
 # layers/heads/head_dim); primary model roster (used by exp/sweep; all ungated -- no HF_TOKEN needed):
-#   Qwen/Qwen3-0.6B  unsloth/gemma-3-1b-it  unsloth/Llama-3.2-3B-Instruct
-# Opt-in large tier (EXTRA_MODELS=TRUE adds it to exp/sweep/single/visual):
-#   Qwen/Qwen3-8B
+#   Qwen/Qwen3-0.6B  unsloth/Llama-3.2-1B-Instruct  unsloth/gemma-3-4b-it
+# Large tier (`exp-all`/`sweep` include it; EXTRA_MODELS=TRUE adds it to
+# `exp`/`single`/`visual`):
+#   mistralai/Ministral-8B-Instruct-2410
 # Pair-testing extras (manual SHARER=/RECEIVER= use; not in exp/sweep):
-#   unsloth/Llama-3.2-1B-Instruct  unsloth/gemma-3-4b-it  Qwen/Qwen3-4B
+#   unsloth/gemma-3-1b-it  unsloth/Llama-3.2-3B-Instruct  Qwen/Qwen3-4B Qwen/Qwen3-8B
 # Trained fuser checkpoints are stamped with their Sharer/Receiver ids; results and
 # checkpoints auto-separate by dataset + pair (see LCFX_SLUG below), so different
 # runs never overwrite each other. The eval HARD-ERRORS on a model/checkpoint mismatch.
@@ -140,7 +144,7 @@ T2T_SLUG   = $(DATASET)/$(subst /,--,$(T2T_SHARER))/$(subst /,--,$(T2T_RECEIVER)
 EIYW_SLUG  = $(DATASET)/$(subst /,--,$(EIYW_SHARER))/$(subst /,--,$(EIYW_RECEIVER))/sp$(SPANS)_dm$(EIYW_DMODEL)_k$(EIYW_QPL)$(if $(filter-out 0,$(EIYW_ADAPT)),_ad$(EIYW_ADAPT),)
 KVTOK_SLUG = $(DATASET)/$(subst /,--,$(KVTOK_SHARER))/$(subst /,--,$(KVTOK_RECEIVER))/sp$(SPANS)_tok$(KVTOK_TOKENS)_dm$(KVTOK_DMODEL)_h$(KVTOK_HEADS)
 XKV_DMODEL_TAG = $(if $(filter eighth hidden/8 hidden//8 receiver/8,$(XKV_DMODEL)),h8,$(XKV_DMODEL))
-XKV_SLUG   = $(DATASET)/$(subst /,--,$(XKV_SHARER))/$(subst /,--,$(XKV_RECEIVER))/d$(XKV_DMODEL_TAG)_n$(XKV_BLOCKS)_h$(XKV_HEADS)_do$(subst .,p,$(XKV_DROPOUT))_k$(XKV_POOL_SLOTS)_v10
+XKV_SLUG   = $(DATASET)/$(subst /,--,$(XKV_SHARER))/$(subst /,--,$(XKV_RECEIVER))/d$(XKV_DMODEL_TAG)_n$(XKV_BLOCKS)_h$(XKV_HEADS)_do$(subst .,p,$(XKV_DROPOUT))_k$(XKV_POOL_SLOTS)_v11
 LCFX_OUT   ?= results/lcfx/$(LCFX_SLUG)
 T2T_OUT    ?= results/t2t/$(T2T_SLUG)
 EIYW_OUT   ?= results/eiyw/$(EIYW_SLUG)
@@ -238,7 +242,8 @@ XKV_BLOCKS ?= 1
 XKV_HEADS  ?= 8
 XKV_DROPOUT ?= 0.1
 XKV_POOL_K ?=
-XKV_POOL_SLOTS ?= $(if $(strip $(XKV_POOL_K)),$(XKV_POOL_K),2)
+XKV_POOL_DEFAULT = $(if $(or $(findstring 0.6B,$(XKV_RECEIVER)),$(findstring 0.6b,$(XKV_RECEIVER))),1,$(if $(or $(findstring 1B,$(XKV_RECEIVER)),$(findstring 1b,$(XKV_RECEIVER))),2,$(if $(or $(findstring 3B,$(XKV_RECEIVER)),$(findstring 3b,$(XKV_RECEIVER)),$(findstring 4B,$(XKV_RECEIVER)),$(findstring 4b,$(XKV_RECEIVER))),3,$(if $(or $(findstring 8B,$(XKV_RECEIVER)),$(findstring 8b,$(XKV_RECEIVER))),4,2))))
+XKV_POOL_SLOTS ?= $(if $(strip $(XKV_POOL_K)),$(XKV_POOL_K),$(XKV_POOL_DEFAULT))
 XKV_CKPT ?= data/checkpoints/xkv/$(XKV_SLUG)/translator.pt
 
 # --- T2T baseline: caps the Sharer message at SHARER_MAX tokens (paper default
@@ -336,22 +341,26 @@ $(TASKS)/strategyqa_val.jsonl:
 # ===== Model download (into data/hf_cache; like `make data` for datasets) ======
 # Fetch a model once so later (offline) runs find it locally. Idempotent. MODEL is
 # the single-model knob shared with `make single` (defaults to RECEIVER). All
-# known-good ids are ungated -- no HF_TOKEN needed. With no MODEL= given, `make
-# model` downloads every known-good model instead of picking one.
+# experiment-roster ids are ungated -- no HF_TOKEN needed. With no MODEL=
+# given, `make model` downloads the four 0.6/1/4/8B experiment models instead
+# of picking one.
 #   make model MODEL=unsloth/gemma-3-4b-it
 MODEL ?= $(RECEIVER)
-# EXTRA_MODELS=TRUE adds the opt-in large tier (Qwen3-8B) to the primary roster,
-# growing exp/sweep's grid from 3x3=9 to 4x4=16 pairs (and adding it to
-# single/visual). EXTRA_MODELS_FLAG is the matching CLI flag passed through to
-# run_sweep.py / run_all.py / make_comparison_table.py.
+# EXTRA_MODELS=TRUE adds Ministral-8B to `exp`, `single`, and `visual`, growing
+# their base 3x3 roster to 4x4 where applicable. `exp-all` and `sweep` include
+# it explicitly. EXTRA_MODELS_FLAG is used by make_comparison_table.py.
 EXTRA_MODELS ?=
 EXTRA_MODELS_FLAG := $(if $(filter TRUE true 1,$(EXTRA_MODELS)),--extra-models,)
-PRIMARY_MODELS := Qwen/Qwen3-0.6B \
-	unsloth/gemma-3-1b-it unsloth/Llama-3.2-3B-Instruct \
-	$(if $(filter TRUE true 1,$(EXTRA_MODELS)),Qwen/Qwen3-8B,)
-PAIR_TEST_MODELS := $(PRIMARY_MODELS) unsloth/Llama-3.2-1B-Instruct \
-	unsloth/gemma-3-4b-it Qwen/Qwen3-4B Qwen/Qwen3-8B
-ALL_MODELS := $(sort $(PAIR_TEST_MODELS))
+BASE_MODELS := Qwen/Qwen3-0.6B unsloth/Llama-3.2-1B-Instruct \
+	unsloth/gemma-3-4b-it
+LARGE_MODELS := mistralai/Ministral-8B-Instruct-2410
+PRIMARY_MODELS := $(BASE_MODELS) \
+	$(if $(filter TRUE true 1,$(EXTRA_MODELS)),$(LARGE_MODELS),)
+PAIR_TEST_MODELS := unsloth/gemma-3-1b-it \
+	unsloth/Llama-3.2-3B-Instruct Qwen/Qwen3-4B Qwen/Qwen3-8B
+# Bare `make model` / `make prepare` fetch exactly the experiment roster,
+# including the 8B extension. Pair-testing extras remain available via MODEL=.
+ALL_MODELS := $(sort $(BASE_MODELS) $(LARGE_MODELS))
 
 .PHONY: model
 model:
@@ -561,7 +570,7 @@ t2t-eval t2t: data
 # Sharer) -- i.e. how each model does on the dataset with all available info. It's
 # a single model (not a pair). Split MODEL-major, DATASET-minor, same "given=one,
 # unset=all" pattern as `exp`: with no MODEL=, tests every model in PRIMARY_MODELS
-# (EXTRA_MODELS=TRUE adds Qwen3-8B, same as exp/sweep); with no DATASET=, tests
+# (EXTRA_MODELS=TRUE adds Ministral-8B, same as exp-all/sweep); with no DATASET=, tests
 # every dataset.
 #   make single                                        # every model, every dataset
 #   make single MODEL=Qwen/Qwen3-0.6B                  # one model, every dataset
@@ -609,31 +618,32 @@ endif
 # full-scale grid (paper defaults; BATCH_SIZE/GRAD_ACCUM auto-picked per pair
 # to avoid OOM while keeping effective batch 256 -- see run_sweep.py's
 # pick_batch_grad_accum) for the primary model roster by default:
-# Qwen3-0.6B, unsloth/gemma-3-1b-it,
-# unsloth/Llama-3.2-3B-Instruct -- 3x3=9 pairs (incl. symmetric).
-# EXTRA_MODELS=TRUE adds the opt-in large tier (Qwen3-8B) on both axes:
-# 4x4=16 pairs.
+# Qwen3-0.6B, unsloth/Llama-3.2-1B-Instruct,
+# unsloth/gemma-3-4b-it -- 3x3=9 pairs (incl. symmetric).
+# `make exp-all` adds Ministral-8B on both axes; `make exp-extend` runs only
+# the seven new pairs where at least one axis is Ministral-8B.
+# Together the complete grid is 4x4=16 pairs.
 # Pass EXP_STAGE=smoke for a cheap reduced-budget sanity pass instead.
 # Tests are split METHOD-major, DATASET-minor: with no METHOD= given, sweeps
-# t2t, lcfx, eiyw, kvtok, then xkv in turn (each across every DATASET= it's given, or
-# all 6 datasets if that's also unset); with a METHOD= given, only that method
+# lcfx, xkv, then t2t in turn (each across every DATASET= it's given, or all 6
+# datasets if that's also unset); with a METHOD= given, only that method
 # runs (still across all datasets, or just one if DATASET= is also given).
 # Every launch reruns every selected cell fresh (results/checkpoints are
 # overwritten in place). Pass EXP_ARGS="--resume" to instead skip cells
 # already `ok` in results/sweep_manifest.jsonl (continue a crashed sweep).
-#   make exp                                                # every method, every dataset (270 cells)
-#   make exp EXTRA_MODELS=TRUE                               # same, with Qwen3-8B added (480 cells)
+#   make exp                                                # every method, every dataset (162 cells)
+#   make exp-all                                            # same, full 4x4 grid (288 cells)
+#   make exp-extend                                         # only the seven pairs touching Ministral-8B (126 cells)
 #   make exp METHOD=t2t                                     # t2t only, every dataset (54 cells)
 #   make exp METHOD=t2t DATASET=hotpotqa_bridge              # t2t only, one dataset (9 cells)
-#   make exp DATASET=hotpotqa_bridge                         # every method, one dataset (45 cells)
-#   make exp METHOD=kvtok DATASET=hotpotqa_bridge             # KVTok only, one dataset (9 cells)
+#   make exp DATASET=hotpotqa_bridge                         # every method, one dataset (27 cells)
 #   make exp METHOD=xkv DATASET=hotpotqa_bridge              # XKV only, one dataset (9 cells)
 #   make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_GPUS=1,2,3
 #   make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--dry-run"
 #   make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--resume"   # continue a crashed run
-#   make exp METHOD=t2t DATASET=hotpotqa_bridge EXTRA_MODELS=TRUE EXP_ARGS="--sharer Qwen/Qwen3-8B --receiver Qwen/Qwen3-8B"
+#   make exp-all METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--sharer mistralai/Ministral-8B-Instruct-2410 --receiver mistralai/Ministral-8B-Instruct-2410"
 #   make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_STAGE=smoke   # cheap reduced-budget sanity pass
-EXP_METHODS             := t2t lcfx eiyw kvtok xkv
+EXP_METHODS             := lcfx xkv t2t
 EXP_STAGE               ?= full
 # By default, turn every id visible to this make process into a sweep worker.
 # EXP_GPUS= remains an explicit override (including EXP_GPUS= for one unpinned
@@ -641,11 +651,12 @@ EXP_STAGE               ?= full
 EXP_GPUS                ?= $(CUDA_VISIBLE_DEVICES)
 EXP_CONCURRENCY_PER_GPU ?= 1
 EXP_ARGS                ?=
+EXP_PAIR_SCOPE          ?= $(if $(filter TRUE true 1,$(EXTRA_MODELS)),all,base)
 
 # Outer loop: method. With METHOD= given, hand off straight to the dataset
 # loop below; otherwise run every method in turn (each recursive call then
 # resolves its own DATASET= the same way `data`/`model` resolve DATASET=).
-.PHONY: exp
+.PHONY: exp exp-all exp-extend
 exp:
 ifeq ($(origin METHOD),command line)
 	$(MAKE) _exp-dataset METHOD=$(METHOD)
@@ -657,6 +668,12 @@ else
 	done; exit $$status
 endif
 
+exp-all:
+	$(MAKE) exp EXP_PAIR_SCOPE=all
+
+exp-extend:
+	$(MAKE) exp EXP_PAIR_SCOPE=extend
+
 # Inner loop: dataset, for one already-resolved METHOD. Not meant to be
 # called directly -- go through `exp` so the method axis resolves first.
 .PHONY: _exp-dataset
@@ -664,11 +681,11 @@ _exp-dataset:
 ifeq ($(origin DATASET),command line)
 	$(PY) scripts/run_sweep.py --dataset $(DATASET) --method $(METHOD) --stage $(EXP_STAGE) \
 	  --concurrency-per-gpu $(EXP_CONCURRENCY_PER_GPU) \
-	  $(if $(EXP_GPUS),--gpus $(EXP_GPUS),) $(EXTRA_MODELS_FLAG) $(EXP_ARGS)
+	  $(if $(EXP_GPUS),--gpus $(EXP_GPUS),) --pair-scope $(EXP_PAIR_SCOPE) $(EXP_ARGS)
 else ifeq ($(origin DATASET),environment)
 	$(PY) scripts/run_sweep.py --dataset $(DATASET) --method $(METHOD) --stage $(EXP_STAGE) \
 	  --concurrency-per-gpu $(EXP_CONCURRENCY_PER_GPU) \
-	  $(if $(EXP_GPUS),--gpus $(EXP_GPUS),) $(EXTRA_MODELS_FLAG) $(EXP_ARGS)
+	  $(if $(EXP_GPUS),--gpus $(EXP_GPUS),) --pair-scope $(EXP_PAIR_SCOPE) $(EXP_ARGS)
 else
 	@status=0; for d in $(ALL_DATASETS); do \
 	  $(MAKE) _exp-dataset METHOD=$(METHOD) DATASET=$$d || status=$$?; \
@@ -683,23 +700,25 @@ endif
 # its assigned datasets sequentially (queued by dataset, not interleaved).
 # E.g. with 2 GPUs and this project's 6 datasets, each GPU runs 3 datasets
 # one after another while both GPUs run in parallel. Reuses EXP_STAGE from
-# `exp` above (full stage by default).
+# `exp` above (full stage by default) and intentionally defaults to the
+# complete 4x4 grid. Use SWEEP_PAIR_SCOPE=base for only the 0.6/1/4B grid.
 #   CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep
 #   CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep METHOD=t2t   # t2t only, same GPU distribution
 #   CUDA_VISIBLE_DEVICES=1,2     make sweep SWEEP_ARGS="--dry-run"
 #   CUDA_VISIBLE_DEVICES=1,2     make sweep SWEEP_ARGS="--resume"
 #   make sweep                                       # no GPUs pinned -> single sequential worker
 #   CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep EXP_STAGE=smoke   # cheap reduced-budget sanity pass
-#   CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep EXTRA_MODELS=TRUE # add Qwen3-8B (4x4=16 pairs)
+#   CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep SWEEP_PAIR_SCOPE=base # only the 3x3 base grid
 SWEEP_ARGS ?=
+SWEEP_PAIR_SCOPE ?= all
 
 .PHONY: sweep
 sweep: prepare
-	$(PY) scripts/run_all.py --stage $(EXP_STAGE) $(if $(METHOD),--method $(METHOD),) $(EXTRA_MODELS_FLAG) $(SWEEP_ARGS)
+	$(PY) scripts/run_all.py --stage $(EXP_STAGE) --pair-scope $(SWEEP_PAIR_SCOPE) $(if $(METHOD),--method $(METHOD),) $(SWEEP_ARGS)
 
 # ===== Visual comparison table (lcfx vs xkv vs t2t) ============================
 # Sharer x Receiver grid over the primary model roster (3x3 = 9 cells; 4x4 = 16
-# with EXTRA_MODELS=TRUE, matching exp/sweep) for one dataset. Missing
+# with EXTRA_MODELS=TRUE, matching exp-all/sweep) for one dataset. Missing
 # results/checkpoints (method not run, or whole cell not run) are left blank
 # rather than erroring. Four views via ITEM=:
 #   ITEM=scores              lcfx/xkv/t2t EM+F1 from results/<method>/.../metrics.json
@@ -708,8 +727,9 @@ sweep: prepare
 #                           data/checkpoints/<method>/.../training_log.jsonl (t2t
 #                           trains nothing, so it's not shown)
 #   ITEM=latency             lcfx/xkv/t2t average per-example total latency from
-#                           results/<method>/.../latency.json (fastest of each
-#                           cell is bolded)
+#                           results/<method>/.../latency.json; lcfx/xkv use
+#                           component/total format, with the fastest component
+#                           and total in each cell bolded independently
 #   ITEM=datasets            one overview table, every dataset (DATASET= ignored):
 #                           train/val split sizes + single-model-oracle EM+F1 for
 #                           a representative 1B/4B/8B model (results/single/...)
@@ -726,6 +746,8 @@ sweep: prepare
 #   make visual DATASET=ropes ITEM=params
 #   make visual DATASET=ropes ITEM=latency
 #   make visual ITEM=datasets
+#   make visual-all DATASET=ropes               same views, including 8B
+#   make visual-all DATASET=ropes ITEM=scores   one 4x4 view
 #   make visual DATASET=ropes ITEM=scores OUT=results/comparison/ropes_custom.md
 # MODELS= (space-separated ids) overrides the grid axes — e.g. to view results
 # for retired roster members (pair-testing extras) without rerunning anything:
@@ -734,11 +756,16 @@ ITEM       ?= scores
 VISUAL_SUFFIX = $(if $(filter params latency,$(ITEM)),_$(ITEM),)
 VISUAL_OUT ?= $(if $(filter datasets,$(ITEM)),results/comparison/datasets.md,results/comparison/$(DATASET)$(VISUAL_SUFFIX).md)
 ALL_VISUAL_ITEMS := scores params latency
-XKV_VISUAL_HP = d$(XKV_DMODEL_TAG)_n$(XKV_BLOCKS)_h$(XKV_HEADS)_do$(subst .,p,$(XKV_DROPOUT))_k$(XKV_POOL_SLOTS)_v10
+XKV_POOL_EXPLICIT = $(or $(filter command line environment,$(origin XKV_POOL_K)),$(filter command line environment,$(origin XKV_POOL_SLOTS)))
+XKV_VISUAL_K = $(if $(XKV_POOL_EXPLICIT),$(XKV_POOL_SLOTS),{receiver_k})
+XKV_VISUAL_HP = d$(XKV_DMODEL_TAG)_n$(XKV_BLOCKS)_h$(XKV_HEADS)_do$(subst .,p,$(XKV_DROPOUT))_k$(XKV_VISUAL_K)_v11
 VISUAL_HP_FLAGS = --lcfx-hp sp$(SPANS) \
 	--xkv-hp $(XKV_VISUAL_HP)
 
-.PHONY: visual
+.PHONY: visual visual-all
+visual-all:
+	$(MAKE) visual EXTRA_MODELS=TRUE
+
 visual:
 ifeq ($(origin ITEM),command line)
 	$(PY) scripts/make_comparison_table.py --item $(ITEM) $(if $(filter-out datasets,$(ITEM)),--dataset $(DATASET) $(VISUAL_HP_FLAGS),) $(EXTRA_MODELS_FLAG) $(if $(MODELS),--models $(MODELS),) --output $(if $(OUT),$(OUT),$(VISUAL_OUT))

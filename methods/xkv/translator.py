@@ -1,9 +1,9 @@
 """XKV dual-cache attention translator.
 
 Both caches are reduced directly from ``N -> k`` by vectorized learned-query
-attention, with ``k=2`` independent summaries per layer and KV head by default.
-Each cache side has a learned positive attention-logit scale, initialized to
-one, and its pool queries use an unshrunk Kaiming initialization.
+attention. Production defaults select ``k=1/2/3/4`` for 0.6B/1B/4B/8B Receivers
+and one translation block for every Receiver.
+Pool queries use the v9 Kaiming-normal x0.02 initialization.
 A learned linear map aligns the Sharer layer axis to the Receiver layer count,
 the pooled cache vectors are concatenated and bottlenecked, and
 ``num_blocks`` self-attention blocks translate the resulting joint layer
@@ -45,10 +45,20 @@ def _safe_num_heads(d_model: int, num_heads: int) -> int:
     return 1
 
 
+def _default_pool_slots(receiver_model: str) -> int:
+    """Receiver-size default: 0.6B/1B/4B/8B -> 1/2/3/4 slots."""
+
+    tokens = str(receiver_model).lower().replace("/", "-").replace("_", "-").split("-")
+    for size, slots in (("0.6b", 1), ("1b", 2), ("3b", 3), ("4b", 3), ("8b", 4)):
+        if size in tokens:
+            return slots
+    return 2
+
+
 def _cache_width(
     cache: list[tuple[torch.Tensor, torch.Tensor]], *, windowed_cache: bool
 ) -> int:
-    """Common working width, with unequal layers allowed only for Gemma-3."""
+    """Common suffix width for uniform or declared hybrid-attention caches."""
 
     widths = [int(key.shape[2]) for key, _ in cache]
     if not widths or min(widths) < 1:
@@ -56,7 +66,7 @@ def _cache_width(
     if not windowed_cache and len(set(widths)) != 1:
         raise ValueError(
             "unequal per-layer cache widths are supported only for a declared "
-            f"Gemma-3 hybrid cache; got {widths}"
+            f"hybrid full/sliding-attention cache; got {widths}"
         )
     return min(widths)
 
@@ -79,10 +89,8 @@ class AttentionPool(nn.Module):
             torch.empty(layers, kv_heads, self.output_slots, head_dim)
         )
         nn.init.kaiming_normal_(self.query)
-        # A positive learned temperature lets each cache side tune how selective
-        # its pooling should be.  Initial scale 1.0 keeps the Kaiming logits
-        # unchanged; unlike v9, the query is not collapsed by an extra x0.02.
-        self.logit_scale = nn.Parameter(torch.zeros(()))
+        with torch.no_grad():
+            self.query.mul_(0.02)
         self._diagnostics_enabled = False
         self._last_diagnostics: dict[str, torch.Tensor] | None = None
 
@@ -130,6 +138,7 @@ class AttentionPool(nn.Module):
                 torch.zeros_like(entropy),
             ).mean()
 
+            diagnostics = {"entropy": normalized_entropy}
             if self.output_slots > 1:
                 unit_weights = F.normalize(probabilities, dim=-1)
                 similarity = torch.einsum(
@@ -140,15 +149,9 @@ class AttentionPool(nn.Module):
                     device=similarity.device,
                     dtype=torch.bool,
                 )
-                slot_cosine = similarity[..., off_diagonal].mean()
-            else:
-                slot_cosine = probabilities.new_tensor(1.0)
+                diagnostics["slot_cosine"] = similarity[..., off_diagonal].mean()
 
-            self._last_diagnostics = {
-                "entropy": normalized_entropy,
-                "slot_cosine": slot_cosine,
-                "scale": self.logit_scale.detach().exp(),
-            }
+            self._last_diagnostics = diagnostics
 
     def forward(
         self,
@@ -172,7 +175,7 @@ class AttentionPool(nn.Module):
         keys = keys.to(self.query.dtype)
         values = values.to(self.query.dtype)
         scores = torch.einsum("lhkd,blhnd->blhkn", self.query, keys)
-        scores = scores * self.logit_scale.exp() / self.head_dim**0.5
+        scores = scores / self.head_dim**0.5
         valid = None
         if attention_mask is not None:
             if attention_mask.shape[-1] < common_n:
@@ -499,6 +502,10 @@ class XKVTranslator(nn.Module):
         d_model = _resolve_d_model(
             kwargs.pop("d_model", "eighth"), receiver_spec.hidden
         )
+        pool_slots = kwargs.pop("pool_slots", None)
+        if pool_slots is None:
+            pool_slots = _default_pool_slots(receiver_spec.name)
+        num_blocks = kwargs.pop("num_blocks", 1)
         return cls(
             sharer_layers=sharer_spec.layers,
             sharer_kv_heads=sharer_spec.kv_heads,
@@ -507,6 +514,8 @@ class XKVTranslator(nn.Module):
             receiver_kv_heads=receiver_spec.kv_heads,
             receiver_head_dim=receiver_spec.head_dim,
             d_model=d_model,
+            pool_slots=pool_slots,
+            num_blocks=num_blocks,
             **kwargs,
         )
 

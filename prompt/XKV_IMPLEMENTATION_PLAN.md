@@ -26,7 +26,7 @@ and update head are trained.
   normally constant over layers; Gemma-3 mixes sliding and full attention, so
   they may differ.
 - `k`: direct-attention summaries retained per layer and KV head on both sides
-  (`k=2` by default).
+  (Receiver-tier default `k=1/2/3/4` for 0.6B/1B/4B/8B).
 - `d`: XKV bottleneck/translator width (default: Receiver hidden width divided
   by 8).
 
@@ -48,14 +48,12 @@ For each side `a in {s,r}`, learn `k` queries per layer and KV head,
 attention directly over all retained raw cache positions:
 
 ```text
-A_a = softmax(gamma_a Q_a K_a^T / sqrt(D_a)) # [B,L_a,H_a,k,N_a]
+A_a = softmax(Q_a K_a^T / sqrt(D_a))         # [B,L_a,H_a,k,N_a]
 K_a* = A_a K_a,  V_a* = A_a V_a           # [B,L_a,H_a,k,D_a]
 ```
 
-`gamma_a=exp(g_a)>0` is one learned scalar per cache side, initialized to
-`1.0`. Pool queries use an unshrunk Kaiming-normal initialization; applying an
-additional `x0.02` makes the initial logits nearly zero and collapses the
-default two slots into duplicate global averages.
+Pool queries use the v9 Kaiming-normal initialization followed by `x0.02`.
+There is no learned attention temperature.
 
 The K-derived attention weights reduce K and V consistently. There is no
 intermediate span axis and no Python loop over layers or slots. Each learned
@@ -93,7 +91,8 @@ does not treat the layer tokens as an unordered set.
 ### 3.3 Attention translator
 
 Process `Z` with a stack of `n` pre-norm Transformer encoder blocks. Use
-`n=1` by default and expose it as `--num-blocks`. Each block has its
+`n=1` by default for every Receiver and expose it as `--num-blocks` for depth
+ablations. Each block has its
 own parameters unless an explicit weight-tied recurrent ablation is selected:
 
 ```text
@@ -262,10 +261,9 @@ Required ablations:
   Self-attention sees only `L_r` pooled tokens; the position decoder performs
   cross-attention from `N_r` queries to `L_r` memory tokens per layer.
 - **Pooling removes useful locality:** log normalized attention entropy and
-  inter-slot attention-map cosine separately for the Sharer and Receiver. The
-  learned positive logit scales correct under-selective pooling; if slots still
-  collapse, add an attention-map diversity regularizer before restoring span
-  pooling.
+  inter-slot attention-map cosine separately for the Sharer and Receiver. If
+  slots collapse, add an attention-map diversity regularizer before restoring
+  span pooling.
 - **Updates overpower the frozen Receiver:** zero-init the up-projections, log
   update/cache RMS ratios, clip gradients, and optionally enable update-norm
   regularization.
@@ -275,9 +273,10 @@ Required ablations:
 
 ### Recommended design choices
 
-1. **Keep `n=1` as the default and sweep `1,2,4`.** Use independent blocks for
-   the primary experiment; tied recurrence is useful only as a parameter-control
-   ablation. Implement the independent case as a `ModuleList` of `n` blocks.
+1. **Use `n=1` by default and sweep depth only as an ablation.** Use independent
+   blocks when testing `n>1`; tied recurrence is useful only as a
+   parameter-control ablation. Implement the independent case as a `ModuleList`
+   of `n` blocks.
 2. **Share the position decoder and two up-projections across layers.** One
    projection emits K and one emits V from the full decoded latent. Raw Receiver
    K/V provides position identity; layer embeddings and layer-specific K/V
@@ -285,8 +284,10 @@ Required ablations:
 3. **Use the joint bottleneck normalization first.** The existing
    `W_down -> MLP -> LayerNorm` controls the concatenated scale. Add side-specific
    normalization only if measured cache-scale imbalance warrants it.
-4. **Keep `k=2` symmetric by default.** This preserves two independent views
-   of each cache while retaining a single vectorized attention operation.
+4. **Use a Receiver-tier `k` default.** Use `k=1/2/3/4` for 0.6B/1B/4B/8B
+   Receivers, respectively. This scales pooled information with Receiver size
+   while retaining a single vectorized attention operation and an explicit
+   fixed-`k` override for ablations.
 5. **Keep only deterministic per-head sigmoid scaling.** Do not restore the
    layer/type Gumbel gates unless a separate ablation demonstrates learned
    sparsity and removes the train/evaluation scaling mismatch.
@@ -304,7 +305,7 @@ and no optional side normalization, the trainable count is:
 
 | Component | Parameters |
 |---|---:|
-| Dual direct-attention pools | `k*(L_s*F_s + L_r*F_r) + 2` |
+| Dual direct-attention pools | `k*(L_s*F_s + L_r*F_r)` |
 | Optional layer map (`L_s != L_r`) | `L_s*L_r + L_r` |
 | Joint down-projection | `2*k*(F_s + F_r)*d + d` |
 | Joint bottleneck MLP + LayerNorm | `8*d^2 + 7*d` |
@@ -315,36 +316,33 @@ and no optional side normalization, the trainable count is:
 | Shared update head | `2*H_r*d + 2*H_r + 2*(d*F_r + F_r)` |
 
 For the repository default `Qwen3-0.6B -> Qwen3-0.6B`
-(`L_s=L_r=28`, `H_s=H_r=8`, `D_s=D_r=128`) with `k=2` and
+(`L_s=L_r=28`, `H_s=H_r=8`, `D_s=D_r=128`) with `k=1` and
 `d=1024//8=128`:
 
 | Component | Parameters |
 |---|---:|
-| Dual direct-attention pools | 114,690 |
-| Joint bottleneck, norm, and layer embedding | 1,184,256 |
+| Dual direct-attention pools | 57,344 |
+| Joint bottleneck, norm, and layer embedding | 659,968 |
 | `n=1` attention translator | 198,272 |
 | Shared Receiver-position decoder | 460,544 |
 | Shared update head | 266,256 |
-| **Total (`n=1`)** | **2,224,018 (~2.22M)** |
+| **Total (`n=1`)** | **1,642,384 (~1.64M)** |
 
 With independent attention blocks, each extra repetition adds **198,272**
 parameters:
 
 ```text
-P_shared(n) = 2,025,746 + 198,272*n
+P_shared(n) = 1,444,112 + 198,272*n
 ```
 
-Thus `n=2` is 2,422,290 parameters and `n=4` is 2,818,834. If the same block is
+Thus `n=2` is 1,840,656 parameters and `n=4` is 2,237,200. If the same block is
 recurrently applied `n` times with tied weights, the parameter count stays at
-2,224,018 while attention compute grows approximately linearly with `n`.
+1,642,384 while attention compute grows approximately linearly with `n`.
 
-The current symmetric direct-pool design has 5,379,858 parameters at fixed
+The current symmetric direct-pool design has 5,379,856 parameters at fixed
 `d=256,k=2` for this pair. Changing `k` affects only the learned pool queries
 and the joint down-projection input; it does not alter the translator sequence
 length or the `[B,L_r,d]` bottleneck output.
-
-At `k=1,d=128`, the same Receiver-position decoder has 460,544 parameters and
-the complete XKV adapter has 1,642,386 parameters.
 
 These totals exclude frozen Sharer/Receiver weights, optimizer state, and
 activation memory. Different model cache geometries change the pool, input, and
@@ -353,10 +351,10 @@ from `sum(p.numel() for p in xkv.parameters() if p.requires_grad)`.
 
 ## 11. MVP defaults
 
-Use `d=receiver_hidden//8`, `k=2` independent direct-attention queries per
-layer/head and side, 8 attention heads
-(or the largest divisor of `d` not exceeding 8), `n=1`
-independently parameterized self-attention block, a shared position
+Use `d=receiver_hidden//8`, Receiver-tier `k=1/2/3/4` for 0.6B/1B/4B/8B, `n=1`, with
+independent direct-attention queries per layer/head and side, 8 attention heads
+(or the largest divisor of `d` not exceeding 8), independently parameterized
+self-attention blocks, a shared position
 cross-attention decoder, two shared full-width up-projections, FFN width `4d`,
 dropout `0.1`, deterministic per-head sigmoid scaling, and no layer/type gate.
 Treat these as

@@ -15,7 +15,9 @@ ITEM=latency: Sharer x Receiver grid of lcfx / xkv / t2t average
 per-example total latency (ms) for one DATASET, read from the "average.total_ms" field of
 results/<method>/<dataset>/<sharer>/<receiver>/latency.json
 (lcfx/xkv have extra hyperparameter subdirs; fastest of each cell is
-bolded).
+bolded). LCF-X and XKV entries use fuser-or-translator/total format and bold
+the fastest value of each independently; the component comes from
+"average.fuser_ms" when available.
 
 ITEM=datasets: one overview table across every known dataset (DATASET is
 ignored) with train/val split sizes (counted from data/tasks/*.jsonl) and the
@@ -43,13 +45,13 @@ TASKS_DIR = os.path.join(ROOT_DIR, "data", "tasks")
 # Mirrors PRIMARY_MODELS in the Makefile (3x3 grid by default).
 PRIMARY_MODELS = [
     "Qwen/Qwen3-0.6B",
-    "unsloth/gemma-3-1b-it",
-    "unsloth/Llama-3.2-3B-Instruct",
+    "unsloth/Llama-3.2-1B-Instruct",
+    "unsloth/gemma-3-4b-it",
 ]
 # Opt-in large tier, appended to the grid by --extra-models (Makefile:
 # EXTRA_MODELS=TRUE) -- mirrors EXTRA_MODELS in scripts/run_sweep.py.
 EXTRA_MODELS = [
-    "Qwen/Qwen3-8B",
+    "mistralai/Ministral-8B-Instruct-2410",
 ]
 
 # Mirrors ALL_DATASETS in the Makefile.
@@ -65,9 +67,9 @@ ALL_DATASETS = [
 # Representative sizes drawn from PRIMARY_MODELS, used for the ITEM=datasets
 # "typical score" columns (single-model oracle: one model, all evidence).
 SIZE_MODELS = [
-    ("1B", "unsloth/gemma-3-1b-it"),
-    ("3B", "unsloth/Llama-3.2-3B-Instruct"),
-    ("8B", "Qwen/Qwen3-8B"),
+    ("1B", "unsloth/Llama-3.2-1B-Instruct"),
+    ("4B", "unsloth/gemma-3-4b-it"),
+    ("8B", "mistralai/Ministral-8B-Instruct-2410"),
 ]
 
 METHODS = [
@@ -86,6 +88,11 @@ TRAINED_METHODS = [
 PREFERRED_HP = {
     "lcfx": ["sp5"],
     "xkv": [
+        "dh8_n1_h8_do0p1_k1_v11",
+        "dh8_n1_h8_do0p1_k2_v11",
+        "dh8_n1_h8_do0p1_k3_v11",
+        "dh8_n2_h8_do0p1_k2_v11",
+        "dh8_n3_h8_do0p1_k3_v11",
         "dh8_n1_h8_do0p1_k2_v10",
         "dh8_n1_h8_do0p1_k2_v9",
         "sp5_dh8_n1_h8_do0p1_p2_v8",
@@ -135,21 +142,40 @@ def find_nested_file(base, filename, preferred_hp=None):
     return matches[0] if matches else None
 
 
-def find_method_file(method, base, filename):
+def default_xkv_receiver_k(receiver):
+    tokens = receiver.lower().replace("/", "-").replace("_", "-").split("-")
+    for size, slots in (("0.6b", 1), ("1b", 2), ("3b", 3), ("4b", 3), ("8b", 4)):
+        if size in tokens:
+            return slots
+    return 2
+
+
+def find_method_file(method, base, filename, receiver):
     if method in SELECTED_HP:
-        path = os.path.join(base, SELECTED_HP[method], filename)
+        selected = SELECTED_HP[method].replace(
+            "{receiver_k}", str(default_xkv_receiver_k(receiver))
+        )
+        path = os.path.join(base, selected, filename)
         return path if os.path.isfile(path) else None
-    return find_nested_file(base, filename, preferred_hp=PREFERRED_HP.get(method))
+    preferred = PREFERRED_HP.get(method)
+    if method == "xkv":
+        receiver_default = (
+            f"dh8_n1_h8_do0p1_k{default_xkv_receiver_k(receiver)}_v11"
+        )
+        preferred = [receiver_default] + [
+            candidate for candidate in preferred or [] if candidate != receiver_default
+        ]
+    return find_nested_file(base, filename, preferred_hp=preferred)
 
 
 def find_metrics_path(method, dataset, sharer, receiver):
     base = os.path.join(RESULTS_DIR, method, dataset, slug(sharer), slug(receiver))
-    return find_method_file(method, base, "metrics.json")
+    return find_method_file(method, base, "metrics.json", receiver)
 
 
 def find_training_log_path(method, dataset, sharer, receiver):
     base = os.path.join(CHECKPOINTS_DIR, method, dataset, slug(sharer), slug(receiver))
-    return find_method_file(method, base, "training_log.jsonl")
+    return find_method_file(method, base, "training_log.jsonl", receiver)
 
 
 def load_em_f1(path):
@@ -206,15 +232,21 @@ def cell_text(dataset, sharer, receiver):
 
 def find_latency_path(method, dataset, sharer, receiver):
     base = os.path.join(RESULTS_DIR, method, dataset, slug(sharer), slug(receiver))
-    return find_method_file(method, base, "latency.json")
+    return find_method_file(method, base, "latency.json", receiver)
+
+
+def load_avg_latency_ms(path):
+    if path is None:
+        return None, None
+    with open(path) as f:
+        data = json.load(f)
+    average = data.get("average", {})
+    return average.get("total_ms"), average.get("fuser_ms")
 
 
 def load_avg_total_ms(path):
-    if path is None:
-        return None
-    with open(path) as f:
-        data = json.load(f)
-    return data.get("average", {}).get("total_ms")
+    """Return the average end-to-end latency (legacy helper)."""
+    return load_avg_latency_ms(path)[0]
 
 
 def fmt_ms(value, bold):
@@ -228,16 +260,33 @@ def cell_latency_text(dataset, sharer, receiver):
     results = []
     for method, label in METHODS:
         path = find_latency_path(method, dataset, sharer, receiver)
-        results.append((label, load_avg_total_ms(path)))
+        total_ms, component_ms = load_avg_latency_ms(path)
+        results.append((method, label, total_ms, component_ms))
 
-    best = min((ms for _, ms in results if ms is not None), default=None)
+    best_total = min(
+        (total for _, _, total, _ in results if total is not None), default=None
+    )
+    best_component = min(
+        (
+            component
+            for method, _, _, component in results
+            if method in ("lcfx", "xkv") and component is not None
+        ),
+        default=None,
+    )
 
     lines = []
-    for label, ms in results:
-        if ms is None:
+    for method, label, total_ms, component_ms in results:
+        if total_ms is None:
             lines.append(label)
         else:
-            lines.append(f"{label} {fmt_ms(ms, ms == best)}")
+            total_text = fmt_ms(total_ms, total_ms == best_total)
+            if method in ("lcfx", "xkv") and component_ms is not None:
+                component_text = fmt_ms(component_ms, component_ms == best_component)
+                text = f"{label} {component_text}/{total_text}"
+            else:
+                text = f"{label} {total_text}"
+            lines.append(text)
     return "<br>".join(lines)
 
 
@@ -359,7 +408,7 @@ def build_latency_table(dataset, models):
         models,
         lambda sharer, receiver: cell_latency_text(dataset, sharer, receiver),
         f"{dataset}: lcfx / xkv / t2t average latency per example",
-        "Each cell: L=lcfx, X=xkv, T=t2t, average total latency per example (fastest of each in a cell is bolded). Missing results are left blank.",
+        "Each cell: L=lcfx, X=xkv, T=t2t. L/X use fuser-or-translator/total latency; T shows total only. The fastest component and total in each cell are bolded independently. Missing results are left blank.",
     )
 
 
@@ -470,7 +519,7 @@ def main():
     parser.add_argument(
         "--extra-models",
         action="store_true",
-        help="Also include the opt-in large tier (Qwen3-8B) in the grid, matching `make exp EXTRA_MODELS=TRUE`",
+        help="Also include the opt-in large tier (Ministral-8B) in the grid, matching `make exp-all`",
     )
     parser.add_argument(
         "--lcfx-hp", help="Exact LCF-X hyperparameter subdirectory to display"

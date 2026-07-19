@@ -14,7 +14,11 @@ if str(REPO_ROOT) not in sys.path:
 import torch  # noqa: E402
 
 from methods.xkv.training import load_translator, save_translator  # noqa: E402
-from methods.xkv.translator import XKVTranslator, _resolve_d_model  # noqa: E402
+from methods.xkv.translator import (  # noqa: E402
+    XKVTranslator,
+    _default_pool_slots,
+    _resolve_d_model,
+)
 
 
 def _cache(batch: int, layers: int, heads: int, positions: int, dim: int):
@@ -38,6 +42,12 @@ def _variable_cache(batch: int, heads: int, positions: list[int], dim: int):
 
 
 def main() -> None:
+    assert _default_pool_slots("Qwen/Qwen3-0.6B") == 1
+    assert _default_pool_slots("unsloth/gemma-3-1b-it") == 2
+    assert _default_pool_slots("unsloth/Llama-3.2-3B-Instruct") == 3
+    assert _default_pool_slots("unsloth/gemma-3-4b-it") == 3
+    assert _default_pool_slots("mistralai/Ministral-8B-Instruct-2410") == 4
+    assert _default_pool_slots("unknown/receiver") == 2
     assert _resolve_d_model("eighth", 1024) == 128
     assert _resolve_d_model("hidden//8", 1152) == 144
     assert _resolve_d_model("receiver/8", 3072) == 384
@@ -52,24 +62,54 @@ def main() -> None:
         d_model=256,
         num_blocks=1,
     )
-    assert default.trainable_parameters() == 5_379_858
+    assert default.trainable_parameters() == 5_379_856
     assert default.position_decoder is not None
     assert default.output_mode == "position_cross_attention"
     assert default.pooling_mode == "direct_attention_k"
     assert default.pool_slots == 2
     assert tuple(default.sharer_pool.query.shape) == (28, 8, 2, 128)
     assert tuple(default.receiver_pool.query.shape) == (28, 8, 2, 128)
-    assert default.sharer_pool.logit_scale.exp().item() == 1.0
-    assert default.receiver_pool.logit_scale.exp().item() == 1.0
+    assert default.sharer_pool.query.square().mean().sqrt().item() < 0.01
+    assert default.receiver_pool.query.square().mean().sqrt().item() < 0.01
     assert tuple(default.down.weight.shape) == (256, 8192)
     assert default.up_key.in_features == 256
     assert default.up_value.in_features == 256
     assert not hasattr(default, "layer_gate")
     assert not hasattr(default, "gate_tau")
-    qwen_spec = SimpleNamespace(layers=28, kv_heads=8, head_dim=128, hidden=1024)
+    qwen_spec = SimpleNamespace(
+        name="Qwen/Qwen3-0.6B",
+        layers=28,
+        kv_heads=8,
+        head_dim=128,
+        hidden=1024,
+    )
     dynamic_default = XKVTranslator.from_specs(qwen_spec, qwen_spec)
     assert dynamic_default.d_model == 128
-    assert dynamic_default.trainable_parameters() == 2_224_018
+    assert dynamic_default.pool_slots == 1
+    assert dynamic_default.num_blocks == 1
+    assert dynamic_default.trainable_parameters() == 1_642_384
+    gemma_spec = SimpleNamespace(
+        name="unsloth/gemma-3-1b-it",
+        layers=26,
+        kv_heads=1,
+        head_dim=256,
+        hidden=1152,
+    )
+    llama_spec = SimpleNamespace(
+        name="unsloth/Llama-3.2-3B-Instruct",
+        layers=28,
+        kv_heads=8,
+        head_dim=128,
+        hidden=3072,
+    )
+    gemma_default = XKVTranslator.from_specs(qwen_spec, gemma_spec)
+    llama_default = XKVTranslator.from_specs(qwen_spec, llama_spec)
+    assert gemma_default.pool_slots == 2 and gemma_default.num_blocks == 1
+    assert llama_default.pool_slots == 3 and llama_default.num_blocks == 1
+    explicit = XKVTranslator.from_specs(
+        qwen_spec, llama_spec, pool_slots=1, num_blocks=1
+    )
+    assert explicit.pool_slots == 1 and explicit.num_blocks == 1
     deeper = XKVTranslator(
         sharer_layers=28,
         sharer_kv_heads=8,
@@ -124,17 +164,25 @@ def main() -> None:
     assert set(diagnostics) == {
         "sharer_pool_entropy",
         "sharer_pool_slot_cosine",
-        "sharer_pool_scale",
         "receiver_pool_entropy",
         "receiver_pool_slot_cosine",
-        "receiver_pool_scale",
     }
     assert 0.0 <= diagnostics["sharer_pool_entropy"] <= 1.000001
     assert 0.0 <= diagnostics["receiver_pool_entropy"] <= 1.000001
     assert -1.000001 <= diagnostics["sharer_pool_slot_cosine"] <= 1.000001
     assert -1.000001 <= diagnostics["receiver_pool_slot_cosine"] <= 1.000001
-    assert diagnostics["sharer_pool_scale"] == 1.0
-    assert diagnostics["receiver_pool_scale"] == 1.0
+    one_slot = XKVTranslator(**kwargs, pool_slots=1, zero_init=True).eval()
+    one_slot.set_pool_diagnostics(True)
+    one_slot.translate(
+        sharer,
+        receiver,
+        sharer_attention_mask=sharer_mask,
+        receiver_attention_mask=receiver_mask,
+    )
+    assert set(one_slot.pool_diagnostics()) == {
+        "sharer_pool_entropy",
+        "receiver_pool_entropy",
+    }
     receiver_pooled = zero.receiver_pool(
         receiver,
         attention_mask=receiver_mask,
@@ -187,7 +235,7 @@ def main() -> None:
     assert not torch.equal(residual[0][1][1, :, 2], residual[0][1][1, :, 4])
     print("finite gradients, position-specific updates, and padding masking OK")
 
-    # Gemma-3 alternates sliding and full-attention cache layers. The
+    # Gemma-3 and Ministral use hybrid sliding/full-attention cache layers. The
     # translator uses the shortest recent suffix internally, then restores a
     # Receiver-shaped residual with zeros over each full layer's older prefix.
     hybrid_sharer = _variable_cache(2, 2, [5, 7, 5], 4)
@@ -218,10 +266,10 @@ def main() -> None:
     try:
         trained.translate(hybrid_sharer, hybrid_receiver)
     except ValueError as exc:
-        assert "Gemma-3 hybrid cache" in str(exc)
+        assert "hybrid full/sliding-attention cache" in str(exc)
     else:
-        raise AssertionError("unequal non-Gemma cache widths were accepted")
-    print("Gemma-3 hybrid-cache suffix normalization checks OK")
+        raise AssertionError("undeclared unequal cache widths were accepted")
+    print("hybrid-cache suffix normalization checks OK")
 
     specs = SimpleNamespace(
         sharer_spec=SimpleNamespace(
@@ -254,7 +302,7 @@ def main() -> None:
         assert loaded.arch_config() == trained.arch_config()
         legacy_path = str(Path(directory) / "legacy.pt")
         legacy = torch.load(path, map_location="cpu", weights_only=True)
-        legacy["format"] = 8
+        legacy["format"] = 9
         torch.save(legacy, legacy_path)
         try:
             load_translator(
@@ -267,7 +315,7 @@ def main() -> None:
                 dropout=0.0,
             )
         except ValueError as exc:
-            assert "format=8, expected 9" in str(exc)
+            assert "format=9, expected 10" in str(exc)
         else:
             raise AssertionError("legacy asymmetric-pool checkpoint was accepted")
     print("stamped checkpoint round trip / legacy rejection OK")

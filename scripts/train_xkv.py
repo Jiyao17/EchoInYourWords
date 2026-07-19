@@ -37,7 +37,12 @@ def main() -> None:
             "explicit integer such as 128 or 256"
         ),
     )
-    parser.add_argument("--num-blocks", type=int, default=1)
+    parser.add_argument(
+        "--num-blocks",
+        type=int,
+        default=1,
+        help="Translator depth (default: 1 for every Receiver).",
+    )
     parser.add_argument("--num-heads", type=int, default=8)
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument(
@@ -45,8 +50,11 @@ def main() -> None:
         "--pool-slots",
         dest="pool_slots",
         type=int,
-        default=2,
-        help="Learned direct-attention summaries per layer/head and cache side.",
+        default=None,
+        help=(
+            "Learned summaries per layer/head/side. Default follows Receiver "
+            "size: 0.6B=1, 1B=2, 4B=3, 8B=4."
+        ),
     )
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--batch-size", type=int, default=16)
