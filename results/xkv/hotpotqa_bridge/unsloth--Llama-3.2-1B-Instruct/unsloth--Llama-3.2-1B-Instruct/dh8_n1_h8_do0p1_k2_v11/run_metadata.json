@@ -1,0 +1,20 @@
+{
+  "method": "xkv",
+  "created_at": "2026-07-19T17:49:13.091239+00:00",
+  "dataset": "data/tasks/hotpotqa_bridge_val.jsonl",
+  "sharer_model": "unsloth/Llama-3.2-1B-Instruct",
+  "receiver_model": "unsloth/Llama-3.2-1B-Instruct",
+  "num_examples": 5899,
+  "d_model": 256,
+  "d_model_spec": "eighth",
+  "num_blocks": 1,
+  "num_heads": 8,
+  "dropout": 0.1,
+  "pool_slots": 2,
+  "pool_k": 2,
+  "pooling_mode": "direct_attention_k",
+  "output_mode": "position_cross_attention",
+  "translator_checkpoint": "data/checkpoints/xkv/hotpotqa_bridge/unsloth--Llama-3.2-1B-Instruct/unsloth--Llama-3.2-1B-Instruct/dh8_n1_h8_do0p1_k2_v11/translator.pt",
+  "scoring": "free_form",
+  "dtype": "auto"
+}

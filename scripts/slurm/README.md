@@ -8,6 +8,10 @@ They do **not** change the repository's existing experiment code. Instead, they:
 2. call the existing `make` / `python scripts/...` entrypoints
 3. skip all Qwen models by default
 
+They also pass the repository root explicitly into `sbatch`, so the Slurm copy
+of the script running under `/var/spool/...` still writes logs and outputs back
+to the real checkout instead of treating `/var/spool` as the project root.
+
 ## Files
 
 - `submit_safe_run.sh`: preferred single entrypoint for Slurm submission
@@ -32,8 +36,30 @@ If you want to also include the non-Qwen 8B model, set `INCLUDE_8B=1` when using
 
 ## First-time setup
 
+0. Create a fresh `Echo` environment.
+
+This repository does not currently ship a `requirements.txt` or `environment.yml`.
+Use the helper scripts to create and check a clean conda env from the
+dependencies inferred from the codebase and [PROJECT_STRUCTURE.md](../../PROJECT_STRUCTURE.md).
+
+Important HPG note: `conda` may not exist in a fresh shell by default. On HPG,
+load it first with `ml conda`. After that, prefer:
+
+```bash
+eval "$(conda shell.bash hook)"
+conda activate Echo
+```
+
+instead of hardcoding a `.../etc/profile.d/conda.sh` path, because the active
+HPG conda installation may not live under a fixed home-directory prefix.
+
+```bash
+bash scripts/slurm/create_echo_env.sh
+bash scripts/slurm/check_echo_env.sh
+```
+
 1. Copy `hpg_env.sh.example` to `hpg_env.sh`
-2. Edit `hpg_env.sh` so it activates your real HPG environment
+2. Edit `hpg_env.sh` so it loads `conda` with `ml conda` and activates `Echo`
 3. Submit prepare first:
 
 ```bash

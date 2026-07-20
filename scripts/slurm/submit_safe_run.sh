@@ -87,6 +87,7 @@ submit() {
   local -a sbatch_args
   mapfile -t sbatch_args < <(sbatch_common_args)
   mkdir -p "${LOG_DIR}"
+  chmod 755 "${LOG_DIR}" || true
   echo "[submit] script=${script_path}"
   echo "[submit] env_script=${ENV_SCRIPT}"
   echo "[submit] safe_models=${SAFE_MODELS_STR}"
@@ -95,7 +96,7 @@ submit() {
   echo "[submit] cwd=${REPO_ROOT}"
   echo "[submit] sbatch_args=${sbatch_args[*]}"
   echo "[submit] export=$*"
-  sbatch "${sbatch_args[@]}" --export="$*" "${script_path}"
+  sbatch "${sbatch_args[@]}" --output="${LOG_DIR}/%x-%j.out" --export="$*" "${script_path}"
 }
 
 main() {
@@ -110,7 +111,7 @@ main() {
   case "${mode}" in
     prepare)
       submit "${SLURM_DIR}/run_safe_prepare.slurm" \
-        "ALL,ENV_SCRIPT=${ENV_SCRIPT},SAFE_MODELS=${SAFE_MODELS_STR}"
+        "ALL,REPO_ROOT=${REPO_ROOT},ENV_SCRIPT=${ENV_SCRIPT},SAFE_MODELS=${SAFE_MODELS_STR}"
       ;;
     method)
       if [[ -z "${METHOD}" || -z "${DATASET}" ]]; then
@@ -118,7 +119,7 @@ main() {
         exit 1
       fi
       submit "${SLURM_DIR}/run_safe_method.slurm" \
-        "ALL,ENV_SCRIPT=${ENV_SCRIPT},METHOD=${METHOD},DATASET=${DATASET},SAFE_MODELS=${SAFE_MODELS_STR}"
+        "ALL,REPO_ROOT=${REPO_ROOT},ENV_SCRIPT=${ENV_SCRIPT},METHOD=${METHOD},DATASET=${DATASET},SAFE_MODELS=${SAFE_MODELS_STR}"
       ;;
     exp)
       if [[ -z "${METHOD}" || -z "${DATASET}" ]]; then
@@ -126,11 +127,11 @@ main() {
         exit 1
       fi
       submit "${SLURM_DIR}/run_safe_exp.slurm" \
-        "ALL,ENV_SCRIPT=${ENV_SCRIPT},METHOD=${METHOD},DATASET=${DATASET},EXP_STAGE=${EXP_STAGE},CONCURRENCY_PER_GPU=${CONCURRENCY_PER_GPU},RESUME=${RESUME},SAFE_MODELS=${SAFE_MODELS_STR}"
+        "ALL,REPO_ROOT=${REPO_ROOT},ENV_SCRIPT=${ENV_SCRIPT},METHOD=${METHOD},DATASET=${DATASET},EXP_STAGE=${EXP_STAGE},CONCURRENCY_PER_GPU=${CONCURRENCY_PER_GPU},RESUME=${RESUME},SAFE_MODELS=${SAFE_MODELS_STR}"
       ;;
     sweep)
       submit "${SLURM_DIR}/run_safe_sweep.slurm" \
-        "ALL,ENV_SCRIPT=${ENV_SCRIPT},EXP_STAGE=${EXP_STAGE},CONCURRENCY_PER_GPU=${CONCURRENCY_PER_GPU},RESUME=${RESUME},METHOD=${METHOD},SAFE_MODELS=${SAFE_MODELS_STR}"
+        "ALL,REPO_ROOT=${REPO_ROOT},ENV_SCRIPT=${ENV_SCRIPT},EXP_STAGE=${EXP_STAGE},CONCURRENCY_PER_GPU=${CONCURRENCY_PER_GPU},RESUME=${RESUME},METHOD=${METHOD},SAFE_MODELS=${SAFE_MODELS_STR}"
       ;;
     *)
       echo "Unknown mode: ${mode}" >&2

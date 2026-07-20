@@ -1,0 +1,15 @@
+{
+  "method": "lcf_x",
+  "created_at": "2026-07-19T12:17:47.873270+00:00",
+  "dataset": "data/tasks/hotpotqa_bridge_val.jsonl",
+  "sharer_model": "unsloth/gemma-3-4b-it",
+  "receiver_model": "unsloth/gemma-3-4b-it",
+  "num_examples": 150,
+  "max_new_tokens": 64,
+  "num_spans": 5,
+  "span_scheme": "paragraphs",
+  "bottleneck_dim": 128,
+  "fuser_checkpoint": "data/checkpoints/lcfx/hotpotqa_bridge/unsloth--gemma-3-4b-it/unsloth--gemma-3-4b-it/sp5/fuser.pt",
+  "scoring": "free_form",
+  "dtype": "auto"
+}

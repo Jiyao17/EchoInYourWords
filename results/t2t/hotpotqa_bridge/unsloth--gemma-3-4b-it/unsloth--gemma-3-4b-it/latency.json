@@ -1,0 +1,22 @@
+{
+  "total": {
+    "sharer_ms": 12406965.701756068,
+    "fuser_ms": 0.0,
+    "receiver_ms": 1812711.7697242647,
+    "total_ms": 14219677.471480332,
+    "first_token_ms": 13222990.055156406,
+    "last_token_ms": 14112734.84913446
+  },
+  "average": {
+    "sharer_ms": 2103.232022674363,
+    "fuser_ms": 0.0,
+    "receiver_ms": 307.2913662865341,
+    "total_ms": 2410.523388960897,
+    "first_token_ms": 2241.5646813284297,
+    "last_token_ms": 2392.3944480648347
+  },
+  "counted_examples": {
+    "first_token_ms": 5899,
+    "last_token_ms": 5899
+  }
+}

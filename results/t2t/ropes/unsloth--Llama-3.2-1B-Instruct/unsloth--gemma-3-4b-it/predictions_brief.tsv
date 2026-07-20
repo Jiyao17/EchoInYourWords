@@ -1,0 +1,1689 @@
+id	em	f1	prediction	answer
+3679796833	1	1.000	Group B	Group B
+2664709651	0	0.000	Children who chewed on lead paint.	Group A
+802833727	0	0.000	More likely	less
+806962495	0	0.667	More likely	more
+459624881	1	1.000	Sample B	Sample B
+2050513369	1	1.000	Sample A	Sample A
+1353408677	0	0.667	Less likely	less
+1358061733	0	0.667	More likely	more
+1885492047	1	1.000	Controlled reaction	controlled reaction
+75191145	1	1.000	Uncontrolled reaction	uncontrolled reaction
+442460526	1	1.000	Seattle	Seattle
+1235118279	1	1.000	St. Louis	St. Louis
+1956275734	1	1.000	St. Louis	St. Louis
+1629973236	1	1.000	Seattle	Seattle
+3338694047	0	0.000	Seattle	St. Louis
+3344330147	1	1.000	Seattle	Seattle
+2832230966	0	0.500	More acid rain	more
+3111610934	0	0.000	St. Louis	less
+802123740	0	0.500	Less sulfur oxides	less
+410873820	1	1.000	More	more
+1279546726	1	1.000	Gretchen	Gretchen
+3021625610	1	1.000	Bob	Bob
+3042860838	0	0.000	More likely	less
+3422510876	0	0.667	More likely	more
+3086178719	0	0.667	More likely	more
+2727500196	0	0.000	More likely	less
+3327345149	1	1.000	Jon	Jon
+3336913409	1	1.000	Steve	Steve
+4187900808	0	0.667	More likely	more
+21580680	0	0.667	Less likely	less
+4035582237	0	0.000	Neither, if warmed up.	Greg
+4045150497	0	0.000	Both runners	Carl
+1897997209	0	0.500	Decrease in likelihood	decrease
+3420071629	0	0.400	Increase in injury likelihood	increase
+3044940697	0	0.667	Lower chance	lower
+3054771097	0	0.000	Greg has a lower chance.	higher
+3731180308	0	0.000	Red rock	Blue
+673860450	0	0.667	Red rock	Red
+2199343319	0	0.000	Higher radioactivity	lower
+2141475031	0	0.667	Higher radioactivity	higher
+1912355095	0	0.500	The open sign	closed sign
+580926078	1	1.000	Open sign	open sign
+2893035919	0	0.000	The message doesn’t specify.	sale sign
+4291314096	0	0.000	Less likely	more
+57426352	0	0.000	More likely	less
+2100707560	0	0.667	More likely	more
+3849808347	1	1.000	Seattle	Seattle
+3848104407	0	0.000	Seattle	St. Louis
+3338891505	0	0.000	Less pollution	more
+3689640177	0	0.667	Less pollution	less
+659124709	1	1.000	Seattle	Seattle
+1748726791	1	1.000	St. Louis	St. Louis
+2450934527	0	0.667	Red rock	red
+3695725397	0	0.000	Blue	purple
+171069722	0	0.000	More radioactive	less
+4270346522	0	0.667	More radioactive	more
+663885731	0	0.000	Friday	Thursday
+1046484977	1	1.000	Friday	Friday
+2408783037	0	0.000	Thursday	75 degrees
+1945705583	0	0.500	75 degrees	90 degrees
+2836275114	0	0.000	Friday	Thursday
+3549634619	0	0.000	Thursday	Friday
+2961841368	1	1.000	Higher	higher
+3025607896	0	0.000	Higher	lower
+3485991475	1	1.000	Wednesday	Wednesday
+3484549679	0	0.000	Wednesday	Thursday
+3924362512	0	0.667	Less humidity	less
+3939829008	0	0.667	More humidity	more
+4281333982	0	0.000	Thursday	Wednesday
+3553688655	0	0.000	Wednesday	Thursday
+3198291757	0	0.333	Thursday and Friday	Monday and Tuesday
+3810201660	0	0.667	Wednesday and Thursday	Thursday and Friday
+1385502488	0	0.000	More humidity	less
+601626147	0	0.000	More humidity	less
+1010243226	0	0.000	More humidity	less
+1809717135	0	0.000	More humidity	less
+1426003736	0	0.000	Less humidity	more
+594548259	0	0.000	Same humidity	more
+981538458	0	0.667	More humidity	more
+1828853647	0	0.000	Less humidity	more
+1090395805	0	0.000	Less	more
+1111432861	0	0.000	More	less
+1208884952	0	0.000	More humidity	less
+1229922008	0	0.000	Less humidity	more
+1772822810	0	0.000	Less	more
+1779114266	0	0.000	More	less
+412352856	0	0.000	More humidity	less
+398393608	0	0.000	More humidity	less
+452460927	0	0.000	Same humidity	less
+474218959	0	0.667	Less humidity	less
+443220312	0	0.000	Less humidity	more
+438894856	0	0.000	Less humidity	more
+471794047	0	0.000	Less humidity	more
+481362383	0	0.000	Less humidity	more
+573832935	0	0.000	Wednesday	Monday
+611581710	0	0.000	Thursday	Tuesday
+2386050189	0	0.000	Phoenix	St. Louis
+369703885	1	1.000	Phoenix	Phoenix
+1405693780	1	1.000	Phoenix	Phoenix
+1786000592	1	1.000	St. Louis	St. Louis
+3822922770	0	0.667	Less humidity	less
+3595119634	0	0.000	Less	more
+851310009	1	1.000	Wednesday	Wednesday
+273217160	0	0.000	Wednesday	Tuesday
+3003444033	0	0.000	Tuesday	Wednesday
+1687481522	0	0.000	Wednesday	Tuesday
+2239099429	0	0.667	Less humid	less
+2209149477	0	0.667	More humid	more
+302402461	0	0.000	Lower	higher
+603409309	0	0.000	Higher power costs	lower
+3417403516	1	1.000	Calico Forest	Calico Forest
+3424612480	0	0.500	Steven’s Forest	Steven's Forest
+1564177282	1	1.000	Calico Forest	Calico Forest
+3949032244	0	0.500	Steven’s Forest	Steven's Forest
+3148401333	0	0.000	Not Bilton Valley	Stevens Pasture
+4145857605	1	1.000	Bilton Valley	Bilton Valley
+1777974234	1	1.000	Bilton Valley	Bilton Valley
+1471725286	1	1.000	Stevens Pasture	Stevens Pasture
+3600468273	0	0.667	Lower salinity	lower
+3321612593	0	0.000	Likely similar	higher
+3748776461	0	0.667	Higher susceptibility	higher
+3986213357	0	0.667	Lower susceptibility	lower
+2294533012	0	0.500	Reduced water uptake	reduced
+2590428052	0	0.500	Increased water uptake	increased
+2849858743	1	1.000	July and August	July and August
+2050057087	0	0.000	June, July, August	December and January
+336287454	1	1.000	Peru	Peru
+1787516699	1	1.000	Peru	Peru
+277435816	1	1.000	Arizona	Arizona
+3174323837	1	1.000	Arizona	Arizona
+373839753	0	0.000	Southern Hemisphere destination	Peru
+3209385804	1	1.000	Peru	Peru
+3128907286	1	1.000	Arizona	Arizona
+1746228971	0	0.000	Peru	Arizona
+2540671204	1	1.000	Chile	Chile
+4015953692	0	0.000	Key West, Florida	Arizona
+3865282641	0	0.500	Colder than Chile	colder
+1588430868	0	0.500	Colder than Chile	colder
+3876948090	0	0.500	Colder than Chile	colder
+3344467660	0	0.400	Arizona will be warmer.	warmer
+3346695902	0	0.400	Arizona will be warmer.	warmer
+3600844723	0	0.400	Arizona will be warmer.	warmer
+3227879116	0	0.500	Colder than Arizona	colder
+3484256179	0	0.500	Colder than Arizona	colder
+2121676187	0	0.667	Wednesday and Thursday	Thursday and Friday
+2313565686	1	1.000	Monday and Tuesday	Monday and Tuesday
+2934519278	0	0.000	Better	worse
+3876075109	0	0.000	Better	worse
+2041918832	0	0.000	Better	worse
+1115960569	0	0.000	Better	worse
+1108882681	0	0.000	Worse advantage	better
+2013214064	0	0.000	Worse advantage	better
+3895408229	0	0.000	Worse advantage	better
+2975020526	0	0.000	Worse advantage	better
+2252031080	1	1.000	Sunday	Sunday
+1119110162	0	0.000	Sunday	Saturday
+3576317180	0	0.000	Sunday	first round
+430589266	0	0.000	Sunday	second round
+3678684702	0	0.667	Less advantaged	less
+3654698526	0	0.667	More advantaged	more
+978079256	0	0.000	More advantaged	less
+3075165261	0	0.667	More advantaged	more
+4211166319	0	0.000	Saturday	Sunday
+564743432	1	1.000	Saturday	Saturday
+994523562	1	1.000	Better	better
+1107179946	0	0.000	Better advantage	worse
+3005625773	0	0.000	Steve	Bill
+4037359159	1	1.000	Steve	Steve
+1867731649	1	1.000	Saturday	Saturday
+1868124869	1	1.000	Friday	Friday
+2690210547	0	0.667	Less likely	less
+2890095347	0	0.667	More likely	more
+350571026	1	1.000	Fox Lake	Fox Lake
+352537110	1	1.000	Bear Lake	Bear Lake
+2074826671	1	1.000	Bear Lake	Bear Lake
+656693089	0	0.500	Lake Michigan	Fox Lake
+2487045559	0	0.000	Likely fewer fish	less
+2517257655	0	0.000	Likely equal	more
+72987361	1	1.000	Friday	Friday
+1397600907	0	0.000	Friday	Monday
+3258428988	0	0.667	More likely	more
+3262099013	0	0.000	More likely	less
+533966469	1	1.000	Sleepy's Caves	Sleepy's Caves
+542224009	1	1.000	Giant's Peak	Giant's Peak
+2413543179	1	1.000	Sunday	Sunday
+1332396262	0	0.000	Tuesday	Saturday
+1573765046	0	0.000	More likely	less
+3731734237	0	0.667	More likely	more
+2745300600	0	0.000	Near the Grand Canyon	Smuggler's Caves
+2927425058	0	0.000	Smuggler's Caves	Marshall Field
+738000517	0	0.000	More	less
+776732048	0	0.000	More	less
+774045191	0	0.000	More	less
+750911228	0	0.000	More	less
+778501765	0	0.667	More chance	more
+770244348	0	0.667	More chance	more
+745340423	0	0.667	More chance	more
+769654160	1	1.000	More	more
+3822003745	0	0.667	More chance	more
+3740673569	0	0.667	Less chance	less
+369830336	1	1.000	Wilson Caves	Wilson Caves
+4104923026	1	1.000	Mt. Everest	Mt. Everest
+2799970338	0	0.500	Less interesting	more interesting
+2851613361	1	1.000	Less interesting	less interesting
+3862755768	0	0.000	Mt. Pike	Meramec Caverns
+4088330372	0	0.000	Meramec Caverns	Mt. Pike
+3925995964	1	1.000	Meramec Caverns	Meramec Caverns
+3486905008	0	0.000	Meramec Caverns	Mt. Pike
+3949067249	0	0.667	More limestone	more
+3527932913	0	0.000	More limestone	less
+3300391883	1	1.000	Bored	bored
+2968847104	0	0.000	Bored	happy
+3852862650	0	0.667	More satisfied	more
+3667526842	0	0.000	More satisfied	less
+1809570525	0	0.667	More likely	more
+1348721373	0	0.667	Less likely	less
+3304640755	0	0.000	Mount St. Helens	Meremac Caverns
+1219875418	0	0.000	Carlsbad, New Mexico	Mount St. Helens
+184586157	0	0.000	Calm wind day	Friday
+2999947384	0	0.000	Friday	Wednesday
+3855451605	0	0.500	Albert’s Peak	Albert's Peak
+3856106969	1	1.000	Tulsa Valley	Tulsa Valley
+3409808834	0	0.667	Less wind	less
+3299511746	0	0.000	Less wind	more
+4023556205	0	0.667	Less wind	less
+3956185197	0	0.667	More wind	more
+4129394413	0	0.000	Albert’s Peak	Tulsa Valley
+2771685398	0	0.500	Albert’s Peak	Albert's Peak
+1131578877	0	0.000	More wind	less
+1152615933	0	0.667	More wind	more
+2225767061	1	1.000	Tuesday	Tuesday
+2339078864	0	0.000	Tuesday	Monday
+1202686909	1	1.000	Less likely	less likely
+1223723965	0	0.500	Less likely	more likely
+1610321015	0	0.500	Less likely	more likely
+1631358071	1	1.000	Less likely	less likely
+2335934912	0	0.400	Worse than Mount Smith.	worse
+2677049981	0	0.500	Better for a picnic.	better
+4217150960	0	0.000	Open water or ice	Deep Valley
+571055310	0	0.000	Deep Valley	Mount Tall
+3081675457	0	0.667	Less wind	less
+1905566156	0	0.667	Less wind	less
+363307587	0	0.667	Less wind	less
+1555014456	0	0.667	Less wind	less
+3122176705	0	0.000	Less wind	more
+1574347576	0	0.667	More wind	more
+334602819	0	0.000	Less wind	more
+1898488268	0	0.000	Less wind	more
+896096483	0	0.400	Worse for kite flying.	worse
+908024035	0	0.000	Potentially worse.	better
+4284436541	0	0.000	Till's Valley	Hinton Beach
+3881194061	1	1.000	Till's Valley	Till's Valley
+3603316869	1	1.000	Monday and Tuesday	Monday and Tuesday
+394412259	0	0.333	Monday and Tuesday	Thursday and Friday
+3841279848	0	0.667	More generators	more
+782059487	0	0.667	More generators	more
+2655471338	0	0.667	More generators	more
+1436305011	0	0.667	More generators	more
+3881781096	0	0.667	Less generators	less
+801392607	0	0.667	Less generators	less
+2626766570	0	0.667	Less generators	less
+1429227123	0	0.000	More generators	less
+2820753696	1	1.000	Monday and Tuesday	Monday and Tuesday
+4050209150	0	0.333	Monday and Tuesday	Friday and Saturday
+3161804572	0	0.667	More generators	more
+232279955	0	0.667	More generators	more
+2939572353	0	0.667	More generators	more
+1559515146	0	0.667	More generators	more
+3154726684	0	0.667	Less generators	less
+1594511370	0	0.667	Less generators	less
+2952941697	0	0.667	Less generators	less
+203575187	0	0.667	Less generators	less
+2022868633	0	0.000	More likely	less
+2022147737	0	0.667	Less likely	less
+1729594789	0	0.000	More likely	less
+1730315685	0	0.667	Less likely	less
+1145602867	1	1.000	Hot day	hot day
+3433595786	1	1.000	Cold day	cold day
+1082622173	1	1.000	Fall	fall
+1205043665	0	0.000	Summer	spring
+1081901277	0	0.000	Winter	fall
+1204322769	1	1.000	Spring	spring
+3910624919	0	0.800	Turn off generators	turn off
+1327523048	0	0.400	Turn off generators.	turn on
+3934282897	0	0.400	Turn off generators.	turn on
+984444566	1	1.000	Hot day	hot day
+2842062573	1	1.000	Cold day	cold day
+2846128008	0	0.800	Around dinner time	dinner time
+3893326122	0	0.000	Around dinner time	late at night
+1478520732	0	0.500	High wind	low wind
+3354685434	0	0.400	Low wind conditions	high wind
+3331220374	1	1.000	Increase	increase
+3515113714	1	1.000	Higher	higher
+834756937	0	0.000	Lower	higher
+3586875634	1	1.000	Lower	lower
+2393529953	1	1.000	Higher	higher
+2368560737	0	0.000	Higher	lower
+599745247	0	0.333	Turn on more generators	turn off
+804479193	0	0.333	Turn off more generators	turn on
+2404475184	0	0.333	Turn off more generators.	turn on
+1143364672	0	0.333	Turn on more generators.	turn off
+87450244	0	0.333	Turn off more generators.	turn on
+584015901	0	0.000	Fresno will likely offer a worse chance.	better
+594763805	0	0.667	Worse chance	worse
+4227418477	0	0.000	Billings	Fresno
+4047850835	0	0.000	Fresno	Billings
+3715065461	0	0.000	Los Angeles	San Diego
+3637402281	0	0.000	More	less
+3512687273	0	0.667	More segregation	more
+2887542572	0	0.000	San Francisco Bay Area	Los Angeles
+3793380984	1	1.000	San Diego	San Diego
+3208604698	1	1.000	Los Angeles	Los Angeles
+53884993	1	1.000	Wednesday	Wednesday
+993343639	0	0.000	Tuesday	Thursday
+2978956013	0	0.667	More likely	more
+2935898861	0	0.000	More likely	less
+2250192350	0	0.500	Near a glacier	Fox Glacier
+74922030	0	0.500	Lake Tekapo	Cobra Lake
+1704607862	0	0.000	Fox Glacier ice	Cobra Lake
+633618464	0	0.500	Glacier ice	Fox Glacier
+3626320303	0	0.000	More dense	less
+3754836399	0	0.667	More dense	more
+621958938	0	0.000	Langtang Valley, Himalayas	glacier
+2135053166	0	0.000	Regular ice	frozen over lake
+3511965451	1	1.000	The glacier.	glacier
+2090817202	0	0.000	Glacier	frozen over lake
+3248838560	0	0.500	More blue ice	more
+1786598973	0	0.500	More white ice	more
+253384132	0	0.000	More blue ice	less
+1777292861	0	0.000	More white ice	less
+1927834673	1	1.000	Munson Glacier	Munson Glacier
+2569761630	0	0.000	Arctic region in winter	Tiller Lake
+272003260	0	0.000	Less chance	more
+22048956	0	0.667	Less chance	less
+1274442166	0	0.000	Less chance	more
+2223796533	0	0.667	Less chance	less
+4213604769	1	1.000	Bill	Bill
+4225008037	0	0.000	Bill	Steve
+4226777510	0	0.000	People who avoid smoking	Steve
+4215374242	0	0.500	Bill likely will.	Bill
+1876590847	0	0.000	Lower	higher
+1873838334	1	1.000	Higher	higher
+2008514814	1	1.000	Lower	lower
+2011201791	1	1.000	Lower	lower
+2755558243	1	1.000	Steve	Steve
+451771270	1	1.000	Bill	Bill
+1182285725	1	1.000	Locusts	locusts
+430326667	1	1.000	Mayflies	mayflies
+1433353372	0	0.667	More food	more
+2479635727	0	0.000	Locusts will eat more.	less
+1562329124	0	0.400	Locusts will live longer.	longer
+1505378340	0	0.667	Shorter lives	shorter
+1659449439	1	1.000	The rat	rat
+655110608	0	0.000	The rat	fish
+3895473285	0	0.000	Less likely	more
+3925554309	0	0.000	More likely	less
+2025208895	1	1.000	Group A	Group A
+1048591345	0	0.000	Animals with limited communication	Group B
+1193492024	0	0.667	Higher chance	higher
+1197096504	0	0.667	Lower chance	lower
+722023522	1	1.000	Containment Unit A	Containment Unit A
+1593717944	1	1.000	Containment Unit B	Containment Unit B
+2717858165	0	0.667	More pressure	more
+2721266037	0	0.667	Less pressure	less
+3885579536	0	0.800	Containment Unit B	Containment Unit A
+4183507762	0	0.667	Sephora brand	Sephora
+1885423447	1	1.000	Revlon	Revlon
+1091390005	0	0.500	Less environmentally friendly	less
+1076054581	0	0.500	More environmentally friendly	more
+4279125009	1	1.000	Revlon	Revlon
+2096387127	1	1.000	Red Box	Red Box
+2098746425	1	1.000	Blue Box	Blue Box
+1871271823	1	1.000	Higher	higher
+1923372943	1	1.000	Lower	lower
+2166249264	1	1.000	Red Box	Red Box
+2213697351	0	0.500	Red Box	Blue Box
+1902466473	1	1.000	Red Box	Red Box
+491738459	0	0.500	Red Box	Blue Box
+267016412	0	0.000	Cannot determine.	higher
+332290268	0	0.500	Lower kinetic energy	lower
+808367201	1	1.000	Miami	Miami
+2102375443	1	1.000	Green Bay	Green Bay
+2456598966	1	1.000	Green Bay	Green Bay
+571980047	1	1.000	Miami	Miami
+972563156	0	0.000	Clockwise	left
+947462854	1	1.000	Right	right
+356328641	1	1.000	Faster	faster
+985605428	1	1.000	Slower	slower
+415882268	1	1.000	Laslo Wetlands	Laslo Wetlands
+2621364840	1	1.000	Timmons Wetlands	Timmons Wetlands
+787732293	0	0.000	More wildlife	less
+636344133	0	0.000	Less wildlife	more
+3563771434	0	0.000	Cannot determine.	Timmons Wetlands
+2758071886	1	1.000	Laslo Wetlands	Laslo Wetlands
+2938628782	1	1.000	Wetlands area	wetlands area
+4258721248	1	1.000	Empty field	empty field
+816513061	0	0.500	Worse ecological impact	worse
+1224015542	0	0.000	Worse ecological impact	better
+1604845254	0	0.800	Wetlands area expansions	wetlands area
+1590166370	1	1.000	Empty field area	empty field area
+3559377891	1	1.000	Decreased costs	decreased costs
+384749705	0	0.500	Decreased costs	increased costs
+700498569	0	0.667	Alloparenting group	alloparenting
+723894931	0	0.000	Daycare	raise her child herself
+1720895039	0	0.000	Support group method	alloparenting
+1730201155	0	0.000	Raising alone	raise her child herself
+3141978002	0	0.000	Worse results	better
+4022848527	0	0.222	Use his own cows.	pay his friend for help
+467553982	1	1.000	Higher	higher
+270159550	1	1.000	Lower	lower
+3675215727	1	1.000	Spring	Spring
+2711310867	0	0.000	Winter	Fall
+4255005873	1	1.000	Spring	spring
+3256106083	0	0.500	Fall more likely	fall
+3248503886	0	0.500	Lower than spring	lower
+1749170710	0	0.000	Lower than in the fall	higher
+3325133380	0	0.000	Unknown	more
+4141123120	0	0.667	Less prone	less
+1517976593	0	0.286	Cycling with support	travel with some friends
+3752819643	0	0.500	Traveling alone.	go alone
+3912709815	1	1.000	Alkali soil	Alkali soil
+3018080121	1	1.000	Alkali soil	Alkali soil
+949699293	0	0.500	Alkali soil	basic soil
+3942452663	0	0.000	More	less
+3967225271	1	1.000	More	more
+1429475461	1	1.000	Stillman edition	Stillman edition
+3456504565	0	0.500	The 10,000 edition	Grossman edition
+809437101	0	0.667	More expensive	more
+494407430	0	0.000	More expensive	less
+459479311	0	0.667	Above 30%	30%
+2101481873	0	0.667	Above 30%	30%
+643960789	0	0.000	Below 30%	20%
+1968053396	0	0.000	Less successful	more
+4197841063	0	0.000	Jar storage	sugaring
+869527243	0	0.000	Sugaring	food in a jar
+1242099302	1	1.000	Sugaring	sugaring
+1775039774	1	1.000	Sugaring	sugaring
+1391521419	0	0.000	Sugaring	food in a jar
+3311336672	0	0.000	Decreased chance	increased
+2098920887	0	0.667	Decreased chance	decreased
+1224930610	0	0.000	Avoid heating.	food in a jar
+753923697	1	1.000	Sugaring	sugaring
+3563125547	0	0.000	High temperature	sugaring
+3999682891	0	0.667	More heroin	more
+4207564011	1	1.000	Increase	increase
+2988987709	1	1.000	Increase	increase
+3012636038	0	0.000	Denver	Miami
+3846579362	0	0.000	Miami	Denver
+855650869	1	1.000	Less	less
+3379114796	0	0.000	Less	more
+1006185151	1	1.000	Denver	Denver
+224345692	1	1.000	Miami	Miami
+3742574934	1	1.000	Denver	Denver
+3847534556	0	0.000	More efficient	less
+4074158044	0	0.667	More efficient	more
+955038082	0	0.333	Windows 2000 or later	Windows 10
+1423883267	1	1.000	Windows 2000	Windows 2000
+3645413116	0	0.500	Less fishing opportunities	less
+3659568892	1	1.000	More	more
+211523037	0	0.000	Red Sea coastal areas	Armor Beach
+784701452	1	1.000	Castle Beach	Castle Beach
+3816342005	1	1.000	Detroit	Detroit
+1959968015	1	1.000	Calgary	Calgary
+1902625512	1	1.000	Detroit	Detroit
+2974597786	1	1.000	Calgary	Calgary
+2753283639	1	1.000	More	more
+2652620343	0	0.400	Calgary will have less.	less
+1775025272	0	0.000	Less bad odor	more
+1712110712	1	1.000	Less	less
+2617884861	0	0.000	Cannot answer	less
+3956850503	1	1.000	More	more
+925313733	1	1.000	Team G	Team G
+926100166	0	0.500	Team B	Team G
+926886599	1	1.000	Team G	Team G
+927673032	0	0.500	Team D	Team G
+925182660	1	1.000	Team F	Team F
+925969093	1	1.000	Team F	Team F
+926755526	0	0.500	Team C	Team F
+927541959	0	0.000	Neither	Team F
+925051587	1	1.000	Team E	Team E
+927410886	1	1.000	Team E	Team E
+347871219	1	1.000	Team 26	Team 26
+348723188	0	0.500	Team 21	Team 26
+349575157	0	0.500	Team 22	Team 26
+350427126	0	0.500	Team 23	Team 26
+347740146	1	1.000	Team 25	Team 25
+348592115	1	1.000	Team 25	Team 25
+349444084	0	0.500	Team 22	Team 25
+350296053	1	1.000	Team 25	Team 25
+347609073	1	1.000	Team 24	Team 24
+350164980	0	0.500	Team 23	Team 24
+1286351913	1	1.000	Team G	Team G
+1287138346	0	0.500	Team B	Team G
+1287924779	0	0.500	Team C	Team G
+1288711212	1	1.000	Team G	Team G
+1286220840	1	1.000	Team F	Team F
+1287007273	0	0.500	Team B	Team F
+1287793706	1	1.000	Team F	Team F
+1288580139	0	0.000	Neither	Team F
+1288449066	1	1.000	Team E	Team E
+1286876200	1	1.000	Team E	Team E
+3047757326	1	1.000	Team U	Team U
+3048543759	0	0.500	Team P	Team U
+3049330192	1	1.000	Team U	Team U
+3050116625	0	0.500	Team R	Team U
+3047626253	0	0.500	Team O	Team T
+3048412686	0	0.500	Team P	Team T
+3049199119	0	0.500	Team Q	Team T
+3049985552	0	0.500	Team R	Team T
+3049854479	0	0.500	Team R	Team S
+3049068046	1	1.000	Team S	Team S
+3360893510	1	1.000	Team G	Team G
+3361679943	1	1.000	Team G	Team G
+3362466376	0	0.500	Team C	Team G
+3363252809	1	1.000	Team G	Team G
+3360762437	1	1.000	Team F	Team F
+3361548870	0	0.500	Team B	Team F
+3362335303	0	0.500	Team C	Team F
+3363121736	0	0.500	Team D	Team F
+3360631364	1	1.000	Team E	Team E
+3361417797	0	0.500	Team B	Team E
+2313365494	1	1.000	Team 7	Team 7
+2314151927	1	1.000	Team 7	Team 7
+2314938360	0	0.500	Team 3	Team 7
+2313234421	0	0.500	Team 1	Team 6
+2314020854	0	0.500	Team 2	Team 6
+2314807287	0	0.500	Team 3	Team 6
+2313103348	1	1.000	Team 5	Team 5
+2313889781	0	0.500	Team 2	Team 5
+2314676214	0	0.500	Team 3	Team 5
+2312972275	1	1.000	Team 4	Team 4
+2313758708	0	0.500	Neither team	Team 4
+3564381940	1	1.000	Team G	Team G
+3565168373	0	0.500	Team B	Team G
+3565954806	1	1.000	Team G	Team G
+3566741239	0	0.500	Team D	Team G
+3564250867	1	1.000	Team F	Team F
+3565037300	1	1.000	Team F	Team F
+3565823733	0	0.500	Team C	Team F
+3566610166	1	1.000	Team F	Team F
+3564119794	1	1.000	Team E	Team E
+3564906227	1	1.000	Team E	Team E
+2261784553	1	1.000	Team N	Team N
+2262570986	0	0.500	Team I	Team N
+2263357419	0	0.500	Team J	Team N
+2264143852	1	1.000	Team N	Team N
+2261653480	1	1.000	Team M	Team M
+2262439913	0	0.500	Team N	Team M
+2263226346	0	0.500	Team J	Team M
+2264012779	0	0.500	Team K	Team M
+2261522407	1	1.000	Team L	Team L
+2262308840	1	1.000	Team L	Team L
+2263095273	0	0.500	Team J	Team L
+500373540	1	1.000	Team 16	Team 16
+501225509	0	0.500	Team 11	Team 16
+502077478	1	1.000	Team 16	Team 16
+502929447	1	1.000	Team 16	Team 16
+500242467	1	1.000	Team 15	Team 15
+501094436	0	0.500	Team 11	Team 15
+501946405	1	1.000	Team 15	Team 15
+502798374	1	1.000	Team 15	Team 15
+500111394	1	1.000	Team 14	Team 14
+500963363	0	0.500	Team 11	Team 14
+501815332	0	0.500	Team 12	Team 14
+502667301	0	0.500	Team 13	Team 14
+331754906	1	1.000	Team G	Team G
+332541339	1	1.000	Team G	Team G
+333327772	1	1.000	Team G	Team G
+334114205	0	0.500	Team D	Team G
+333983132	1	1.000	Team F	Team F
+333196699	0	0.500	Team C	Team F
+332410266	0	0.500	Team B	Team F
+331623833	1	1.000	Team F	Team F
+331492760	1	1.000	Team E	Team E
+333852059	1	1.000	Team E	Team E
+2229671791	0	0.500	Team V	Team B
+2230458224	1	1.000	Team B	Team B
+2231244657	1	1.000	Team B	Team B
+2232031090	0	0.500	Team Y	Team B
+2229540718	1	1.000	Team A	Team A
+2230327151	1	1.000	Team A	Team A
+2231113584	0	0.667	Team X	Team A
+2231900017	1	1.000	Team A	Team A
+2232817543	1	1.000	Team Z	Team Z
+2233603976	1	1.000	Team Z	Team Z
+2409109569	1	1.000	Team 13	Team 13
+2409961538	1	1.000	Team 13	Team 13
+2410813507	0	0.500	Team 9	Team 13
+2794068075	0	0.500	Team 10	Team 13
+2793937002	0	0.500	Team 10	Team 12
+2410682434	0	0.500	Team 9	Team 12
+2409830465	1	1.000	Team 12	Team 12
+2408978496	1	1.000	Team 12	Team 12
+2408847423	1	1.000	Team 11	Team 11
+2409699392	1	1.000	Team 11	Team 11
+2301695937	1	1.000	Team 66	Team 66
+2302547906	0	0.500	Team 61	Team 66
+2303399875	1	1.000	Team 66	Team 66
+2304251844	0	0.500	Team 63	Team 66
+2304120771	1	1.000	Team 65	Team 65
+2303268802	1	1.000	Team 65	Team 65
+2302416833	1	1.000	Team 65	Team 65
+2301564864	0	0.500	Team 60	Team 65
+2301433791	1	1.000	Team 64	Team 64
+2303989698	1	1.000	Team 64	Team 64
+2111969194	1	1.000	Team 54	Team 54
+2112821163	1	1.000	Team 54	Team 54
+2113673132	0	0.500	Team 52	Team 54
+2114525101	1	1.000	Team 54	Team 54
+2114656174	0	0.500	Team 53	Team 55
+2113804205	1	1.000	Team 55	Team 55
+2112952236	0	0.500	Team 51	Team 55
+2112100267	0	0.500	Team 54	Team 55
+2112231340	1	1.000	Team 56	Team 56
+2113083309	1	1.000	Team 56	Team 56
+2139625386	1	1.000	Team 46	Team 46
+2140477355	1	1.000	Team 46	Team 46
+2141329324	1	1.000	Team 46	Team 46
+2142181293	0	0.500	Team 43	Team 46
+2139494313	1	1.000	Team 45	Team 45
+2140346282	0	0.500	Team 41	Team 45
+2141198251	0	0.500	Team 42	Team 45
+2142050220	1	1.000	Team 45	Team 45
+2141919147	0	0.500	Team 43	Team 44
+2140215209	1	1.000	Team 44	Team 44
+2374703054	0	0.500	Team 73	Team 74
+2373851085	0	0.500	Team 72	Team 74
+2372999116	1	1.000	Team 74	Team 74
+2372147147	1	1.000	Team 74	Team 74
+2372278220	1	1.000	Team 75	Team 75
+2373130189	1	1.000	Team 75	Team 75
+2373982158	1	1.000	Team 75	Team 75
+2374834127	1	1.000	Team 75	Team 75
+2374965200	1	1.000	Team 76	Team 76
+2372409293	1	1.000	Team 76	Team 76
+1905858451	1	1.000	Team 34	Team 34
+1906710420	1	1.000	Team 34	Team 34
+1907562389	0	0.500	Team 32	Team 34
+1908414358	0	0.500	Team 33	Team 34
+1905989524	1	1.000	Team 35	Team 35
+1906841493	0	0.500	Team 31	Team 35
+1907693462	0	0.500	Team 32	Team 35
+1908545431	0	0.500	Team 33	Team 35
+1906120597	0	0.500	Team 30	Team 36
+1906972566	0	0.500	Team 31	Team 36
+1540499011	0	0.667	Team A	Team D
+1541285444	0	0.500	Team B	Team D
+1542071877	0	0.500	Team C	Team D
+1540630084	1	1.000	Team E	Team E
+1541416517	0	0.500	Team B	Team E
+1542202950	0	0.500	Team F	Team E
+1540761157	1	1.000	Team F	Team F
+1541547590	1	1.000	Team F	Team F
+1542334023	1	1.000	Team F	Team F
+1540892230	1	1.000	Team G	Team G
+2042305025	0	0.500	8 AM	5 AM
+2043156994	1	1.000	6 AM	6 AM
+2044008963	1	1.000	7 AM	7 AM
+2045712901	1	1.000	9 AM	9 AM
+2466257453	1	1.000	10 AM	10 AM
+2476349995	1	1.000	5 AM	5 AM
+2477267500	1	1.000	6 AM	6 AM
+2478185005	0	0.500	11 AM	7 AM
+2480020015	0	0.500	11 AM	9 AM
+2903186007	1	1.000	10 AM	10 AM
+1196628954	0	0.500	4 PM	1 PM
+1197480923	1	1.000	2 PM	2 PM
+1198332892	0	0.500	4 PM	3 PM
+1200036830	0	0.500	4 PM	5 PM
+1200888799	0	0.500	4 PM	6 PM
+1197611997	0	0.500	7 PM	1 PM
+1198463966	1	1.000	2 PM	2 PM
+1199315935	0	0.500	7 PM	3 PM
+1201019873	0	0.500	7 PM	5 PM
+1201871842	0	0.500	7 PM	6 PM
+861281105	1	1.000	2 PM	2 PM
+862133074	0	0.500	5 PM	3 PM
+862985043	1	1.000	4 PM	4 PM
+864688981	1	1.000	6 PM	6 PM
+865540950	1	1.000	7 PM	7 PM
+862264148	1	1.000	2 PM	2 PM
+863116117	1	1.000	3 PM	3 PM
+863968086	0	0.500	8 PM	4 PM
+865672024	0	0.500	8 PM	6 PM
+866523993	1	1.000	7 PM	7 PM
+1314790485	0	0.500	6 PM	3 PM
+1315642454	0	0.500	6 PM	4 PM
+1316494423	0	0.500	6 PM	5 PM
+1318198361	0	0.500	6 PM	7 PM
+1319050330	0	0.500	6 PM	8 PM
+1315773528	0	0.500	9 PM	3 PM
+1316625497	0	0.500	9 PM	4 PM
+1317477466	0	0.500	9 PM	5 PM
+1319181404	0	0.500	9 PM	7 PM
+1320033373	0	0.500	9 PM	8 PM
+254744490	0	0.500	8 PM	5 PM
+255596459	0	0.500	8 PM	6 PM
+256448428	0	0.500	8 PM	7 PM
+258152366	0	0.500	8 PM	9 PM
+637474774	1	1.000	10 PM	10 PM
+648550356	0	0.500	11 PM	5 PM
+649467861	0	0.500	11 PM	6 PM
+650385366	0	0.500	11 PM	7 PM
+652220376	0	0.500	11 PM	9 PM
+1034164224	1	1.000	10 PM	10 PM
+131404672	1	1.000	3 AM	3 AM
+132256641	0	0.500	6 AM	4 AM
+133108610	0	0.500	6 AM	5 AM
+134812548	1	1.000	7 AM	7 AM
+135664517	1	1.000	8 AM	8 AM
+132387715	1	1.000	3 AM	3 AM
+133239684	1	1.000	4 AM	4 AM
+134091653	0	0.500	9 AM	5 AM
+135795591	1	1.000	7 AM	7 AM
+136647560	1	1.000	8 AM	8 AM
+137174012	1	1.000	3 PM	3 PM
+138025981	0	0.500	6 PM	4 PM
+138877950	1	1.000	5 PM	5 PM
+140581888	1	1.000	7 PM	7 PM
+141433857	1	1.000	8 PM	8 PM
+138157055	0	0.500	9 PM	3 PM
+139009024	1	1.000	4 PM	4 PM
+139860993	0	0.500	9 PM	5 PM
+141564931	1	1.000	7 PM	7 PM
+142416900	1	1.000	8 PM	8 PM
+2953254588	1	1.000	4 AM	4 AM
+2954106557	0	0.500	7 AM	5 AM
+2954958526	0	0.500	7 AM	6 AM
+2956662464	1	1.000	8 AM	8 AM
+2957514433	0	0.500	7 AM	9 AM
+3332511462	1	1.000	4 AM	4 AM
+3333428967	1	1.000	5 AM	5 AM
+3334346472	0	0.500	10 AM	6 AM
+3336181482	1	1.000	8 AM	8 AM
+3337098987	1	1.000	9 AM	9 AM
+1082857566	0	0.500	7 PM	4 PM
+1083709535	0	0.571	5 PM or 7 PM	5 PM
+1084561504	1	1.000	6 PM	6 PM
+1086265442	1	1.000	8 PM	8 PM
+1087117411	1	1.000	9 PM	9 PM
+1488525448	1	1.000	4 PM	4 PM
+1489442953	1	1.000	5 PM	5 PM
+1490360458	1	1.000	6 PM	6 PM
+1492195468	1	1.000	8 PM	8 PM
+1493112973	1	1.000	9 PM	9 PM
+2174227916	0	0.500	7 PM	3 PM
+2175079885	1	1.000	4 PM	4 PM
+2175931854	0	0.500	6 PM	5 PM
+2177635792	1	1.000	7 PM	7 PM
+2178487761	1	1.000	8 PM	8 PM
+2175210959	0	0.500	9 PM	3 PM
+2176062928	1	1.000	4 PM	4 PM
+2176914897	0	0.500	9 PM	5 PM
+2178618835	1	1.000	7 PM	7 PM
+2179470804	0	0.500	9 PM	8 PM
+1424823979	0	0.500	5 PM	2 PM
+1425675948	1	1.000	3 PM	3 PM
+1426527917	1	1.000	4 PM	4 PM
+1428231855	1	1.000	6 PM	6 PM
+1429083824	1	1.000	7 PM	7 PM
+1425807022	1	1.000	2 PM	2 PM
+1426658991	1	1.000	3 PM	3 PM
+1427510960	1	1.000	4 PM	4 PM
+1429214898	1	1.000	6 PM	6 PM
+1430066867	0	0.500	8 PM	7 PM
+2946176865	1	1.000	6 AM	6 AM
+2947028834	1	1.000	7 AM	7 AM
+2947880803	0	0.500	9 AM	8 AM
+3325106060	0	0.500	9 AM	10 AM
+3325958029	0	0.500	9 AM	11 AM
+3339065242	1	1.000	6 AM	6 AM
+3339982747	1	1.000	7 AM	7 AM
+3340900252	1	1.000	8 AM	8 AM
+3720812485	1	1.000	10 AM	10 AM
+3721729990	1	1.000	11 AM	11 AM
+1032253077	1	1.000	Afternoon	afternoon
+2231758051	1	1.000	Night	night
+1625222581	1	1.000	Night	night
+729018091	1	1.000	Morning	morning
+1905978681	1	1.000	Morning	morning
+1310715403	1	1.000	Afternoon	afternoon
+1404235725	1	1.000	Afternoon	afternoon
+2521951771	1	1.000	Night	night
+1956310765	1	1.000	Night	night
+1662250819	1	1.000	Afternoon	afternoon
+4209961867	1	1.000	Morning	morning
+1319430617	0	0.000	Night	morning
+610921131	0	0.000	Night	afternoon
+3855739873	1	1.000	Afternoon	afternoon
+942664239	1	1.000	Night	night
+245426945	0	0.000	Afternoon	night
+1184361143	1	1.000	Morning	morning
+2643388677	0	0.000	Night	morning
+1907091927	0	0.000	Night	afternoon
+816245517	1	1.000	Afternoon	afternoon
+292165734	0	0.500	10 AM	7 AM
+293083239	1	1.000	8 AM	8 AM
+294000744	1	1.000	9 AM	9 AM
+688330897	1	1.000	11 AM	11 AM
+701044897	1	1.000	12 PM	12 PM
+4182710341	1	1.000	7 AM	7 AM
+4183562310	1	1.000	8 AM	8 AM
+4184414279	1	1.000	9 AM	9 AM
+282073200	1	1.000	11 AM	11 AM
+293738624	0	0.500	1 PM	12 PM
+2619546432	1	1.000	8 AM	8 AM
+2620463937	1	1.000	9 AM	9 AM
+3061586793	1	1.000	10 AM	10 AM
+3075218298	1	1.000	12 PM	12 PM
+2624920392	1	1.000	1 PM	1 PM
+2168331039	0	0.571	8 AM or 2 PM	8 AM
+2169183008	1	1.000	9 AM	9 AM
+2607684424	1	1.000	10 AM	10 AM
+2620201817	1	1.000	12 PM	12 PM
+2173180711	0	0.500	2 PM	1 PM
+4010548008	1	1.000	9 AM	9 AM
+154999632	0	0.000	12 PM	10 AM
+155917137	1	1.000	11 AM	11 AM
+4015004463	0	0.500	12 PM	1 PM
+4015921968	0	0.500	12 PM	2 PM
+2918390405	0	0.000	3 PM	9 AM
+3346668205	0	0.000	3 PM	10 AM
+3347520174	1	1.000	11 AM	11 AM
+2922388108	0	0.500	3 PM	1 PM
+2923240077	0	0.500	3 PM	2 PM
+3601918867	1	1.000	Afternoon	afternoon
+709290465	1	1.000	Night	night
+1829555	1	1.000	Night	night
+3248221161	1	1.000	Morning	morning
+333048375	0	0.000	Night	morning
+3930843913	1	1.000	Afternoon	afternoon
+287566215	1	1.000	Afternoon	afternoon
+1826285525	1	1.000	Night	night
+1415702571	0	0.000	Night	morning
+4193511901	1	1.000	Morning	morning
+1125979128	1	1.000	2 PM	2 PM
+1126831097	1	1.000	3 PM	3 PM
+1127683066	1	1.000	4 PM	4 PM
+1129387004	1	1.000	6 PM	6 PM
+1130238973	1	1.000	7 PM	7 PM
+1126962171	1	1.000	2 PM	2 PM
+1127814140	1	1.000	3 PM	3 PM
+1128666109	1	1.000	4 PM	4 PM
+1130370047	0	0.500	8 PM	6 PM
+1131222016	0	0.500	8 PM	7 PM
+1828918777	0	0.500	8 PM	5 PM
+1829770746	0	0.500	8 PM	6 PM
+1830622715	0	0.500	8 PM	7 PM
+1832326653	1	1.000	9 PM	9 PM
+2183271973	1	1.000	10 PM	10 PM
+2194347555	1	1.000	5 PM	5 PM
+2195265060	1	1.000	6 PM	6 PM
+2196182565	1	1.000	7 PM	7 PM
+2198017575	1	1.000	9 PM	9 PM
+2551584335	1	1.000	10 PM	10 PM
+675877959	0	0.500	4 PM	1 PM
+676729928	1	1.000	2 PM	2 PM
+677581897	1	1.000	3 PM	3 PM
+679285835	1	1.000	5 PM	5 PM
+680137804	1	1.000	6 PM	6 PM
+676861002	0	0.500	7 PM	1 PM
+677712971	0	0.500	7 PM	2 PM
+678564940	1	1.000	3 PM	3 PM
+680268878	1	1.000	5 PM	5 PM
+681120847	1	1.000	6 PM	6 PM
+2263225719	0	0.500	7 PM	4 PM
+2264077688	0	0.500	7 PM	5 PM
+2264929657	0	0.500	7 PM	6 PM
+2266633595	1	1.000	8 PM	8 PM
+2267485564	1	1.000	9 PM	9 PM
+2620200353	0	0.500	10 PM	4 PM
+2621117858	0	0.500	10 PM	5 PM
+2622035363	0	0.500	10 PM	6 PM
+2623870373	0	0.500	10 PM	8 PM
+2624787878	1	1.000	9 PM	9 PM
+998709696	0	0.500	7 PM	4 PM
+999561665	0	0.500	7 PM	5 PM
+1000413634	0	0.500	7 PM	6 PM
+1002117572	1	1.000	8 PM	8 PM
+1002969541	1	1.000	9 PM	9 PM
+1427577322	0	0.500	10 PM	4 PM
+1428494827	0	0.500	10 PM	5 PM
+1429412332	0	0.500	10 PM	6 PM
+1431247342	0	0.500	10 PM	8 PM
+1432164847	0	0.500	10 PM	9 PM
+2726374553	0	0.500	3 PM	1 PM
+2727226522	0	0.500	3 PM	2 PM
+2728930460	0	0.500	3 PM	4 PM
+2729782429	1	1.000	5 PM	5 PM
+2732338336	1	1.000	8 PM	8 PM
+2499363391	0	0.500	6 PM	1 PM
+2500215360	1	1.000	2 PM	2 PM
+2501919298	1	1.000	4 PM	4 PM
+2502771267	0	0.500	6 PM	5 PM
+2505327174	1	1.000	8 PM	8 PM
+1447707	0	0.500	4 PM	1 PM
+2299676	0	0.500	4 PM	2 PM
+3151645	0	0.500	4 PM	3 PM
+4855583	1	1.000	5 PM	5 PM
+5707552	1	1.000	6 PM	6 PM
+2430750	0	0.500	7 PM	1 PM
+3282719	1	1.000	2 PM	2 PM
+4134688	1	1.000	3 PM	3 PM
+5838626	0	0.500	7 PM	5 PM
+6690595	0	0.500	7 PM	6 PM
+1087079501	1	1.000	Thursday	Thursday
+1307215163	1	1.000	Thursday	Thursday
+1112376418	1	1.000	Thursday	Thursday
+1097827414	1	1.000	Thursday	Thursday
+3352462541	1	1.000	Thursday	Thursday
+3537077650	1	1.000	Thursday	Thursday
+3303376029	0	0.000	Friday	Wednesday
+3539109259	1	1.000	Wednesday	Wednesday
+3330049202	1	1.000	Wednesday	Wednesday
+3314713766	1	1.000	Wednesday	Wednesday
+2134607231	1	1.000	Wednesday	Wednesday
+1891533962	1	1.000	Wednesday	Wednesday
+2124776824	1	1.000	Wednesday	Wednesday
+1918207135	1	1.000	Wednesday	Wednesday
+1902871699	1	1.000	Wednesday	Wednesday
+4164060426	1	1.000	Wednesday	Wednesday
+1957856442	0	0.000	Thursday	Tuesday
+1746895813	1	1.000	Tuesday	Tuesday
+1948943539	0	0.000	Saturday	Tuesday
+1770816474	1	1.000	Tuesday	Tuesday
+4192175069	0	0.000	Tuesday	Monday
+56460450	0	0.000	Wednesday	Monday
+2140701778	0	0.000	Thursday	Monday
+1943831389	0	0.000	Friday	Monday
+2132247627	0	0.000	Saturday	Monday
+1966375794	1	1.000	Monday	Monday
+4197286889	0	0.000	Tie	Sunday
+61572270	1	1.000	Sunday	Sunday
+2145813598	0	0.000	Thursday	Sunday
+1948943209	1	1.000	Sunday	Sunday
+345932612	1	1.000	Sunday	Sunday
+2581693371	1	1.000	Sunday	Sunday
+2733933696	1	1.000	Sunday	Sunday
+527205424	0	0.000	Thursday	Sunday
+336364347	1	1.000	Sunday	Sunday
+518751273	1	1.000	Sunday	Sunday
+482182173	1	1.000	Saturday	Saturday
+2733540500	1	1.000	Saturday	Saturday
+2911602009	1	1.000	Saturday	Saturday
+694387977	1	1.000	Saturday	Saturday
+196052226	1	1.000	Tuesday	Tuesday
+2276558002	1	1.000	Tuesday	Tuesday
+2066645949	1	1.000	Tuesday	Tuesday
+2267645099	1	1.000	Tuesday	Tuesday
+2090566610	1	1.000	Tuesday	Tuesday
+2076804038	1	1.000	Tuesday	Tuesday
+2250736779	0	0.000	Wednesday	Monday
+42501179	0	0.000	Thursday	Monday
+4142629702	0	0.000	Friday	Monday
+34047028	0	0.000	Saturday	Monday
+1989968887	1	1.000	Saturday	Saturday
+1975419883	1	1.000	Saturday	Saturday
+4223501410	0	0.000	Tuesday	Saturday
+101025063	0	0.000	Wednesday	Saturday
+2181072087	0	0.000	Thursday	Saturday
+1964671970	1	1.000	Saturday	Saturday
+1849918217	1	1.000	Friday	Friday
+1836942077	1	1.000	Friday	Friday
+4069426036	1	1.000	Friday	Friday
+4215112761	1	1.000	Friday	Friday
+1829789920	0	0.500	Day 2	Day 1
+1829920993	1	1.000	Day 1	Day 1
+1830052066	0	0.500	Day 4	Day 1
+1830183139	0	0.500	Day 5	Day 1
+1830641890	0	0.500	Day 3	Day 2
+1830772963	1	1.000	Day 2	Day 2
+1830904036	1	1.000	Day 2	Day 2
+1831035109	1	1.000	Day 2	Day 2
+1832345830	1	1.000	Day 4	Day 4
+1832607976	1	1.000	Day 4	Day 4
+4089283682	1	1.000	Saturday	Saturday
+4074734678	1	1.000	Saturday	Saturday
+2035844301	0	0.000	Tuesday	Saturday
+2221376914	1	1.000	Saturday	Saturday
+427330	1	1.000	Saturday	Saturday
+4063986765	0	0.000	Friday	Saturday
+3935208308	1	1.000	Friday	Friday
+3922232168	0	0.000	Monday	Friday
+1867744223	0	0.000	Tuesday	Friday
+4110976084	0	0.000	Thursday	Friday
+1635952451	0	0.000	Monday	Sunday
+181643194	0	0.000	Tuesday	Sunday
+1541711999	0	0.000	Wednesday	Sunday
+3025053743	1	1.000	Sunday	Sunday
+1626384186	0	0.000	Friday	Sunday
+3016599592	1	1.000	Sunday	Sunday
+1627170606	0	0.000	Monday	Friday
+172861349	0	0.000	Tuesday	Friday
+1532930154	0	0.000	Wednesday	Friday
+3016271898	0	0.000	Thursday	Friday
+1942389647	1	1.000	Sunday	Sunday
+4183065606	1	1.000	Sunday	Sunday
+51152075	1	1.000	Sunday	Sunday
+2133492859	0	0.000	Thursday	Sunday
+1932821382	1	1.000	Sunday	Sunday
+2125038708	0	0.000	Saturday	Sunday
+2088469608	1	1.000	Saturday	Saturday
+50758879	0	0.000	Tuesday	Saturday
+238650788	0	0.000	Wednesday	Saturday
+2310505812	1	1.000	Saturday	Saturday
+1694270437	1	1.000	Thursday	Thursday
+1863156947	1	1.000	Thursday	Thursday
+1703052282	0	0.000	Sunday	Thursday
+1697940462	1	1.000	Thursday	Thursday
+3926951013	1	1.000	Thursday	Thursday
+4092560682	1	1.000	Thursday	Thursday
+3897459765	1	1.000	Wednesday	Wednesday
+4076832035	0	0.000	Saturday	Wednesday
+3906241610	1	1.000	Wednesday	Wednesday
+3901129790	0	0.000	Monday	Wednesday
+422675463	1	1.000	Friday	Friday
+264536878	1	1.000	Friday	Friday
+251560738	0	0.000	Wednesday	Friday
+2486469529	0	0.000	Tuesday	Friday
+2637005918	1	1.000	Friday	Friday
+431129614	0	0.000	Thursday	Friday
+599885052	1	1.000	Thursday	Thursday
+413303843	0	0.000	Sunday	Thursday
+398754839	0	0.000	Monday	Thursday
+2649261198	1	1.000	Thursday	Thursday
+2260436067	0	0.000	Wednesday	Friday
+2090238858	0	0.000	Sunday	Friday
+2077262718	0	0.000	Wednesday	Friday
+24216565	1	1.000	Friday	Friday
+186811578	0	0.000	Wednesday	Friday
+2268890218	0	0.000	Wednesday	Friday
+2449704280	1	1.000	Thursday	Thursday
+2251064447	1	1.000	Thursday	Thursday
+2236515443	1	1.000	Thursday	Thursday
+199066858	1	1.000	Thursday	Thursday
+3894905156	1	1.000	Jane	Jane
+4252404239	0	0.000	Theresa	Jane
+4256008732	0	0.000	Beverly	Jane
+1910081947	0	0.000	Denise	Jane
+3901262155	0	0.000	Tammy	Jane
+3886975286	0	0.000	Irene	Jane
+1917553081	1	1.000	Irene	Irene
+2288355972	0	0.000	Theresa	Irene
+2292812433	0	0.000	Beverly	Irene
+4232415760	0	0.000	Denise	Irene
+1717799258	0	0.000	Susan	Betty
+95259267	0	0.000	Margaret	Betty
+2081262137	1	1.000	Betty	Betty
+3675818201	0	0.000	It cannot be determined.	Betty
+1699776841	1	1.000	Betty	Betty
+1693878593	1	1.000	Betty	Betty
+1715112259	0	0.000	Susan	Karen
+92572268	0	0.000	Margaret	Karen
+2078575138	1	1.000	Karen	Karen
+3673131202	0	0.000	Lisa	Karen
+1697089842	0	0.000	Nancy	Karen
+805014763	1	1.000	Cynthia	Cynthia
+800230629	1	1.000	Cynthia	Cynthia
+3692727861	1	1.000	Cynthia	Cynthia
+1263701419	0	0.000	Deborah	Cynthia
+1281330616	0	0.000	Jessica	Cynthia
+1309117910	1	1.000	Cynthia	Cynthia
+806391035	0	0.000	Laura	Shirley
+801606901	0	0.000	Sarah	Shirley
+3694104133	1	1.000	Shirley	Shirley
+1265077691	0	0.000	Deborah	Shirley
+2836564638	0	0.000	Gloria	Joan
+2850589363	1	1.000	Joan	Joan
+2448394686	1	1.000	Joan	Joan
+2839186087	0	0.000	Cheryl	Joan
+883591937	1	1.000	Joan	Joan
+1305906139	0	0.000	Katherine	Joan
+1701088433	0	0.000	Gloria	Katherine
+1721994438	0	0.000	Evelyn	Katherine
+1239518161	0	0.000	Jean	Katherine
+1706659002	0	0.000	Cheryl	Katherine
+4074540308	0	0.000	Mildred	Katherine
+1760332394	1	1.000	Danny	Danny
+4118907623	1	1.000	Danny	Danny
+3711011317	0	0.000	Earl	Danny
+1771342455	0	0.000	Jimmy	Danny
+2168163145	0	0.000	Antonio	Danny
+2141883208	1	1.000	Antonio	Antonio
+222858181	0	0.000	Johnny	Antonio
+4077226707	0	0.000	Earl	Antonio
+2154597205	1	1.000	Antonio	Antonio
+1764854390	1	1.000	Jimmy	Jimmy
+4220684903	0	0.000	It cannot be determined.	Norma
+1890880001	0	0.000	Cannot answer.	Norma
+3873409454	0	0.000	Cannot answer.	Norma
+3863972259	0	0.000	It cannot be determined.	Norma
+3857156504	0	0.000	Tina	Norma
+2298120945	1	1.000	Norma	Norma
+307333967	0	0.000	Bonnie	Phyllis
+2258143977	1	1.000	Phyllis	Phyllis
+4229794454	0	0.000	Ruby	Phyllis
+4218915467	0	0.000	Cannot answer.	Phyllis
+850760118	1	1.000	Bonnie	Bonnie
+2686226758	1	1.000	Bonnie	Bonnie
+2066911324	1	1.000	Bonnie	Bonnie
+2060882007	0	0.000	Anne	Bonnie
+3940848342	0	0.000	Jacqueline	Bonnie
+211652800	1	1.000	Bonnie	Bonnie
+2698285382	1	1.000	Wanda	Wanda
+247107798	0	0.000	Louise	Wanda
+3937112044	1	1.000	Wanda	Wanda
+3931410407	0	0.000	It cannot be determined.	Wanda
+1542809013	0	0.000	Parker	Lemuel
+1540842934	1	1.000	Lemuel	Lemuel
+1540908471	0	0.000	Cannot be determined.	Parker
+4164511080	0	0.000	Lemuel	Barton
+4165231977	0	0.000	Parker	Barton
+4167787879	1	1.000	Parker	Parker
+3515967084	1	1.000	Lemuel	Lemuel
+3518588523	0	0.000	Insufficient information.	Lemuel
+3517343341	0	0.000	Barton	Parker
+4250035576	0	0.000	Parker	Barton
+1932952729	1	1.000	Sung	Sung
+1949729966	0	0.000	Robt	Sung
+114787817	1	1.000	Sung	Sung
+4182148359	0	0.000	Jonah	Sung
+3986064424	0	0.000	Mac	Sung
+3983180837	0	0.000	Dee	Sung
+1941406867	0	0.000	Robt	Hank
+106464718	0	0.000	Jerrold	Hank
+4173825260	0	0.000	Jonah	Hank
+3977741325	1	1.000	Hank	Hank
+2849802951	0	0.000	Osvaldo	Les
+126519673	0	0.000	Dino	Les
+2841676480	1	1.000	Les	Les
+2827127470	0	0.000	Coleman	Les
+3247278997	0	0.000	Margarito	Les
+2441644499	0	0.000	Alden	Les
+851151661	0	0.000	Dino	Osvaldo
+3652029556	0	0.000	Refugio	Osvaldo
+3632761954	0	0.000	Coleman	Osvaldo
+4113468745	1	1.000	Osvaldo	Osvaldo
+1552781898	1	1.000	Napoleon	Napoleon
+1557893709	1	1.000	Napoleon	Napoleon
+420320145	0	0.000	Milford	Napoleon
+436769694	0	0.000	Rosendo	Napoleon
+4058157779	0	0.000	Fritz	Napoleon
+2222560036	1	1.000	Napoleon	Napoleon
+939364718	1	1.000	Jerold	Jerold
+944083313	0	0.000	Sang	Jerold
+4058026677	0	0.000	It cannot be determined.	Jerold
+4072772290	0	0.000	Rosendo	Jerold
+1049529148	1	1.000	Faustino	Faustino
+3440085963	1	1.000	Faustino	Faustino
+3843984509	1	1.000	Faustino	Faustino
+1072925524	1	1.000	Faustino	Faustino
+1518636090	1	1.000	Faustino	Faustino
+3856764040	1	1.000	Faustino	Faustino
+2996603572	0	0.000	Alec	Claudio
+1083804483	1	1.000	Claudio	Claudio
+1476037621	0	0.000	Edgardo	Claudio
+3018427084	0	0.000	Gino	Claudio
+747604029	0	0.000	Milo	Orval
+1043892467	0	0.000	Anibal	Orval
+745769018	1	1.000	Orval	Orval
+3733752375	0	0.000	Zachariah	Orval
+1050315003	1	1.000	Orval	Orval
+3059124400	1	1.000	Orval	Orval
+744720445	0	0.000	Milo	Mauro
+1041008883	1	1.000	Mauro	Mauro
+742885434	1	1.000	Mauro	Mauro
+3730868791	0	0.000	Zachariah	Mauro
+908814972	0	0.000	Jerrod	Lucio
+932276886	0	0.000	Weston	Lucio
+2729536256	1	1.000	Jerrod	Jerrod
+3458296366	1	1.000	Jerrod	Jerrod
+3481758280	0	0.000	Lucio	Weston
+979921586	0	0.000	Jerrod	Weston
+2974378802	0	0.000	Insufficient information.	Lucio
+2997840716	1	1.000	Lucio	Lucio
+513043382	0	0.000	Weston	Jerrod
+1067018945	1	1.000	Weston	Weston
+3306197067	1	1.000	Rico	Rico
+848269253	0	0.000	Brant	Rico
+3282210860	0	0.000	Josiah	Rico
+859541455	1	1.000	Rico	Rico
+1434685607	1	1.000	Rico	Rico
+219910641	1	1.000	Rico	Rico
+1412927669	0	0.000	Brant	Wilton
+3860369692	0	0.000	Josiah	Wilton
+1425510591	0	0.000	Lyman	Wilton
+2028966295	0	0.000	Alfonzo	Wilton
+543001221	0	0.000	Sal	Rosario
+537823872	0	0.000	Bud	Rosario
+1366395949	0	0.000	Hilario	Rosario
+945982302	0	0.000	Keven	Rosario
+3784412358	0	0.000	Augustus	Rosario
+2909702922	0	0.000	Kory	Rosario
+4153379009	1	1.000	Sal	Sal
+575507054	0	0.000	Hilario	Sal
+209357215	1	1.000	Sal	Sal
+2953415431	0	0.000	Augustus	Sal
+3818686306	1	1.000	Judy	Judy
+3823273828	1	1.000	Judy	Judy
+3561784981	1	1.000	Judy	Judy
+3799222086	1	1.000	Judy	Judy
+1539540733	0	0.000	Kelly	Judy
+3812329302	1	1.000	Judy	Judy
+4087777312	1	1.000	Nicole	Nicole
+4092626978	0	0.000	Judith	Nicole
+3804006227	0	0.000	Rose	Nicole
+4064643076	0	0.000	Janice	Nicole
+239046057	1	1.000	Ronald	Ronald
+245009840	1	1.000	Ronald	Ronald
+2651688484	1	1.000	Ronald	Ronald
+273321420	0	0.000	Steven	Ronald
+242585006	0	0.000	Edward	Ronald
+2145029443	0	0.000	Brian	Ronald
+2147585333	1	1.000	Brian	Brian
+2153090364	0	0.000	George	Brian
+258182576	1	1.000	Brian	Brian
+2179566936	1	1.000	Brian	Brian
+1980862088	0	0.000	Mary	Maria
+3035140124	1	1.000	Maria	Maria
+83791575	0	0.000	Linda	Maria
+601591706	0	0.000	Barbara	Maria
+1164808327	1	1.000	Maria	Maria
+3031601184	1	1.000	Maria	Maria
+653168591	0	0.000	It cannot be determined.	Jennifer
+1793167715	1	1.000	Jennifer	Jennifer
+3071512606	1	1.000	Jennifer	Jennifer
+3632173281	1	1.000	Jennifer	Jennifer
+1470532011	0	0.000	Joyce	Doris
+1447332242	1	1.000	Doris	Doris
+1445300623	1	1.000	Doris	Doris
+1469680042	0	0.000	Julie	Doris
+1825999474	0	0.000	Heather	Doris
+3800402453	0	0.000	Teresa	Doris
+3791161870	1	1.000	Teresa	Teresa
+3766323701	0	0.000	Diane	Teresa
+3764095474	0	0.000	Alice	Teresa
+3790244365	0	0.000	Julie	Teresa
+3675360081	0	0.000	Carolyn	Ann
+4104490018	1	1.000	Ann	Ann
+3264711271	1	1.000	Ann	Ann
+3265497707	1	1.000	Ann	Ann
+4084698124	0	0.000	Catherine	Ann
+3661990715	1	1.000	Ann	Ann
+222530806	1	1.000	Frances	Frances
+706448839	1	1.000	Frances	Frances
+4044524556	1	1.000	Frances	Frances
+4046359568	1	1.000	Frances	Frances
+2534049681	0	0.000	Todd	Sean
+536905728	0	0.000	Jesse	Sean
+521504748	1	1.000	Sean	Sean
+2519893890	0	0.000	Alan	Sean
+542345223	1	1.000	Sean	Sean
+3146942755	0	0.000	Clarence	Sean
+3117713703	0	0.000	Todd	Clarence
+1149667734	0	0.000	Jesse	Clarence
+1129023874	0	0.000	Craig	Clarence
+3099625752	0	0.000	Alan	Clarence
+289900255	0	0.000	Ryan	Jonathan
+2566817604	1	1.000	Jonathan	Jonathan
+2289600099	0	0.000	Joe	Jonathan
+276793043	0	0.000	Juan	Jonathan
+255035070	1	1.000	Jonathan	Jonathan
+541624223	1	1.000	Jonathan	Jonathan
+53249542	1	1.000	Albert	Albert
+2316928619	1	1.000	Albert	Albert
+2069202314	1	1.000	Albert	Albert
+71534079	1	1.000	Albert	Albert
+1626887498	0	0.000	Justin	Ralph
+184177891	0	0.000	Terry	Ralph
+1586058524	0	0.000	Gerald	Ralph
+156980418	0	0.000	Keith	Ralph
+1607423284	1	1.000	Ralph	Ralph
+1608996147	0	0.000	Willie	Ralph
+3071497657	1	1.000	Willie	Willie
+1622037842	1	1.000	Willie	Willie
+3027654027	1	1.000	Willie	Willie
+1592677681	1	1.000	Willie	Willie
+40328263	1	1.000	Anthony	Anthony
+37575749	1	1.000	Anthony	Anthony
+3189136676	0	0.000	Matthew	Anthony
+2772851677	1	1.000	Anthony	Anthony
+3210501432	1	1.000	Anthony	Anthony
+2773638107	0	0.000	Jose	Anthony
+1238129505	0	0.000	Jason	Kevin
+66477120	1	1.000	Kevin	Kevin
+3987036921	1	1.000	Kevin	Kevin
+85220436	1	1.000	Kevin	Kevin
+2584303340	0	0.000	Jeremy	Russell
+1098602097	1	1.000	Russell	Russell
+1112888958	1	1.000	Russell	Russell
+2581092069	1	1.000	Russell	Russell
+2568574681	0	0.000	Eugene	Russell
+2575193828	1	1.000	Russell	Russell
+1109022310	0	0.000	Jeremy	Carlos
+3925366251	0	0.000	Aaron	Carlos
+3938801144	1	1.000	Carlos	Carlos
+1106269791	0	0.000	Howard	Carlos
+2327010558	1	1.000	Gloria	Gloria
+3454426121	0	0.000	Jean	Gloria
+2314034418	1	1.000	Gloria	Gloria
+3883359564	0	0.000	Mildred	Gloria
+2772524582	1	1.000	Gloria	Gloria
+3463601171	0	0.000	Joan	Gloria
+3457440798	1	1.000	Evelyn	Evelyn
+2317049095	0	0.000	Cheryl	Evelyn
+3886374241	1	1.000	Evelyn	Evelyn
+2775539259	1	1.000	Evelyn	Evelyn
+2926204410	0	0.000	Marcelo	Maria
+1437946965	0	0.000	Mel	Maria
+1446007902	0	0.000	Tod	Maria
+7623960	1	1.000	Maria	Maria
+1468159373	0	0.000	Lenard	Maria
+84694630	1	1.000	Lenard	Lenard
+2862830785	1	1.000	Lenard	Lenard
+2871481546	1	1.000	Lenard	Lenard
+1445287300	0	0.000	Chang	Lenard
+1554929363	1	1.000	Lenard	Lenard
+505960591	1	1.000	Norberto	Norberto
+3472316726	0	0.000	Andrea	Norberto
+2019514628	1	1.000	Norberto	Norberto
+1983273184	1	1.000	Norberto	Norberto
+726292922	0	0.000	Normand	Norberto
+689789342	1	1.000	Norberto	Norberto
+1814714255	1	1.000	Trey	Trey
+375019357	0	0.000	Ivory	Trey
+348215097	0	0.000	Cannot be determined	Trey
+3328071699	0	0.000	Normand	Trey
+3322107888	1	1.000	Waldo	Waldo
+3156629151	0	0.000	Chi	Waldo
+3308214243	0	0.000	Damion	Waldo
+3329775610	0	0.000	Kenton	Waldo
+524900439	0	0.000	Rolland	Waldo
+3348584461	0	0.000	Rupert	Waldo
+325342989	1	1.000	Antone	Antone
+498161745	1	1.000	Antone	Antone
+521230440	0	0.000	Kenton	Antone
+2016434373	0	0.000	Rolland	Antone
+13456965	1	1.000	Jamaal	Jamaal
+1380472164	0	0.000	Olin	Jamaal
+1391809903	0	0.000	Yong	Jamaal
+1475368618	1	1.000	Jamaal	Jamaal
+2822526403	1	1.000	Jamaal	Jamaal
+8934979	0	0.000	Dewitt	Jamaal
+22435440	1	1.000	Dewitt	Dewitt
+1389450639	0	0.000	Olin	Dewitt
+1400788378	0	0.000	Yong	Dewitt
+2831504878	1	1.000	Dewitt	Dewitt
+830887210	1	1.000	Quinn	Quinn
+916936315	0	0.000	Jefferey	Quinn
+870143316	0	0.000	Tyree	Quinn
+2305709489	0	0.000	Walker	Quinn
+3708835040	0	0.000	Burl	Quinn
+2268222575	0	0.000	Kip	Quinn
+2265273411	1	1.000	Kip	Kip
+2307151252	0	0.000	Jefferey	Kip
+2299024493	1	1.000	Kip	Kip
+3722400970	1	1.000	Kip	Kip
+3415758578	1	1.000	Lenny	Lenny
+3442038545	1	1.000	Lenny	Lenny
+1929467512	0	0.000	Amado	Lenny
+3418576632	0	0.000	Dillon	Lenny
+1946375817	0	0.000	Thanh	Lenny
+594958168	1	1.000	Lenny	Lenny
+614553447	1	1.000	Connie	Connie
+3385939662	0	0.000	Amado	Connie
+589453134	0	0.000	Dillon	Connie
+3403962079	1	1.000	Connie	Connie
+32396543	0	0.000	Dario	Richie
+1479365993	0	0.000	Delmer	Richie
+2930857419	0	0.000	Mohamed	Richie
+25777397	0	0.000	Brice	Richie
+2938328533	0	0.000	Horacio	Richie
+2903856294	1	1.000	Richie	Richie
+1479103553	1	1.000	Lupe	Lupe
+2912179371	0	0.000	Delmer	Lupe
+56841485	0	0.000	Mohamed	Lupe
+1473795127	0	0.000	Brice	Lupe
+63001879	0	0.000	Horacio	Lupe
+4242548125	0	0.000	Josef	Eloy
+614082071	1	1.000	Eloy	Eloy
+608970235	0	0.000	Eloy	Gail
+4268107171	0	0.000	Josef	Gail
+640034333	0	0.000	Eloy	Josef
+634922497	0	0.000	Gail	Josef
+2619811009	0	0.000	Gail	Eloy
+3270911291	0	0.000	Josef	Eloy
+3265799455	0	0.000	Josef	Gail
+3866764661	1	1.000	Josef	Josef
+1291344278	0	0.000	Shirley	Prince
+3834271695	1	1.000	Prince	Prince
+2794543589	0	0.000	Trinidad	Prince
+1042634821	0	0.000	Donn	Prince
+4042807566	0	0.000	Jarred	Prince
+4057356574	0	0.000	Tanner	Prince
+1025857614	0	0.000	Tad	Shirley
+21125732	0	0.000	Trinidad	Shirley
+2535938244	0	0.000	Donn	Shirley
+1255299469	1	1.000	Shirley	Shirley
+3338478288	0	0.000	Jules	Burt
+2139759081	0	0.000	Gil	Burt
+2718245455	0	0.000	Gil	Jules
+3302826661	0	0.000	Jules	Gil
+2709463615	0	0.000	Burt	Gil
+3890357030	0	0.000	Burt	Jules
+3623232197	0	0.000	Gil	Burt
+556802988	0	0.000	Jules	Burt
+4247003947	1	1.000	Jules	Jules
+4272562993	1	1.000	Gil	Gil
+3525007413	1	1.000	Patrick	Patrick
+3524352058	0	0.000	Gregory	Patrick
+2026002373	0	0.000	Joshua	Patrick
+548427623	1	1.000	Patrick	Patrick
+2012764092	0	0.000	Dennis	Patrick
+2030000074	0	0.000	Walter	Patrick
+2044549078	1	1.000	Walter	Walter
+2043566043	0	0.000	Gregory	Walter
+552884070	1	1.000	Walter	Walter
+3375453960	1	1.000	Walter	Walter
+987713350	1	1.000	Tim	Tim
+2595835498	1	1.000	Tim	Tim
+3695136793	1	1.000	Tim	Tim
+3943911142	0	0.000	John	Tim
+2607369854	1	1.000	Tim	Tim
+988041033	0	0.000	Frank	Tim
+955731759	0	0.000	Bob	Sarah
+2111525086	0	0.000	Jessica	Sarah
+2320060331	0	0.000	John	Sarah
+969887555	1	1.000	Sarah	Sarah
+952720980	1	1.000	Charles	Charles
+955997783	1	1.000	Charles	Charles
+465133686	1	1.000	Charles	Charles
+922050104	1	1.000	Charles	Charles
+2057526653	1	1.000	Charles	Charles
+2050776438	1	1.000	Charles	Charles
+3673447934	0	0.000	Thomas	Joseph
+3146997789	0	0.000	Christopher	Joseph
+3641531871	0	0.000	Daniel	Joseph
+495279396	1	1.000	Joseph	Joseph
+1061181483	0	0.000	Lawrence	Adam
+1057642539	0	0.000	Nicholas	Adam
+2263438900	0	0.000	Roy	Adam
+1044076574	0	0.000	Benjamin	Adam
+889476843	0	0.000	Bruce	Adam
+3853539262	1	1.000	Adam	Adam
+1262180732	0	0.000	Lawrence	Brandon
+1258641788	0	0.000	Nicholas	Brandon
+2365544325	0	0.000	Roy	Brandon
+1242519919	0	0.000	Benjamin	Brandon
+2186827485	0	0.000	Larry	Andrew
+834033566	0	0.000	Jeffrey	Andrew
+2167232197	0	0.000	Frank	Andrew
+2191152864	0	0.000	Scott	Andrew
+694507094	1	1.000	Andrew	Andrew
+852318122	0	0.000	Stephen	Andrew
+3663615827	1	1.000	Stephen	Stephen
+2323470356	0	0.000	Jeffrey	Stephen
+3642447675	1	1.000	Stephen	Stephen
+3668137814	1	1.000	Stephen	Stephen
+4023605832	0	0.000	Jeffrey	Larry
+976247151	0	0.000	Frank	Larry
+998398346	1	1.000	Larry	Larry
+3754383616	0	0.000	Eric	Larry
+4041103956	1	1.000	Larry	Larry
+2497468894	0	0.000	Andrew	Larry
+3994901040	0	0.000	Frank	Jeffrey
+4020591179	0	0.000	Scott	Jeffrey
+2464504257	0	0.000	Eric	Jeffrey
+2795789077	1	1.000	Jeffrey	Jeffrey
+46748898	1	1.000	Betty	Betty
+77354507	1	1.000	Betty	Betty
+2943636929	0	0.000	Dorothy	Betty
+2885047393	1	1.000	Betty	Betty
+28726481	0	0.000	Nancy	Betty
+22828233	0	0.000	Karen	Betty
+44061899	1	1.000	Karen	Karen
+74667508	0	0.000	Margaret	Karen
+2940949930	0	0.000	Dorothy	Karen
+2882360394	1	1.000	Karen	Karen
+2088982923	0	0.000	John	James
+828267114	0	0.000	Robert	James
+2343787183	1	1.000	James	James
+2355321547	0	0.000	William	James
+3595983332	0	0.000	David	James
+2347915961	0	0.000	Richard	James
+3601947145	0	0.000	Robert	John
+817125966	1	1.000	John	John
+828660330	1	1.000	John	John
+2082036099	0	0.000	David	John
+3223082726	1	1.000	Michelle	Michelle
+414406483	0	0.000	Sandra	Michelle
+3228522218	1	1.000	Michelle	Michelle
+3227014891	1	1.000	Michelle	Michelle
+1785681565	0	0.000	Ruth	Michelle
+431839077	1	1.000	Michelle	Michelle
+314988078	1	1.000	Sharon	Sharon
+1786009243	1	1.000	Sharon	Sharon
+319903282	0	0.000	Donna	Sharon
+318264883	1	1.000	Sharon	Sharon
+2862943449	0	0.000	Thursday	Tuesday
+3316583838	1	1.000	Wednesday	Wednesday
+2610039897	1	1.000	Friday	Friday
+3099200839	1	1.000	Saturday	Saturday
+2620787810	1	1.000	Monday	Monday
+2431650809	0	0.000	Sunday	Tuesday
+2859470014	1	1.000	Wednesday	Wednesday
+2195524473	1	1.000	Friday	Friday
+2653490279	1	1.000	Saturday	Saturday
+2205092738	1	1.000	Monday	Monday
+318705291	1	1.000	Saturday	Saturday
+4127460786	1	1.000	Sunday	Sunday
+72945181	0	0.000	Monday	Tuesday
+563678946	1	1.000	Wednesday	Wednesday
+4118678941	1	1.000	Friday	Friday
+879890295	0	0.000	Thursday	Saturday
+363728542	0	0.000	Tuesday	Sunday
+618663689	1	1.000	Tuesday	Tuesday
+1140330446	0	0.000	Tuesday	Wednesday
+354946697	1	1.000	Friday	Friday
+4186513046	1	1.000	Sunday	Sunday
+4172750474	1	1.000	Monday	Monday
+1490689990	1	1.000	Wednesday	Wednesday
+975642486	0	0.000	Monday	Thursday
+3683061167	1	1.000	Saturday	Saturday
+2977631318	0	0.000	Friday	Sunday
+2964655178	0	0.000	Friday	Monday
+3662482822	0	0.000	Monday	Wednesday
+3450473782	1	1.000	Thursday	Thursday
+3442019631	1	1.000	Saturday	Saturday
+1041117604	1	1.000	Monday	Monday
+1908355611	1	1.000	Tuesday	Tuesday
+3612160736	1	1.000	Wednesday	Wednesday
+2769695369	0	0.000	Thursday	Saturday
+1055666608	0	0.000	Thursday	Sunday
+3660460207	0	0.000	Friday	Monday
+218116390	1	1.000	Tuesday	Tuesday
+1896100331	1	1.000	Wednesday	Wednesday
+1065038228	0	0.000	Friday	Saturday
+3673436347	1	1.000	Sunday	Sunday
+2019488130	0	0.000	Wednesday	Sunday
+2277896498	0	0.000	Thursday	Sunday
+2723344445	1	1.000	Sunday	Sunday
+2269442347	1	1.000	Sunday	Sunday
+2014376310	0	0.000	Wednesday	Monday
+2272784678	0	0.000	Thursday	Monday
+2718232625	0	0.000	Friday	Monday
+2264330527	0	0.000	Saturday	Monday
+2754474055	0	0.000	Sunday	Friday
+2741497915	0	0.000	Tuesday	Friday
+2678713563	1	1.000	Monday	Monday
+3268209638	1	1.000	Monday	Monday
+2670259412	0	0.000	Wednesday	Monday
+3290754043	1	1.000	Monday	Monday
+2374102354	0	0.000	Thursday	Tuesday
+2947542109	1	1.000	Tuesday	Tuesday
+2365189451	1	1.000	Tuesday	Tuesday
+2971462770	1	1.000	Tuesday	Tuesday
+3291474928	1	1.000	Friday	Friday
+2990730343	1	1.000	Friday	Friday
+327289625	0	0.000	Tuesday	Monday
+526322574	1	1.000	Thursday	Thursday
+522455943	0	0.000	Wednesday	Saturday
+960695381	1	1.000	Wednesday	Wednesday
+1180437706	1	1.000	Wednesday	Wednesday
+1176571075	1	1.000	Wednesday	Wednesday
+363989795	1	1.000	Tuesday	Tuesday
+972885087	0	0.000	Wednesday	Tuesday
+360319770	1	1.000	Tuesday	Tuesday
+369101615	1	1.000	Tuesday	Tuesday
+2549674632	0	0.000	Tuesday	Saturday
+2980180399	0	0.000	Tuesday	Sunday
+2966417827	1	1.000	Monday	Monday
+2763190792	0	0.000	Friday	Saturday
+3207917871	0	0.000	Friday	Sunday
+3194941731	1	1.000	Monday	Monday
+2757947938	1	1.000	Thursday	Thursday
+2357523207	1	1.000	Thursday	Thursday
+2772496942	1	1.000	Thursday	Thursday
+2538271358	1	1.000	Wednesday	Wednesday
+349368610	1	1.000	Sunday	Sunday
+614068434	1	1.000	Sunday	Sunday
+1072099293	1	1.000	Sunday	Sunday
+605614283	1	1.000	Sunday	Sunday
+344256790	0	0.000	Wednesday	Monday
+608956614	0	0.000	Thursday	Monday
+1090252763	1	1.000	Friday	Friday
+855240786	1	1.000	Friday	Friday
+602271957	0	0.000	Sunday	Saturday
+587722953	0	0.000	Monday	Saturday
+700262688	1	1.000	The Grand Odalisque	The Grand Odalisque
+3694669965	1	1.000	The Grand Odalisque	The Grand Odalisque
+2755603479	0	0.000	The Birth Of Venus	The Grand Odalisque
+715403116	0	0.000	Napoleon Crossing The Alps	The Grand Odalisque
+894577027	0	0.000	Musicians	The Grand Odalisque
+797977461	1	1.000	The Grand Odalisque	The Grand Odalisque
+147991778	0	0.000	Liberty Leading The People	The Swing
+4251330668	0	0.000	The Birth Of Venus	The Swing
+1652108225	0	0.000	Napoleon Crossing The Alps	The Swing
+2822841816	1	1.000	The Swing	The Swing
+2699369063	0	0.000	The Sleeping Gypsy	The Sleepers
+95361061	0	0.000	The Gleaners	The Sleepers
+3314489178	0	0.000	Primavera	The Sleepers
+2511083150	0	0.000	Olympia	The Sleepers
+913119434	0	0.000	View of Toledo	The Sleepers
+3032160883	0	0.000	Bacchus And Ariadne	The Sleepers
+1634016419	0	0.000	The Sleeping Gypsy	Bacchus And Ariadne
+3058834017	1	1.000	Bacchus And Ariadne	Bacchus And Ariadne
+1890851222	0	0.000	Primavera	Bacchus And Ariadne
+993859786	0	0.000	Olympia	Bacchus And Ariadne
+299829209	0	0.000	The Ninth Wave	The Gross Clinic
+490014808	1	1.000	The Gross Clinic	The Gross Clinic
+210503564	1	1.000	The Ninth Wave	The Ninth Wave
+273942498	0	0.000	The Ninth Wave	The Last Supper
+597887150	1	1.000	The Last Supper	The Last Supper
+453052463	0	0.000	The Gross Clinic	The Ninth Wave
+2358316152	0	0.000	The Ninth Wave	The Gross Clinic
+2626030839	1	1.000	The Gross Clinic	The Gross Clinic
+2191461419	0	0.000	The Last Supper	The Ninth Wave
+2562264228	1	1.000	The Last Supper	The Last Supper
+3367184856	0	0.000	Las Meninas	Impression Sunrise
+1115958443	0	0.000	The Creation Of Adam	Impression Sunrise
+3968872499	0	0.000	Luncheon Of The Boating Party	Impression Sunrise
+546647233	0	0.000	The Grand Odalisque	Impression Sunrise
+1973692694	1	1.000	Impression Sunrise	Impression Sunrise
+450441347	0	0.000	The Liberty Leading The People	Impression Sunrise
+228010372	0	0.000	The Creation Of Adam	Las Meninas
+2666212620	0	0.000	Luncheon Of The Boating Party	Las Meninas
+3942590874	0	0.000	The Grand Odalisque	Las Meninas
+1506420207	0	0.000	The Swing	Las Meninas
+4070057978	0	0.000	The Starry Night	Mona Lisa
+72295862	0	0.000	The Scream	Mona Lisa
+3323930476	0	0.000	The Night Watch	Mona Lisa
+3084723445	1	1.000	Mona Lisa	Mona Lisa
+4061670002	0	0.000	The Arnolfini Portrait	Mona Lisa
+174402562	0	0.000	The Girl With A Pearl Earring	Mona Lisa
+394537058	1	1.000	The Starry Night	The Starry Night
+3847105048	0	0.500	The Night Watch	The Starry Night
+3318425505	1	1.000	The Starry Night	The Starry Night
+645934366	1	1.000	The Starry Night	The Starry Night
+3053852846	1	1.000	Picasso	Picasso
+3356235928	1	1.000	O'Keeffe	O'Keeffe
+1804867445	1	1.000	Owen	Owen
+695086118	1	1.000	Picasso	Picasso
+3501796194	1	1.000	Frost	Frost
+575482794	0	0.000	Brady	O'Keefe
+4155522936	1	1.000	Picasso	Picasso
+2018131636	1	1.000	Frost	Frost
+825311074	0	0.000	Hank	O'Keeffe
+2582141855	1	1.000	Romo	Romo
+209877134	1	1.000	Amy	Amy
+218658962	0	0.000	Amy	Bob
+1828092763	1	1.000	Amy	Amy
+4078598925	1	1.000	Bob	Bob
+2524674144	1	1.000	Amy	Amy
+522090514	0	0.000	Amy	Bob
+261716158	1	1.000	Amy	Amy
+487815166	1	1.000	Bob	Bob
+3423698300	1	1.000	Amy	Amy
+1346207022	0	0.000	Amy	Bob
+1915377927	1	1.000	River	river
+2154322506	0	0.000	River	mountain
+2162055763	0	0.000	River	mountain
+1950767390	0	0.000	River	smoke
+2194233953	0	0.000	Mountain	smoke
+2201967210	1	1.000	River	river
+390159839	0	0.000	Smoke	mountain
+397893096	0	0.000	River	mountain
+4270218396	0	0.000	Smoke	river
+659773907	1	1.000	River	river
+3497150743	0	0.000	Nigel	Efren
+3479652611	0	0.000	Ahmad	Efren
+3481028866	0	0.000	Ahmad	Nigel
+3523496221	1	1.000	Nigel	Nigel
+3505998089	0	0.000	Efren	Ahmad
+3507374344	1	1.000	Ahmad	Ahmad
+99502139	0	0.000	Nigel	Efren
+82004007	0	0.000	Ahmad	Efren
+83380262	0	0.000	Ahmad	Nigel
+1272006780	0	0.000	Nigel	Ahmad
+3701556779	1	1.000	Solution B	Solution B
+3701687852	0	0.667	Solution A	Solution C
+3701818925	0	0.667	Solution A	Solution D
+3705751087	0	0.500	Solution E	Solution B
+3705882160	0	0.500	Solution E	Solution C
+3706013233	1	1.000	Solution D	Solution D
+4111684390	0	0.500	Solution E	Solution F
+4107490082	1	1.000	Solution F	Solution F
+2229887092	0	0.667	Solution A	Solution G
+2234081400	0	0.500	Solution E	Solution G

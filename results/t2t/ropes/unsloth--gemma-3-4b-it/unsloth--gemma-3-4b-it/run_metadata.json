@@ -1,0 +1,12 @@
+{
+  "method": "text_to_text",
+  "created_at": "2026-07-20T10:21:07.196220+00:00",
+  "dataset": "data/tasks/ropes_val.jsonl",
+  "sharer_model": "unsloth/gemma-3-4b-it",
+  "receiver_model": "unsloth/gemma-3-4b-it",
+  "num_examples": 1688,
+  "sharer_max_new_tokens": 100,
+  "receiver_max_new_tokens": 64,
+  "scoring": "free_form",
+  "dtype": "auto"
+}

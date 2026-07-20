@@ -1,0 +1,31 @@
+{
+  "total_examples": 5899,
+  "evaluated_examples": 5899,
+  "correct_examples": 1960,
+  "accuracy": 0.33225970503475166,
+  "scores": {
+    "is_correct": 0.33225970503475166,
+    "em": 0.33225970503475166,
+    "f1": 0.4503728734748215
+  },
+  "token_counts": {
+    "total": {
+      "sharer_input": 4125673,
+      "sharer_output": 188768,
+      "receiver_input": 4475081,
+      "receiver_output": 20060
+    },
+    "average": {
+      "sharer_input": 699.3851500254281,
+      "sharer_output": 32.0,
+      "receiver_input": 758.616884217664,
+      "receiver_output": 3.400576368876081
+    },
+    "counted_examples": {
+      "sharer_input": 5899,
+      "sharer_output": 5899,
+      "receiver_input": 5899,
+      "receiver_output": 5899
+    }
+  }
+}

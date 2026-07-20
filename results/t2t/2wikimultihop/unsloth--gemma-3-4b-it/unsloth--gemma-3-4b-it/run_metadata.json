@@ -1,0 +1,12 @@
+{
+  "method": "text_to_text",
+  "created_at": "2026-07-20T08:24:59.983759+00:00",
+  "dataset": "data/tasks/2wikimultihop_val.jsonl",
+  "sharer_model": "unsloth/gemma-3-4b-it",
+  "receiver_model": "unsloth/gemma-3-4b-it",
+  "num_examples": 5236,
+  "sharer_max_new_tokens": 100,
+  "receiver_max_new_tokens": 64,
+  "scoring": "free_form",
+  "dtype": "auto"
+}

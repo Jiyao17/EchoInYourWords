@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=eiyw-method-safe
-#SBATCH --output=logs/%x-%j.out
-
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(pwd)}}"
 cd "${REPO_ROOT}"
 
 : "${ENV_SCRIPT:?ENV_SCRIPT is required}"
@@ -14,12 +12,13 @@ cd "${REPO_ROOT}"
 
 source "${ENV_SCRIPT}"
 
-mkdir -p logs
+mkdir -p "${REPO_ROOT}/logs"
+chmod 755 "${REPO_ROOT}/logs" || true
 
 echo "[method] start=$(date '+%Y-%m-%d %H:%M:%S %Z')"
 echo "[method] slurm_job_id=${SLURM_JOB_ID:-unset}"
 echo "[method] slurm_job_name=${SLURM_JOB_NAME:-unset}"
-echo "[method] log_file=logs/${SLURM_JOB_NAME:-job}-${SLURM_JOB_ID:-manual}.out"
+echo "[method] log_file=${REPO_ROOT}/logs/${SLURM_JOB_NAME:-job}-${SLURM_JOB_ID:-manual}.out"
 echo "[method] method=${METHOD} dataset=${DATASET}"
 echo "[method] safe_models=${SAFE_MODELS}"
 echo "[method] cuda_visible_devices=${CUDA_VISIBLE_DEVICES:-unset}"

@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=eiyw-sweep-safe
-#SBATCH --output=logs/%x-%j.out
-
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(pwd)}}"
 cd "${REPO_ROOT}"
 
 : "${ENV_SCRIPT:?ENV_SCRIPT is required}"
@@ -17,12 +15,13 @@ METHOD="${METHOD:-}"
 
 source "${ENV_SCRIPT}"
 
-mkdir -p logs
+mkdir -p "${REPO_ROOT}/logs"
+chmod 755 "${REPO_ROOT}/logs" || true
 
 echo "[sweep] start=$(date '+%Y-%m-%d %H:%M:%S %Z')"
 echo "[sweep] slurm_job_id=${SLURM_JOB_ID:-unset}"
 echo "[sweep] slurm_job_name=${SLURM_JOB_NAME:-unset}"
-echo "[sweep] log_file=logs/${SLURM_JOB_NAME:-job}-${SLURM_JOB_ID:-manual}.out"
+echo "[sweep] log_file=${REPO_ROOT}/logs/${SLURM_JOB_NAME:-job}-${SLURM_JOB_ID:-manual}.out"
 echo "[sweep] stage=${EXP_STAGE}"
 echo "[sweep] safe_models=${SAFE_MODELS}"
 echo "[sweep] method=${METHOD:-all}"
