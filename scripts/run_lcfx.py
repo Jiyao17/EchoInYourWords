@@ -81,13 +81,19 @@ def main() -> None:
         help="Latent dim; must match the trained --fuser-checkpoint (paper: 128)",
     )
     parser.add_argument(
+        "--dropout",
+        type=float,
+        default=0.1,
+        help="Projector MLP dropout; must match the checkpoint (paper: 0.1)",
+    )
+    parser.add_argument(
         "--span-scheme",
         choices=["paragraphs", "fixed"],
         default="paragraphs",
         help=(
             "How the Sharer text is divided into pooling spans: 'paragraphs' uses "
-            "the natural blank-line blocks (the paper's scheme; P varies per "
-            "example), 'fixed' uses --num-spans near-equal token chunks. The pool "
+            "raw evidence paragraphs (the paper's scheme; P varies per example), "
+            "'fixed' uses --num-spans near-equal token chunks. The pool "
             "has no P-dependent parameters, so any trained checkpoint accepts "
             "either (paper Appendix E.4)."
         ),
@@ -146,6 +152,7 @@ def main() -> None:
             device=pair.device,
             allow_model_mismatch=args.allow_model_mismatch,
             bottleneck_dim=args.bottleneck_dim,
+            dropout=args.dropout,
         ).to(pair.device)
         print(f"Loaded fuser checkpoint: {args.fuser_checkpoint}")
     else:
@@ -153,6 +160,7 @@ def main() -> None:
             pair.sharer_spec,
             pair.receiver_spec,
             bottleneck_dim=args.bottleneck_dim,
+            dropout=args.dropout,
             zero_init=True,
         ).to(pair.device)
         print("No checkpoint: using ZERO-INIT fuser (== single-model floor)")
@@ -206,6 +214,7 @@ def main() -> None:
         "max_new_tokens": args.max_new_tokens,
         "num_spans": args.num_spans,
         "span_scheme": args.span_scheme,
+        "dropout": args.dropout,
         "bottleneck_dim": args.bottleneck_dim,
         "fuser_checkpoint": (
             str(args.fuser_checkpoint) if args.fuser_checkpoint else None

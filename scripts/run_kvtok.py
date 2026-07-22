@@ -10,7 +10,7 @@ Example (cross-context HotpotQA-bridge, trained translator):
 
     python scripts/run_kvtok.py \
         --dataset data/tasks/hotpotqa_bridge_val.jsonl \
-        --sharer-model unsloth/Llama-3.2-1B-Instruct \
+        --sharer-model unsloth/Llama-3.2-3B-Instruct \
         --receiver-model Qwen/Qwen3-0.6B \
         --num-spans 5 --num-tokens 8 \
         --translator-checkpoint data/checkpoints/kvtok/translator.pt \

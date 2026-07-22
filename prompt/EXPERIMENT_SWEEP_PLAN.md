@@ -11,11 +11,11 @@ analyze.
 
 ### Models (primary roster, 3 models, one flat tier; 8B is opt-in)
 
-One model per size from 0.6B to 4B, different families, all ungated:
+One model per size from 0.6B to 3B, different families, all ungated:
 
 - `Qwen/Qwen3-0.6B` (0.6B) — used by LCF-X
-- `unsloth/Llama-3.2-1B-Instruct` (1B)
-- `unsloth/gemma-3-4b-it` (4B)
+- `unsloth/gemma-3-1b-it` (1B)
+- `unsloth/Llama-3.2-3B-Instruct` (3B)
 
 **Opt-in large tier** — `mistralai/Ministral-8B-Instruct-2410` (8B) is not in the default
 grid (its cells dominate the sweep's wall time/memory); pass
@@ -25,10 +25,8 @@ selects the full grid.
 
 `Qwen/Qwen2.5-0.5B-Instruct` was dropped from the roster (LCF-X's own
 cross-context scenario only considered two 0.6B models, so the 0.5B tier
-isn't relevant here). `Qwen/Qwen3-4B` and `unsloth/gemma-3-1b-it` were also
-considered but are **not** part of the roster — excluded as redundant with
-the models above (extra Qwen/Gemma sizes outside the 0.6/1/4/8B ladder this
-sweep targets).
+isn't relevant here). The experiment ladder is intentionally fixed to Qwen
+0.6B, Gemma 1B, Llama 3B, and Mistral 8B.
 
 - **Datasets** (6): `hotpotqa_bridge`, `musique`, `qasc`, `2wikimultihop`,
   `ropes`, `strategyqa`
@@ -90,7 +88,7 @@ Priority tiers (review results after each tier before starting the next —
 don't blindly launch all 192 full trainings at once):
 
 1. **Priority 1 — symmetric pairs**: the 3 same-model pairs (0.6B-0.6B,
-   1B-1B, 4B-4B; plus 8B-8B with `EXTRA_MODELS=TRUE`) x 6 datasets x 3
+   1B-1B, 3B-3B; plus 8B-8B with `EXTRA_MODELS=TRUE`) x 6 datasets x 3
    methods = 54 (72 with extras) cells.
    Establishes same-model baselines across every dataset first.
 2. **Priority 2 — heterogeneous pairs that passed Stage 1 cleanly** x 6
@@ -168,17 +166,22 @@ make exp-all                                             # complete 4x4 grid
 make exp METHOD=t2t                                      # t2t only, every dataset (54 cells)
 make exp METHOD=t2t DATASET=hotpotqa_bridge              # t2t only, one dataset (9 cells)
 make exp DATASET=hotpotqa_bridge                          # every method, one dataset (27 cells)
+make exp METHOD=xkv DATASET=hotpotqa_bridge SHARER=unsloth/gemma-3-1b-it # one 3-cell row
+make exp METHOD=xkv DATASET=hotpotqa_bridge RECEIVER=Qwen/Qwen3-0.6B     # one 3-cell column
+make exp-all METHOD=xkv DATASET=hotpotqa_bridge SHARER=unsloth/gemma-3-1b-it # one 4-cell row
 CUDA_VISIBLE_DEVICES=0,1,2,3 make exp METHOD=xkv DATASET=ropes # auto: one worker per visible GPU
 make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_GPUS=1,2,3
 ```
 
-**Picking specific cells to (re)run — via `EXP_ARGS=` passthrough:**
+**Picking specific cells to (re)run:** `SHARER=` and `RECEIVER=` are direct
+row/column filters; `EXP_ARGS=` remains the passthrough for driver controls
+such as `--dry-run` and `--resume`.
 
 ```bash
 make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--dry-run"          # preview the cell list only
 make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--resume" EXP_GPUS=1,2,3   # continue a crashed sweep
 make exp-all DATASET=hotpotqa_bridge \
-  EXP_ARGS="--sharer unsloth/Llama-3.2-1B-Instruct --receiver mistralai/Ministral-8B-Instruct-2410" # narrow to one pair
+  SHARER=unsloth/Llama-3.2-3B-Instruct RECEIVER=mistralai/Ministral-8B-Instruct-2410 # one pair
 ```
 
 Every launch reruns every selected cell fresh by default (results and
@@ -272,7 +275,7 @@ separation by dataset+pair.
   re-check `nvidia-smi` before each stage — availability will change. The
   `--gpus` flag on `run_sweep.py` is exactly how this gets respected per
   invocation.
-- **The 0.6B pairs are much cheaper** than the 1B/4B/8B ones, so a
+- **The 0.6B pairs are much cheaper** than the 1B/3B/8B ones, so a
   `--gpus` worker can likely run several of them concurrently per GPU
   (`--concurrency-per-gpu`) even while an 8B cell is running one-at-a-time
   elsewhere — worth accounting for when scheduling Stage 2 priority tiers.

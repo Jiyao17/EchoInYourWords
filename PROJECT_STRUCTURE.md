@@ -24,7 +24,7 @@ standardized experiment/output contract:
   an EIYW-v2-style head emits prepended soft tokens (*implemented*).
 - **XKV (`methods/xkv/`)** — pools both Sharer and Receiver KV with vectorized
   learned-query attention (`N → k`, no spans; Receiver-tier defaults
-  `k=1/2/3/4` for 0.6B/1B/4B/8B; translation depth `n=1`), applies the
+  `k=1/2/3/4` for 0.6B/1B/3B/8B; translation depth `n=1`), applies the
   current learned `L_s → L_r` layer-axis
   map, translates the concatenated layer summaries with configurable attention
   blocks, then uses

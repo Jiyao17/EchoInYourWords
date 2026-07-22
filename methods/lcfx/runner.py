@@ -86,8 +86,8 @@ def run_lcfx_example(
 ) -> LCFXResult:
     """Run the LCF-X latent-communication pipeline for a single example.
 
-    ``span_scheme``: ``"paragraphs"`` pools over the sharer text's natural
-    ``\\n\\n``-separated blocks (the paper's scheme, P varies per example);
+    ``span_scheme``: ``"paragraphs"`` pools over the raw evidence paragraphs
+    (the paper's scheme, P varies per example);
     ``"fixed"`` divides the tokens into ``num_spans`` near-equal chunks.
     """
 
@@ -103,7 +103,11 @@ def run_lcfx_example(
     # callback.
     start = perf_counter()
     boundaries = (
-        [paragraph_span_starts(pair.sharer_tok, sharer_text)]
+        [
+            paragraph_span_starts(
+                pair.sharer_tok, sharer_text, example.sharer_context
+            )
+        ]
         if span_scheme == "paragraphs"
         else None
     )

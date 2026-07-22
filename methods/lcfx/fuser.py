@@ -28,29 +28,22 @@ sharer's matched-position cache in LCF; the projector itself is unchanged:
 
     x    = concat&flatten(S_K, S_V, R_K, R_V)          # 2*H_s*D_s + 2*H_r*D_r
     z    = W_down x ; z = 2-layer MLP(z)               # -> d, intermediate 4d
+    z_K, z_V = split(z)                                # each has width d/2
     a_i  = sigmoid(W_gate z)                           # per-head gates from full z
-    Δ_i  = W_up^i z,  i in {K,V}                       # separate per-layer up-proj
+    Δ_i  = W_up^i z_i,  i in {K,V}                     # separate per-layer up-proj
     R_i' = R_i + g_i · (a_i ⊙ Δ_i)                     # per-layer per-type gate
 
 ``W_up^i`` outputs Receiver geometry, so any Sharer/Receiver H/D mismatch is
-absorbed by the concat width + ``W_down`` (the paper's own shared-context LCF
-pair is asymmetric: joint width 2304 = 2*2*64 + 2*8*128). The paper's prose
-describes a latent split ``z -> (z_K, z_V)`` (each d/2) feeding ``W_up^i``, but
-that undershoots the paper's own reported adapter sizes (693K/layer for LCF-128
-— Table 5 — and 25.87M total for LCF-X — Appendix E.3) by exactly one
-up-projection's worth per K/V; feeding each ``W_up^i`` the *full* d-dim latent
-reproduces both figures (693,010/layer; 25.83M), so we match the reported
-parameter counts rather than the prose.
+absorbed by the concat width + ``W_down``. We follow the paper's explicit
+Section 3.1 latent-split equations. This produces fewer parameters than Tables
+5/E.3 report; those tables are internally inconsistent with the stated
+``d/2``-input K/V up-projections.
 
 Gating: ``g_i`` is a per-layer, per-type (K and V separate) Gumbel-sigmoid gate
 — the paper's layer-pruning audit reads trained gate logits "for both K and V".
 Training samples a Gumbel-sigmoid relaxation (temperature ``gate_tau``, annealed
 1.0 -> 0.5 over the run, Table 11); at inference the gate is **hard**,
 ``g_i ∈ {0,1}`` (Section 3 / Table 6 "hard at eval"): ``logit > 0 -> 1``.
-
-``zero_init=True`` zeroes the up-projections, so Δ = 0 ⇒ residual = 0 and LCF-X
-reproduces the Receiver-only run (the plumbing check), while the gates stay
-nonzero so the up-projections still receive gradient (ReZero-style).
 
 Paper-faithful init (Table 11): pool queries Kaiming-normal x 0.02;
 up-projections Kaiming-normal x 0.06; gate logits +1.0 (Appendix E.1:
@@ -114,12 +107,16 @@ class _LayerProjector(nn.Module):
         kv_heads: int,
         head_dim: int,
         bottleneck_dim: int,
-        zero_init: bool,
+        zero_init: bool = False,
+        dropout: float = 0.1,
     ) -> None:
         super().__init__()
+        if bottleneck_dim < 2 or bottleneck_dim % 2:
+            raise ValueError("bottleneck_dim must be an even integer >= 2")
         self.kv_heads = kv_heads
         self.head_dim = head_dim
         self.bottleneck_dim = bottleneck_dim
+        self.dropout = float(dropout)
         sharer_feat = sharer_kv_heads * sharer_head_dim  # H_s * D_s
         receiver_feat = kv_heads * head_dim  # H_r * D_r
 
@@ -127,14 +124,15 @@ class _LayerProjector(nn.Module):
         self.mlp = nn.Sequential(
             nn.Linear(bottleneck_dim, 4 * bottleneck_dim),
             nn.GELU(),
+            nn.Dropout(self.dropout),
             nn.Linear(4 * bottleneck_dim, bottleneck_dim),
         )
         # Input-dependent per-head gates a_K, a_V (from the full latent z).
         self.gate = nn.Linear(bottleneck_dim, 2 * kv_heads)
-        # Separate per-type up-projections, each reading the full latent z (see
-        # module docstring for why, vs. the paper's prose-described d/2 split).
-        self.up_key = nn.Linear(bottleneck_dim, receiver_feat)
-        self.up_value = nn.Linear(bottleneck_dim, receiver_feat)
+        # Section 3.1 step 4: z -> (z_K, z_V), each with width d/2.
+        half = bottleneck_dim // 2
+        self.up_key = nn.Linear(half, receiver_feat)
+        self.up_value = nn.Linear(half, receiver_feat)
         if zero_init:
             for up in (self.up_key, self.up_value):
                 nn.init.zeros_(up.weight)
@@ -181,8 +179,9 @@ class _LayerProjector(nn.Module):
         alpha = torch.sigmoid(self.gate(z)).view(batch, seq, 2, self.kv_heads)
         alpha_key, alpha_value = alpha[:, :, 0, :], alpha[:, :, 1, :]  # [B, N, H_r]
 
-        delta_key = self.up_key(z).view(batch, seq, self.kv_heads, self.head_dim)
-        delta_value = self.up_value(z).view(batch, seq, self.kv_heads, self.head_dim)
+        z_key, z_value = z.chunk(2, dim=-1)
+        delta_key = self.up_key(z_key).view(batch, seq, self.kv_heads, self.head_dim)
+        delta_value = self.up_value(z_value).view(batch, seq, self.kv_heads, self.head_dim)
 
         gate = _gumbel_sigmoid(layer_gate, training, tau)  # [2] in (0,1); {0,1} at eval
         d_key = gate[0] * (alpha_key.unsqueeze(-1) * delta_key)  # [B, N, H_r, D_r]
@@ -212,7 +211,8 @@ class LCFXFuser(nn.Module):
         receiver_kv_heads: int,
         receiver_head_dim: int,
         bottleneck_dim: int = 128,
-        zero_init: bool = True,
+        dropout: float = 0.1,
+        zero_init: bool = False,
     ) -> None:
         super().__init__()
         # Sharer dims (kept so the fuser is self-describing for checkpointing).
@@ -223,6 +223,7 @@ class LCFXFuser(nn.Module):
         self.receiver_kv_heads = receiver_kv_heads
         self.receiver_head_dim = receiver_head_dim
         self.bottleneck_dim = bottleneck_dim
+        self.dropout = float(dropout)
 
         # Paper pool (Appendix E.3): two learned query vectors per layer, each
         # in RAW Sharer head/dim space — no key/value projection. Attention
@@ -259,7 +260,8 @@ class LCFXFuser(nn.Module):
                     receiver_kv_heads,
                     receiver_head_dim,
                     bottleneck_dim,
-                    zero_init,
+                    zero_init=zero_init,
+                    dropout=self.dropout,
                 )
                 for _ in range(receiver_layers)
             ]
@@ -395,7 +397,8 @@ class LCFXFuser(nn.Module):
         receiver_spec: "object",
         *,
         bottleneck_dim: int = 128,
-        zero_init: bool = True,
+        dropout: float = 0.1,
+        zero_init: bool = False,
     ) -> "LCFXFuser":
         return cls(
             sharer_layers=sharer_spec.layers,
@@ -405,6 +408,7 @@ class LCFXFuser(nn.Module):
             receiver_kv_heads=receiver_spec.kv_heads,
             receiver_head_dim=receiver_spec.head_dim,
             bottleneck_dim=bottleneck_dim,
+            dropout=dropout,
             zero_init=zero_init,
         )
 
@@ -423,10 +427,11 @@ class LCFXFuser(nn.Module):
             "receiver_kv_heads": self.receiver_kv_heads,
             "receiver_head_dim": self.receiver_head_dim,
             "bottleneck_dim": self.bottleneck_dim,
+            "dropout": self.dropout,
         }
 
     @classmethod
-    def from_arch_config(cls, cfg: dict, *, zero_init: bool = True) -> "LCFXFuser":
+    def from_arch_config(cls, cfg: dict, *, zero_init: bool = False) -> "LCFXFuser":
         """Rebuild a fuser from an :meth:`arch_config` dict."""
 
         return cls(
@@ -437,6 +442,7 @@ class LCFXFuser(nn.Module):
             receiver_kv_heads=cfg["receiver_kv_heads"],
             receiver_head_dim=cfg["receiver_head_dim"],
             bottleneck_dim=cfg["bottleneck_dim"],
+            dropout=cfg["dropout"],
             zero_init=zero_init,
         )
 

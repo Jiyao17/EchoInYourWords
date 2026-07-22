@@ -76,7 +76,7 @@ def main() -> None:
         default=None,
         help=(
             "Learned summaries per layer/head/side. Default follows Receiver "
-            "size: 0.6B=1, 1B=2, 4B=3, 8B=4."
+            "size: 0.6B=1, 1B=2, 3B=3, 8B=4."
         ),
     )
     parser.add_argument("--allow-model-mismatch", action="store_true")

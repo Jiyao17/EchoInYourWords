@@ -26,7 +26,7 @@ and update head are trained.
   normally constant over layers; Gemma-3 mixes sliding and full attention, so
   they may differ.
 - `k`: direct-attention summaries retained per layer and KV head on both sides
-  (Receiver-tier default `k=1/2/3/4` for 0.6B/1B/4B/8B).
+  (Receiver-tier default `k=1/2/3/4` for 0.6B/1B/3B/8B).
 - `d`: XKV bottleneck/translator width (default: Receiver hidden width divided
   by 8).
 
@@ -284,7 +284,7 @@ Required ablations:
 3. **Use the joint bottleneck normalization first.** The existing
    `W_down -> MLP -> LayerNorm` controls the concatenated scale. Add side-specific
    normalization only if measured cache-scale imbalance warrants it.
-4. **Use a Receiver-tier `k` default.** Use `k=1/2/3/4` for 0.6B/1B/4B/8B
+4. **Use a Receiver-tier `k` default.** Use `k=1/2/3/4` for 0.6B/1B/3B/8B
    Receivers, respectively. This scales pooled information with Receiver size
    while retaining a single vectorized attention operation and an explicit
    fixed-`k` override for ablations.
@@ -351,7 +351,7 @@ from `sum(p.numel() for p in xkv.parameters() if p.requires_grad)`.
 
 ## 11. MVP defaults
 
-Use `d=receiver_hidden//8`, Receiver-tier `k=1/2/3/4` for 0.6B/1B/4B/8B, `n=1`, with
+Use `d=receiver_hidden//8`, Receiver-tier `k=1/2/3/4` for 0.6B/1B/3B/8B, `n=1`, with
 independent direct-attention queries per layer/head and side, 8 attention heads
 (or the largest divisor of `d` not exceeding 8), independently parameterized
 self-attention blocks, a shared position

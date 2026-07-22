@@ -21,8 +21,8 @@
 # val, EM/F1). The common usage is one knob per axis -- DATASET for data,
 # SHARER/RECEIVER for methods:
 #   make data       DATASET=hotpotqa_bridge
-#   make lcfx-train SHARER=unsloth/Llama-3.2-1B-Instruct RECEIVER=Qwen/Qwen3-0.6B
-#   make lcfx-eval  SHARER=unsloth/Llama-3.2-1B-Instruct RECEIVER=Qwen/Qwen3-0.6B
+#   make lcfx-train SHARER=unsloth/Llama-3.2-3B-Instruct RECEIVER=Qwen/Qwen3-0.6B
+#   make lcfx-eval  SHARER=unsloth/Llama-3.2-3B-Instruct RECEIVER=Qwen/Qwen3-0.6B
 # With no overrides (make lcfx-train / lcfx-eval / lcfx) everything uses the
 # defaults above. SHARER/RECEIVER move every method at once; the per-method
 # LCFX_*/EIYW_*/KVTOK_*/T2T_* vars (which default to SHARER/RECEIVER) override one method.
@@ -34,9 +34,9 @@ help:
 	@echo "EchoInYourWords -- run experiments via make."
 	@echo ""
 	@echo "Main targets:"
-	@echo "  make prepare       One-shot setup: make data + make model (all datasets + 0.6/1/4/8B experiment models, or DATASET=/MODEL= for one)"
+	@echo "  make prepare       One-shot setup: make data + make model (all datasets + 0.6/1/3/8B experiment models, or DATASET=/MODEL= for one)"
 	@echo "  make data          Prepare train+val for ALL datasets (or just DATASET= if given)"
-	@echo "  make model         Download the 0.6/1/4/8B experiment roster (or just MODEL= if given)"
+	@echo "  make model         Download the 0.6/1/3/8B experiment roster (or just MODEL= if given)"
 	@echo "  make lcfx          LCF-X: train fuser -> EM/F1 on val (train + eval)"
 	@echo "  make lcfx-train    LCF-X: train the fuser only"
 	@echo "  make lcfx-eval     LCF-X: eval a trained fuser (+ no-fusion floor)"
@@ -57,7 +57,7 @@ help:
 	@echo "  make single        Upper bound: MODEL answers with ALL evidence (MODEL=/DATASET= each: given=one, unset=all)"
 	@echo "  make exp           Sweep LCF-X/XKV/T2T over base model pairs, split by METHOD= then DATASET= (each: given=one, unset=all)"
 	@echo "  make exp-extend    Sweep only the 7 pairs where Sharer and/or Receiver is Ministral-8B"
-	@echo "  make exp-all       Sweep the full 0.6B/1B/4B/8B 4x4 grid (16 pairs)"
+	@echo "  make exp-all       Sweep the full 0.6B/1B/3B/8B 4x4 grid (16 pairs)"
 	@echo "  make sweep         Full pipeline: prepare + 4x4 exp-all for every dataset, parallel across CUDA_VISIBLE_DEVICES"
 	@echo "  make visual        Comparison table: DATASET= (ITEM= given=one of scores/params/latency, unset=all three); ITEM=datasets for a size/oracle-score overview of every dataset"
 	@echo "  make visual-all    Same reports as visual, with the opt-in 8B model included (4x4 grid)"
@@ -67,12 +67,12 @@ help:
 	@echo "  make lcfx-eval  SHARER=<id> RECEIVER=<id>   eval that pair (same CKPT)"
 	@echo "  make lcfx       SHARER=<id> RECEIVER=<id>   train -> eval end to end"
 	@echo "  (SHARER/RECEIVER apply to every method target; LCFX_*/EIYW_*/KVTOK_*/XKV_*/T2T_* set one method only)"
+	@echo "  On exp/exp-all, an explicit SHARER= or RECEIVER= fixes that grid axis (one row/column); setting both selects one cell."
 	@echo "  base model roster (used by exp; sweep adds the large tier; all ungated):"
-	@echo "    Qwen/Qwen3-0.6B  unsloth/Llama-3.2-1B-Instruct  unsloth/gemma-3-4b-it"
+	@echo "    Qwen/Qwen3-0.6B  unsloth/gemma-3-1b-it  unsloth/Llama-3.2-3B-Instruct"
 	@echo "  large tier (exp-all/sweep include it; EXTRA_MODELS=TRUE adds it to exp/single/visual):"
 	@echo "    mistralai/Ministral-8B-Instruct-2410"
-	@echo "  pair-testing extras (available for manual SHARER=/RECEIVER= use; not in exp/sweep or bare make model):"
-	@echo "    unsloth/gemma-3-1b-it  unsloth/Llama-3.2-3B-Instruct  Qwen/Qwen3-4B  Qwen/Qwen3-8B"
+	@echo "  the complete four-model roster is Qwen 0.6B, Gemma 1B, Llama 3B, and Mistral 8B."
 	@echo "  results + checkpoints auto-separate (results/<method>/<dataset>/<sharer>/<receiver>/sp<SPANS>)."
 	@echo ""
 	@echo "Common knobs:  DATASET=  CKPT=  EVAL_N=  MAX_TRAIN=  MAX_STEPS=  BATCH_SIZE=  GRAD_ACCUM="
@@ -97,12 +97,10 @@ VAL        ?= $(TASKS)/$(DATASET)_val.jsonl
 # reads its OWN sharer/receiver below, which fall back to these globals when not
 # set. Mix sizes / families / tokenizers freely (the fuser bridges differing
 # layers/heads/head_dim); primary model roster (used by exp/sweep; all ungated -- no HF_TOKEN needed):
-#   Qwen/Qwen3-0.6B  unsloth/Llama-3.2-1B-Instruct  unsloth/gemma-3-4b-it
+#   Qwen/Qwen3-0.6B  unsloth/gemma-3-1b-it  unsloth/Llama-3.2-3B-Instruct
 # Large tier (`exp-all`/`sweep` include it; EXTRA_MODELS=TRUE adds it to
 # `exp`/`single`/`visual`):
 #   mistralai/Ministral-8B-Instruct-2410
-# Pair-testing extras (manual SHARER=/RECEIVER= use; not in exp/sweep):
-#   unsloth/gemma-3-1b-it  unsloth/Llama-3.2-3B-Instruct  Qwen/Qwen3-4B Qwen/Qwen3-8B
 # Trained fuser checkpoints are stamped with their Sharer/Receiver ids; results and
 # checkpoints auto-separate by dataset + pair (see LCFX_SLUG below), so different
 # runs never overwrite each other. The eval HARD-ERRORS on a model/checkpoint mismatch.
@@ -110,7 +108,7 @@ SHARER     ?= Qwen/Qwen3-0.6B
 RECEIVER   ?= Qwen/Qwen3-0.6B
 
 # Per-method models: default to the globals; override one method without touching
-# the others, e.g. `make t2t T2T_SHARER=unsloth/Llama-3.2-1B-Instruct`, or set the
+# the others, e.g. `make t2t T2T_SHARER=unsloth/Llama-3.2-3B-Instruct`, or set the
 # globals (`make lcfx SHARER=... RECEIVER=...`) to move every method at once.
 # T2T baseline
 T2T_SHARER    ?= $(SHARER)
@@ -131,7 +129,7 @@ XKV_RECEIVER ?= $(RECEIVER)
 # Per-run slugs so results AND checkpoints from different dataset / Sharer / Receiver
 # combinations land in their own folders instead of overwriting each other. Layout is
 # <method>/<dataset>/<sharer>/<receiver> (model id "/" -> "--"), e.g.
-#   results/lcfx/hotpotqa_bridge/unsloth--Llama-3.2-1B-Instruct/Qwen--Qwen3-0.6B
+#   results/lcfx/hotpotqa_bridge/unsloth--Llama-3.2-3B-Instruct/Qwen--Qwen3-0.6B
 # Span-pooling methods also carry the pooling span count (SPANS, defined below; the fixed-scheme
 # chunk count — under the default SPAN_SCHEME=paragraphs the pool has no
 # P-dependent parameters, so sp<SPANS> is just a folder label) so sweeping it
@@ -155,12 +153,13 @@ XKV_OUT    ?= results/xkv/$(XKV_SLUG)
 # Checkpoint path is dataset+pair-scoped by default (override CKPT= to place it elsewhere).
 CKPT       ?= data/checkpoints/lcfx/$(LCFX_SLUG)/fuser.pt
 SPANS      ?= 5
-# Span partition for LCF-X and EIYW pooling: 'paragraphs' pools over each
-# encode text's natural blank-line blocks (the paper's scheme; P varies per
-# example), 'fixed' uses SPANS near-equal token chunks. KVTok still uses SPANS
-# chunks only.
+# Span partition for LCF-X and EIYW pooling. In LCF-X, 'paragraphs' uses raw
+# evidence paragraphs only (prompt/question blocks stay inside the first/last
+# evidence span); 'fixed' uses SPANS near-equal token chunks. KVTok still uses
+# SPANS chunks only.
 SPAN_SCHEME ?= paragraphs
 BOTTLENECK ?= 128
+LCFX_DROPOUT ?= 0.1
 LR         ?= 1e-4
 EPOCHS     ?= 1
 # Paper defaults: per-device batch 16 x grad-accum 16 = effective batch 256.
@@ -176,13 +175,10 @@ BATCH_SIZE_qasc := 128
 GRAD_ACCUM_qasc := 2
 BATCH_SIZE ?= $(or $(BATCH_SIZE_$(DATASET)),16)
 GRAD_ACCUM ?= $(or $(GRAD_ACCUM_$(DATASET)),16)
-# Linear LR warmup, in optimizer steps. Scaled per dataset to ~10% of one
-# epoch's optimizer steps (train_size / effective batch 256), because with
-# EPOCHS=1 a fixed warmup (the paper's 200) would eat most or all of the run:
-# qasc is only ~31 steps/epoch, so warmup 200 means the LR never gets past
-# ~15% of LR before training ends. Same value for every method on a given
-# dataset (the schedule stays comparable across methods); override with
-# WARMUP= as usual.
+# Linear LR warmup, in optimizer steps. LCF-X computes 10% from its exact
+# resolved optimizer-step budget at runtime (after train split, MAX_TRAIN,
+# batch/accumulation, epochs, and MAX_STEPS); an explicit WARMUP overrides it.
+# The dataset values below remain the defaults for the other training methods.
 #   steps/epoch: hotpotqa ~276, 2wiki ~290, musique ~54, ropes ~41,
 #                qasc ~31, strategyqa ~7
 WARMUP_hotpotqa_bridge := 28
@@ -342,24 +338,22 @@ $(TASKS)/strategyqa_val.jsonl:
 # Fetch a model once so later (offline) runs find it locally. Idempotent. MODEL is
 # the single-model knob shared with `make single` (defaults to RECEIVER). All
 # experiment-roster ids are ungated -- no HF_TOKEN needed. With no MODEL=
-# given, `make model` downloads the four 0.6/1/4/8B experiment models instead
+# given, `make model` downloads the four 0.6/1/3/8B experiment models instead
 # of picking one.
-#   make model MODEL=unsloth/gemma-3-4b-it
+#   make model MODEL=unsloth/Llama-3.2-3B-Instruct
 MODEL ?= $(RECEIVER)
 # EXTRA_MODELS=TRUE adds Ministral-8B to `exp`, `single`, and `visual`, growing
 # their base 3x3 roster to 4x4 where applicable. `exp-all` and `sweep` include
 # it explicitly. EXTRA_MODELS_FLAG is used by make_comparison_table.py.
 EXTRA_MODELS ?=
 EXTRA_MODELS_FLAG := $(if $(filter TRUE true 1,$(EXTRA_MODELS)),--extra-models,)
-BASE_MODELS := Qwen/Qwen3-0.6B unsloth/Llama-3.2-1B-Instruct \
-	unsloth/gemma-3-4b-it
+BASE_MODELS := Qwen/Qwen3-0.6B unsloth/gemma-3-1b-it \
+	unsloth/Llama-3.2-3B-Instruct
 LARGE_MODELS := mistralai/Ministral-8B-Instruct-2410
 PRIMARY_MODELS := $(BASE_MODELS) \
 	$(if $(filter TRUE true 1,$(EXTRA_MODELS)),$(LARGE_MODELS),)
-PAIR_TEST_MODELS := unsloth/gemma-3-1b-it \
-	unsloth/Llama-3.2-3B-Instruct Qwen/Qwen3-4B Qwen/Qwen3-8B
 # Bare `make model` / `make prepare` fetch exactly the experiment roster,
-# including the 8B extension. Pair-testing extras remain available via MODEL=.
+# including the 8B extension. Other compatible ids can still be passed via MODEL=.
 ALL_MODELS := $(sort $(BASE_MODELS) $(LARGE_MODELS))
 
 .PHONY: model
@@ -390,8 +384,9 @@ lcfx-train: data
 	$(OFFLINE) $(PY) scripts/train_lcfx_fuser.py \
 	  --train-data $(TRAIN) \
 	  --sharer-model $(LCFX_SHARER) --receiver-model $(LCFX_RECEIVER) \
-	  --bottleneck-dim $(BOTTLENECK) --num-spans $(SPANS) --span-scheme $(SPAN_SCHEME) \
-	  --lr $(LR) --epochs $(EPOCHS) --batch-size $(BATCH_SIZE) --grad-accum $(GRAD_ACCUM) --warmup $(WARMUP) \
+	  --bottleneck-dim $(BOTTLENECK) --dropout $(LCFX_DROPOUT) --num-spans $(SPANS) --span-scheme $(SPAN_SCHEME) \
+	  --lr $(LR) --epochs $(EPOCHS) --batch-size $(BATCH_SIZE) --grad-accum $(GRAD_ACCUM) \
+	  $(if $(filter command line environment,$(origin WARMUP)),--warmup $(WARMUP),) \
 	  --val-frac $(VAL_FRAC) --eval-max-examples $(EVAL_MAX) --eval-em-examples $(EVAL_EM) \
 	  --log-every $(LOG_EVERY) --eval-every $(EVAL_EVERY) --save-every $(SAVE_EVERY) \
 	  $(if $(MAX_TRAIN),--max-train-examples $(MAX_TRAIN),) \
@@ -402,7 +397,7 @@ lcfx-train: data
 # metric; pass EVAL_N=200 for a quick partial eval).
 lcfx-eval: data
 	$(OFFLINE) $(PY) scripts/run_lcfx.py --dataset $(VAL) --num-spans $(SPANS) --span-scheme $(SPAN_SCHEME) \
-	  --sharer-model $(LCFX_SHARER) --receiver-model $(LCFX_RECEIVER) --bottleneck-dim $(BOTTLENECK) \
+	  --sharer-model $(LCFX_SHARER) --receiver-model $(LCFX_RECEIVER) --bottleneck-dim $(BOTTLENECK) --dropout $(LCFX_DROPOUT) \
 	  $(if $(EVAL_N),--num-examples $(EVAL_N),) \
 	  --fuser-checkpoint $(CKPT) --output-dir $(LCFX_OUT)
 
@@ -618,8 +613,8 @@ endif
 # full-scale grid (paper defaults; BATCH_SIZE/GRAD_ACCUM auto-picked per pair
 # to avoid OOM while keeping effective batch 256 -- see run_sweep.py's
 # pick_batch_grad_accum) for the primary model roster by default:
-# Qwen3-0.6B, unsloth/Llama-3.2-1B-Instruct,
-# unsloth/gemma-3-4b-it -- 3x3=9 pairs (incl. symmetric).
+# Qwen3-0.6B, unsloth/gemma-3-1b-it,
+# unsloth/Llama-3.2-3B-Instruct -- 3x3=9 pairs (incl. symmetric).
 # `make exp-all` adds Ministral-8B on both axes; `make exp-extend` runs only
 # the seven new pairs where at least one axis is Ministral-8B.
 # Together the complete grid is 4x4=16 pairs.
@@ -628,6 +623,9 @@ endif
 # lcfx, xkv, then t2t in turn (each across every DATASET= it's given, or all 6
 # datasets if that's also unset); with a METHOD= given, only that method
 # runs (still across all datasets, or just one if DATASET= is also given).
+# An explicitly supplied SHARER= or RECEIVER= fixes that model axis inside
+# the selected roster. One fixed axis selects a 3-cell base row/column (4 for
+# exp-all); fixing both selects one pair. Unset globals remain unfiltered.
 # Every launch reruns every selected cell fresh (results/checkpoints are
 # overwritten in place). Pass EXP_ARGS="--resume" to instead skip cells
 # already `ok` in results/sweep_manifest.jsonl (continue a crashed sweep).
@@ -638,10 +636,13 @@ endif
 #   make exp METHOD=t2t DATASET=hotpotqa_bridge              # t2t only, one dataset (9 cells)
 #   make exp DATASET=hotpotqa_bridge                         # every method, one dataset (27 cells)
 #   make exp METHOD=xkv DATASET=hotpotqa_bridge              # XKV only, one dataset (9 cells)
+#   make exp METHOD=xkv DATASET=hotpotqa_bridge SHARER=unsloth/gemma-3-1b-it  # one row (3 cells)
+#   make exp METHOD=xkv DATASET=hotpotqa_bridge RECEIVER=Qwen/Qwen3-0.6B      # one column (3 cells)
+#   make exp-all METHOD=xkv DATASET=hotpotqa_bridge SHARER=unsloth/gemma-3-1b-it # one row (4 cells)
 #   make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_GPUS=1,2,3
 #   make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--dry-run"
 #   make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--resume"   # continue a crashed run
-#   make exp-all METHOD=t2t DATASET=hotpotqa_bridge EXP_ARGS="--sharer mistralai/Ministral-8B-Instruct-2410 --receiver mistralai/Ministral-8B-Instruct-2410"
+#   make exp-all METHOD=t2t DATASET=hotpotqa_bridge SHARER=mistralai/Ministral-8B-Instruct-2410 RECEIVER=mistralai/Ministral-8B-Instruct-2410
 #   make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_STAGE=smoke   # cheap reduced-budget sanity pass
 EXP_METHODS             := lcfx xkv t2t
 EXP_STAGE               ?= full
@@ -652,6 +653,11 @@ EXP_GPUS                ?= $(CUDA_VISIBLE_DEVICES)
 EXP_CONCURRENCY_PER_GPU ?= 1
 EXP_ARGS                ?=
 EXP_PAIR_SCOPE          ?= $(if $(filter TRUE true 1,$(EXTRA_MODELS)),all,base)
+# SHARER/RECEIVER have global defaults for direct method targets, but those
+# defaults must not collapse an experiment sweep. Forward only values the user
+# explicitly supplied on the command line or through the environment.
+EXP_SHARER_FILTER       = $(if $(filter command line environment,$(origin SHARER)),--sharer $(SHARER),)
+EXP_RECEIVER_FILTER     = $(if $(filter command line environment,$(origin RECEIVER)),--receiver $(RECEIVER),)
 
 # Outer loop: method. With METHOD= given, hand off straight to the dataset
 # loop below; otherwise run every method in turn (each recursive call then
@@ -681,11 +687,13 @@ _exp-dataset:
 ifeq ($(origin DATASET),command line)
 	$(PY) scripts/run_sweep.py --dataset $(DATASET) --method $(METHOD) --stage $(EXP_STAGE) \
 	  --concurrency-per-gpu $(EXP_CONCURRENCY_PER_GPU) \
-	  $(if $(EXP_GPUS),--gpus $(EXP_GPUS),) --pair-scope $(EXP_PAIR_SCOPE) $(EXP_ARGS)
+	  $(if $(EXP_GPUS),--gpus $(EXP_GPUS),) --pair-scope $(EXP_PAIR_SCOPE) \
+	  $(EXP_SHARER_FILTER) $(EXP_RECEIVER_FILTER) $(EXP_ARGS)
 else ifeq ($(origin DATASET),environment)
 	$(PY) scripts/run_sweep.py --dataset $(DATASET) --method $(METHOD) --stage $(EXP_STAGE) \
 	  --concurrency-per-gpu $(EXP_CONCURRENCY_PER_GPU) \
-	  $(if $(EXP_GPUS),--gpus $(EXP_GPUS),) --pair-scope $(EXP_PAIR_SCOPE) $(EXP_ARGS)
+	  $(if $(EXP_GPUS),--gpus $(EXP_GPUS),) --pair-scope $(EXP_PAIR_SCOPE) \
+	  $(EXP_SHARER_FILTER) $(EXP_RECEIVER_FILTER) $(EXP_ARGS)
 else
 	@status=0; for d in $(ALL_DATASETS); do \
 	  $(MAKE) _exp-dataset METHOD=$(METHOD) DATASET=$$d || status=$$?; \
@@ -701,7 +709,7 @@ endif
 # E.g. with 2 GPUs and this project's 6 datasets, each GPU runs 3 datasets
 # one after another while both GPUs run in parallel. Reuses EXP_STAGE from
 # `exp` above (full stage by default) and intentionally defaults to the
-# complete 4x4 grid. Use SWEEP_PAIR_SCOPE=base for only the 0.6/1/4B grid.
+# complete 4x4 grid. Use SWEEP_PAIR_SCOPE=base for only the 0.6/1/3B grid.
 #   CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep
 #   CUDA_VISIBLE_DEVICES=0,1,2,3 make sweep METHOD=t2t   # t2t only, same GPU distribution
 #   CUDA_VISIBLE_DEVICES=1,2     make sweep SWEEP_ARGS="--dry-run"
@@ -732,7 +740,7 @@ sweep: prepare
 #                           and total in each cell bolded independently
 #   ITEM=datasets            one overview table, every dataset (DATASET= ignored):
 #                           train/val split sizes + single-model-oracle EM+F1 for
-#                           a representative 1B/4B/8B model (results/single/...)
+#                           a representative 1B/3B/8B model (results/single/...)
 # Every ITEM also appends a second table to the same output file, same grid,
 # showing the UTC time each result was produced (file mtime, or training run
 # start time for ITEM=params) -- so stale results are easy to spot.
@@ -751,7 +759,7 @@ sweep: prepare
 #   make visual DATASET=ropes ITEM=scores OUT=results/comparison/ropes_custom.md
 # MODELS= (space-separated ids) overrides the grid axes — e.g. to view results
 # for retired roster members (pair-testing extras) without rerunning anything:
-#   make visual DATASET=qasc MODELS="Qwen/Qwen3-0.6B unsloth/Llama-3.2-1B-Instruct"
+#   make visual DATASET=qasc MODELS="Qwen/Qwen3-0.6B unsloth/Llama-3.2-3B-Instruct"
 ITEM       ?= scores
 VISUAL_SUFFIX = $(if $(filter params latency,$(ITEM)),_$(ITEM),)
 VISUAL_OUT ?= $(if $(filter datasets,$(ITEM)),results/comparison/datasets.md,results/comparison/$(DATASET)$(VISUAL_SUFFIX).md)
