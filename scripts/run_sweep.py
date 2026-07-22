@@ -39,12 +39,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Primary experiment model roster (one flat tier, no sub-tiers): the small
-# Qwen model LCF-X was developed against, plus one model per size at
-# 1B/4B, different families -- 3x3 = 9 pairs by default.
+# Qwen model LCF-X was developed against, plus Gemma 1B and Llama 3B --
+# one family per size and a 3x3 grid by default.
 PRIMARY_MODELS = [
     "Qwen/Qwen3-0.6B",
-    "unsloth/Llama-3.2-1B-Instruct",
-    "unsloth/gemma-3-4b-it",
+    "unsloth/gemma-3-1b-it",
+    "unsloth/Llama-3.2-3B-Instruct",
 ]
 # Opt-in large tier: pair scope "all" (or legacy --extra-models) appends these
 # to both axes. Scope "extend" selects only the seven cells touching this tier.
@@ -57,14 +57,9 @@ METHODS = ["lcfx", "xkv", "t2t"]
 # BATCH_SIZE/GRAD_ACCUM for the full stage (see pick_batch_grad_accum below).
 MODEL_PARAMS_B = {
     "Qwen/Qwen3-0.6B": 0.6,
-    "unsloth/Llama-3.2-1B-Instruct": 1.0,
-    "unsloth/gemma-3-4b-it": 4.0,
-    "mistralai/Ministral-8B-Instruct-2410": 8.02,
-    # Pair-testing extras (manual --sharer/--receiver runs):
     "unsloth/gemma-3-1b-it": 1.0,
     "unsloth/Llama-3.2-3B-Instruct": 3.2,
-    "Qwen/Qwen3-4B": 4.0,
-    "Qwen/Qwen3-8B": 8.0,
+    "mistralai/Ministral-8B-Instruct-2410": 8.02,
 }
 
 # Budget overrides passed to `make <method> ...` as command-line variables.
@@ -97,9 +92,9 @@ STAGE_OVERRIDES = {
 # (threshold_billions, batch_size, grad_accum), first match wins:
 BATCH_ACCUM_TIERS = [
     (2.5, 16, 16),   # up to 1B+1B
-    (5.5, 8, 32),    # up to 1B+4B
-    (9.5, 4, 64),    # up to 4B+4B / 1B+8B
-    (13.0, 2, 128),  # up to 4B+8B
+    (5.5, 8, 32),    # up to 1B+3B
+    (9.5, 4, 64),    # up to 3B+3B / 1B+8B
+    (13.0, 2, 128),  # up to 3B+8B
     (float("inf"), 1, 256),  # 8B+8B
 ]
 
@@ -354,7 +349,7 @@ def main() -> None:
         "--pair-scope",
         choices=["base", "extend", "all"],
         default="base",
-        help="Pair grid: base=3x3 (9), extend=only pairs touching 8B (7), all=4x4 (16)",
+        help="Pair grid: base=0.6/1/3B 3x3 (9), extend=only pairs touching 8B (7), all=0.6/1/3/8B 4x4 (16)",
     )
     parser.add_argument(
         "--gpus", default=None, help="Comma-separated GPU ids, e.g. 1,2,3 (default: no pinning, one worker)"

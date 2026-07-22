@@ -13,7 +13,7 @@ input to the projector. This mirrors the inference decode path (prefill
 training and evaluation share the same fusion.
 
 The loop is a complete trainer: materialized data, per-epoch shuffling, periodic
-validation, best-checkpointing by eval loss, gradient clipping, and a seed.
+validation, final-checkpoint persistence, gradient clipping, and a seed.
 """
 
 from __future__ import annotations
@@ -44,12 +44,17 @@ def _as_example(raw: Any) -> LCFXExample:
     return raw if isinstance(raw, LCFXExample) else LCFXExample.from_mapping(raw)
 
 
-def _boundaries(pair: LCFXPair, text: str, span_scheme: str) -> "list[int] | None":
+def _boundaries(
+    pair: LCFXPair,
+    text: str,
+    span_scheme: str,
+    context: str | None = None,
+) -> "list[int] | None":
     """Span starts for one sharer text: paragraph blocks (paper's training
     scheme) or None (fixed near-equal chunks of ``num_spans``)."""
 
     if span_scheme == "paragraphs":
-        return paragraph_span_starts(pair.sharer_tok, text)
+        return paragraph_span_starts(pair.sharer_tok, text, context)
     return None
 
 
@@ -77,7 +82,9 @@ def example_loss(
     aligned = fuser.align(
         summary,
         num_spans=num_spans,
-        span_boundaries=[_boundaries(pair, sharer_text, span_scheme)],
+        span_boundaries=[
+            _boundaries(pair, sharer_text, span_scheme, example.sharer_context)
+        ],
     )
 
     prompt_ids = pair._encode_chat(pair.receiver_tok, build_receiver_prompt(example))
@@ -188,7 +195,16 @@ def batched_example_loss(
             pair.device
         )
         if prompt.numel() >= 2 and answer.numel() >= 1:
-            rows.append((prompt, answer, sharer, _boundaries(pair, sharer_text, span_scheme)))
+            rows.append(
+                (
+                    prompt,
+                    answer,
+                    sharer,
+                    _boundaries(
+                        pair, sharer_text, span_scheme, ex.sharer_context
+                    ),
+                )
+            )
     if not rows:
         return None
 
@@ -253,6 +269,29 @@ def batched_example_loss(
 def _chunks(items: list, size: int):
     for start in range(0, len(items), size):
         yield items[start : start + size]
+
+
+def _optimization_steps(
+    num_examples: int,
+    batch_size: int,
+    grad_accum: int,
+    epochs: int,
+    max_steps: int | None,
+) -> int:
+    """Resolved optimizer-step budget, including a final partial accumulation."""
+
+    micro_batches = max(1, -(-num_examples // max(1, batch_size)))
+    per_epoch = max(1, -(-micro_batches // max(1, grad_accum)))
+    available = max(1, max(1, epochs) * per_epoch)
+    return min(available, max_steps) if max_steps is not None else available
+
+
+def _warmup_steps(total_steps: int, requested: int | None) -> int:
+    """Explicit warmup or 10% of the resolved run, rounded to a whole step."""
+
+    if requested is not None:
+        return max(0, int(requested))
+    return max(1, int(0.10 * total_steps + 0.5))
 
 
 def evaluate(
@@ -350,11 +389,10 @@ def evaluate_em_f1(
     }
 
 
-# Format 3: paper-faithful pool (per-layer cross-span attention: q_layer is per
-# *sharer* layer over that layer's own span summaries) + per-layer per-type
-# (K, V) gate logits. Format <= 2 checkpoints (cross-layer pooling, scalar
-# gates) have incompatible shapes and must be retrained.
-CHECKPOINT_FORMAT = 3
+# Format 4: paper-stated z -> (z_K, z_V) split, d/2-input K/V up-projections,
+# and dropout stamped in the architecture. Format 3 used full-d up-projections
+# to match the paper's inconsistent parameter table and is shape-incompatible.
+CHECKPOINT_FORMAT = 4
 
 
 def _pair_arch(pair: LCFXPair) -> dict:
@@ -409,14 +447,15 @@ def load_fuser(
     device: Any = None,
     allow_model_mismatch: bool = False,
     bottleneck_dim: int = 128,
+    dropout: float = 0.1,
 ) -> LCFXFuser:
     """Load a trained fuser, validating it matches the Sharer/Receiver ``pair``.
 
     New-format checkpoints (written by :func:`save_fuser`) carry the model names and
     architecture. By default any mismatch against ``pair`` raises ``ValueError`` --
     pass ``allow_model_mismatch=True`` to downgrade to a warning. Checkpoints from
-    before the paper-faithful pool rewrite (format < 3, including legacy bare
-    ``state_dict`` files) have incompatible shapes and are rejected — retrain.
+    before the paper-stated latent-split rewrite (format < 4, including legacy
+    bare ``state_dict`` files) have incompatible shapes and are rejected.
     """
 
     import torch
@@ -426,18 +465,21 @@ def load_fuser(
     if not (isinstance(ckpt, dict) and "state_dict" in ckpt):
         raise ValueError(
             f"Fuser checkpoint {path} is a legacy bare state_dict from before the "
-            "paper-faithful pool rewrite (per-layer cross-span attention, K/V gate "
-            "logits) and cannot be loaded. Retrain with scripts/train_lcfx_fuser.py."
+            "paper-stated latent-split rewrite and cannot be loaded. Retrain with "
+            "scripts/train_lcfx_fuser.py."
         )
     if ckpt.get("format") != CHECKPOINT_FORMAT:
         raise ValueError(
             f"Fuser checkpoint {path} has format {ckpt.get('format')}, expected "
-            f"{CHECKPOINT_FORMAT}. Formats < 3 predate the paper-faithful pool "
-            "(per-layer cross-span attention, per-type gate logits) and have "
-            "incompatible shapes. Retrain with scripts/train_lcfx_fuser.py."
+            f"{CHECKPOINT_FORMAT}. Earlier formats use incompatible projector "
+            "shapes. Retrain with scripts/train_lcfx_fuser.py."
         )
 
-    expected_arch = {**_pair_arch(pair), "bottleneck_dim": bottleneck_dim}
+    expected_arch = {
+        **_pair_arch(pair),
+        "bottleneck_dim": bottleneck_dim,
+        "dropout": float(dropout),
+    }
     mismatches: list[str] = []
     if ckpt.get("sharer_model") != pair.sharer_spec.name:
         mismatches.append(
@@ -481,7 +523,7 @@ def train_fuser(
     epochs: int = 1,
     batch_size: int = 16,
     grad_accum: int = 1,
-    warmup_steps: int = 0,
+    warmup_steps: int | None = None,
     max_steps: int | None = None,
     grad_clip: float = 1.0,
     log_every: int = 10,
@@ -497,15 +539,17 @@ def train_fuser(
     """Train only the fuser with frozen Sharer/Receiver. Returns the trained fuser.
 
     Optimization (matches the LCF-X paper's recipe):
-    - **AdamW**, ``lr`` with a linear ``warmup_steps`` schedule.
-    - **Gradient accumulation**: ``grad_accum`` micro-batches (one example each)
-      per optimizer step, so the *effective* batch size is ``grad_accum``. All of
+    - **AdamW**, ``lr`` with a linear warmup over 10% of the resolved optimizer
+      steps unless ``warmup_steps`` is explicitly provided.
+    - **Gradient accumulation**: ``grad_accum`` micro-batches of ``batch_size``
+      examples per optimizer step, so the effective batch size is
+      ``batch_size * grad_accum``. All of
       ``log_every`` / ``eval_every`` / ``save_every`` / ``max_steps`` count
       **optimizer steps**, not micro-batches.
 
     Checkpointing:
-    - With ``eval_data``, the best fuser (lowest eval loss) is saved to
-      ``checkpoint_path``; otherwise the final fuser is saved there.
+    - The final checkpoint is saved to ``checkpoint_path``, matching Appendix
+      E.2 of the paper.
     - Every ``save_every`` optimizer steps a crash-safety snapshot is written to
       ``<checkpoint_path>.latest``.
 
@@ -532,15 +576,15 @@ def train_fuser(
         raise ValueError("train_data is empty")
 
     grad_accum = max(1, int(grad_accum))
-    warmup = max(0, int(warmup_steps))
-
-    # Gate temperature anneal 1.0 -> 0.5 over the run (Table 11). Falls back to
-    # the epoch/batch-derived step count when max_steps isn't given.
-    steps_per_epoch = max(1, -(-len(train_list) // (batch_size * grad_accum)))  # ceil div
-    total_steps = max_steps if max_steps is not None else max(1, epochs * steps_per_epoch)
+    total_steps = _optimization_steps(
+        len(train_list), batch_size, grad_accum, epochs, max_steps
+    )
+    warmup = _warmup_steps(total_steps, warmup_steps)
 
     def _gate_tau(step: int) -> float:
-        return 1.0 - 0.5 * min(1.0, step / total_steps)
+        if total_steps <= 1:
+            return 0.5
+        return 1.0 - 0.5 * min(1.0, step / (total_steps - 1))
 
     if log_path is None and checkpoint_path:
         log_path = str(Path(checkpoint_path).with_name("training_log.jsonl"))
@@ -556,19 +600,19 @@ def train_fuser(
             "batch_size": batch_size,
             "grad_accum": grad_accum,
             "effective_batch": batch_size * grad_accum,
-            "warmup": max(0, int(warmup_steps)),
+            "warmup": warmup,
             "num_spans": num_spans,
             "span_scheme": span_scheme,
             "bottleneck_dim": fuser.bottleneck_dim,
+            "dropout": fuser.dropout,
             "eval_em_examples": eval_em_examples,
             "checkpoint_path": checkpoint_path,
             "total_steps": total_steps,
         },
     )
 
-    optimizer = torch.optim.AdamW(
-        [p for p in fuser.parameters() if p.requires_grad], lr=lr
-    )
+    trainable = [p for p in fuser.parameters() if p.requires_grad]
+    optimizer = torch.optim.AdamW(trainable, lr=lr)
 
     def _lr_scale(step: int) -> float:
         return (step + 1) / warmup if warmup and step < warmup else 1.0
@@ -584,14 +628,13 @@ def train_fuser(
     )
 
     opt_step = 0
-    micro = 0
+    accumulated = 0
     best_eval = float("inf")
-    saved_best = False
     running, running_count = 0.0, 0
     stop = False
 
-    def _maybe_eval_and_save() -> None:
-        nonlocal best_eval, saved_best
+    def _maybe_evaluate() -> None:
+        nonlocal best_eval
         if not eval_list:
             return
         eval_loss = evaluate(
@@ -615,14 +658,10 @@ def train_fuser(
             )
             em, f1 = scores["em"], scores["f1"]
         is_best = eval_loss < best_eval
-        marker = ""
         if is_best:
             best_eval = eval_loss
-            if checkpoint_path:
-                save_fuser(fuser, checkpoint_path, pair, num_spans, span_scheme)
-                saved_best = True
-                marker = "  (new best -> saved)"
         em_str = f" | em {em:.4f} f1 {f1:.4f}" if em is not None else ""
+        marker = " | best" if is_best else ""
         print(
             f"  [eval] opt_step {opt_step} | eval_loss {eval_loss:.4f}{em_str}{marker}",
             flush=True,
@@ -630,6 +669,47 @@ def train_fuser(
         logger.log(
             "eval", opt_step=opt_step, eval_loss=eval_loss, em=em, f1=f1, best=is_best
         )
+
+    def _finish_optimizer_step(accum_count: int, epoch: int) -> None:
+        """Apply one full or final-partial accumulated update."""
+
+        nonlocal opt_step, running, running_count, stop
+        if accum_count < grad_accum:
+            # Each micro-loss was divided by grad_accum. Renormalize a final
+            # partial group so its gradient is still the mean of that group.
+            correction = grad_accum / accum_count
+            for parameter in trainable:
+                if parameter.grad is not None:
+                    parameter.grad.mul_(correction)
+        if grad_clip:
+            torch.nn.utils.clip_grad_norm_(trainable, grad_clip)
+        optimizer.step()
+        scheduler.step()
+        optimizer.zero_grad()
+        opt_step += 1
+
+        if log_every and opt_step % log_every == 0:
+            train_loss = running / running_count
+            cur_lr = scheduler.get_last_lr()[0]
+            print(
+                f"epoch {epoch + 1}/{epochs} opt_step {opt_step} "
+                f"| train_loss {train_loss:.4f} "
+                f"| lr {cur_lr:.2e} | gate_tau {fuser.gate_tau:.3f}",
+                flush=True,
+            )
+            logger.log(
+                "train", epoch=epoch + 1, opt_step=opt_step,
+                train_loss=train_loss, lr=cur_lr, gate_tau=fuser.gate_tau,
+            )
+            running, running_count = 0.0, 0
+        if eval_every and opt_step % eval_every == 0:
+            _maybe_evaluate()
+        if checkpoint_path and save_every and opt_step % save_every == 0:
+            save_fuser(
+                fuser, checkpoint_path + ".latest", pair, num_spans, span_scheme
+            )
+        if opt_step >= total_steps:
+            stop = True
 
     optimizer.zero_grad()
     for epoch in range(max(1, epochs)):
@@ -645,52 +725,27 @@ def train_fuser(
             if loss is None:
                 continue
             (loss / grad_accum).backward()
-            micro += 1
+            accumulated += 1
             running += float(loss.item())
             running_count += 1
-            if micro % grad_accum != 0:
+            if accumulated < grad_accum:
                 continue
-
-            # One optimizer step == one effective batch of `grad_accum` examples.
-            if grad_clip:
-                torch.nn.utils.clip_grad_norm_(fuser.parameters(), grad_clip)
-            optimizer.step()
-            scheduler.step()
-            optimizer.zero_grad()
-            opt_step += 1
-
-            if log_every and opt_step % log_every == 0:
-                train_loss = running / running_count
-                cur_lr = scheduler.get_last_lr()[0]
-                print(
-                    f"epoch {epoch + 1}/{epochs} opt_step {opt_step} "
-                    f"| train_loss {train_loss:.4f} "
-                    f"| lr {cur_lr:.2e} | gate_tau {fuser.gate_tau:.3f}",
-                    flush=True,
-                )
-                logger.log(
-                    "train", epoch=epoch + 1, opt_step=opt_step,
-                    train_loss=train_loss, lr=cur_lr, gate_tau=fuser.gate_tau,
-                )
-                running, running_count = 0.0, 0
-            if eval_every and opt_step % eval_every == 0:
-                _maybe_eval_and_save()
-            if checkpoint_path and save_every and opt_step % save_every == 0:
-                save_fuser(fuser, checkpoint_path + ".latest", pair, num_spans, span_scheme)
-            if max_steps is not None and opt_step >= max_steps:
-                stop = True
+            _finish_optimizer_step(accumulated, epoch)
+            accumulated = 0
+            if stop:
                 break
+        if accumulated and not stop:
+            _finish_optimizer_step(accumulated, epoch)
+            accumulated = 0
         # End-of-epoch validation.
-        _maybe_eval_and_save()
+        _maybe_evaluate()
         if stop:
             break
 
-    # Persist: best already saved when eval was used; otherwise save the final fuser.
-    if checkpoint_path and not saved_best:
+    # Appendix E.2 evaluates the final one-epoch checkpoint.
+    if checkpoint_path:
         save_fuser(fuser, checkpoint_path, pair, num_spans, span_scheme)
         print(f"Saved fuser checkpoint -> {checkpoint_path}")
-    elif checkpoint_path:
-        print(f"Best fuser checkpoint (eval_loss {best_eval:.4f}) -> {checkpoint_path}")
 
     logger.log(
         "end", opt_step=opt_step,

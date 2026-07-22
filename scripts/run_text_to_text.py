@@ -5,7 +5,7 @@ Example (cross-context HotpotQA-bridge):
     python scripts/prepare_hotpotqa_bridge.py --num-examples 50
     python scripts/run_text_to_text.py \
         --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
-        --sharer-model unsloth/Llama-3.2-1B-Instruct \
+        --sharer-model unsloth/Llama-3.2-3B-Instruct \
         --receiver-model Qwen/Qwen3-0.6B \
         --output-dir results/t2t_hotpotqa_bridge
 

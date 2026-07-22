@@ -1,7 +1,7 @@
 """XKV dual-cache attention translator.
 
 Both caches are reduced directly from ``N -> k`` by vectorized learned-query
-attention. Production defaults select ``k=1/2/3/4`` for 0.6B/1B/4B/8B Receivers
+attention. Production defaults select ``k=1/2/3/4`` for 0.6B/1B/3B/8B Receivers
 and one translation block for every Receiver.
 Pool queries use the v9 Kaiming-normal x0.02 initialization.
 A learned linear map aligns the Sharer layer axis to the Receiver layer count,
@@ -46,7 +46,7 @@ def _safe_num_heads(d_model: int, num_heads: int) -> int:
 
 
 def _default_pool_slots(receiver_model: str) -> int:
-    """Receiver-size default: 0.6B/1B/4B/8B -> 1/2/3/4 slots."""
+    """Receiver-size default: 0.6B/1B/3B/8B -> 1/2/3/4 slots."""
 
     tokens = str(receiver_model).lower().replace("/", "-").replace("_", "-").split("-")
     for size, slots in (("0.6b", 1), ("1b", 2), ("3b", 3), ("4b", 3), ("8b", 4)):

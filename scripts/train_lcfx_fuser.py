@@ -43,13 +43,14 @@ def main() -> None:
     # Defaults follow the LCF-X paper. On a smaller GPU, lower --batch-size and
     # raise --grad-accum to keep the effective batch (B*A) at 256 (see README).
     parser.add_argument("--bottleneck-dim", type=int, default=128, help="Latent dim (paper: 128)")
+    parser.add_argument("--dropout", type=float, default=0.1, help="Projector MLP dropout (paper: 0.1)")
     parser.add_argument(
         "--span-scheme",
         choices=["paragraphs", "fixed"],
         default="paragraphs",
         help=(
-            "Pooling span partition: 'paragraphs' uses the sharer text's blank-line "
-            "blocks (paper: HotpotQA's 5-paragraph structure => P=5 in training), "
+            "Pooling span partition: 'paragraphs' uses raw evidence paragraphs "
+            "(paper: HotpotQA's 5-paragraph structure => P=5 in training), "
             "'fixed' uses --num-spans near-equal token chunks"
         ),
     )
@@ -57,7 +58,12 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--batch-size", type=int, default=16, help="Per-step micro-batch (paper: 16)")
     parser.add_argument("--grad-accum", type=int, default=16, help="Micro-batches per optimizer step (paper: 16 -> eff. batch 256)")
-    parser.add_argument("--warmup", type=int, default=200, help="Linear LR warmup steps (paper: 200)")
+    parser.add_argument(
+        "--warmup",
+        type=int,
+        default=None,
+        help="Linear LR warmup steps (default: round(10%% of resolved optimizer steps))",
+    )
     parser.add_argument("--max-steps", type=int, default=None, help="Cap on optimizer steps")
     parser.add_argument(
         "--max-train-examples",
@@ -103,6 +109,7 @@ def main() -> None:
 
     import json
     import random
+    import torch
 
     from methods.lcfx import LCFXFuser, load_lcfx_pair, train_fuser
 
@@ -136,11 +143,15 @@ def main() -> None:
     pair = load_lcfx_pair(
         args.sharer_model, args.receiver_model, device=args.device, dtype=args.dtype
     )
+    # Seed before constructing trainable modules. train_fuser seeds again before
+    # stochastic training operations such as dropout and Gumbel gates.
+    torch.manual_seed(args.seed)
     fuser = LCFXFuser.from_specs(
         pair.sharer_spec,
         pair.receiver_spec,
         bottleneck_dim=args.bottleneck_dim,
-        zero_init=True,
+        dropout=args.dropout,
+        zero_init=False,
     ).to(pair.device)
 
     train_fuser(

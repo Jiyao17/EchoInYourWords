@@ -22,7 +22,7 @@ the fastest value of each independently; the component comes from
 ITEM=datasets: one overview table across every known dataset (DATASET is
 ignored) with train/val split sizes (counted from data/tasks/*.jsonl) and the
 single-model oracle EM+F1 (one model sees ALL evidence, no split) for a
-representative 1B/4B/8B model, read from results/single/<dataset>/<model>/metrics.json.
+representative 1B/3B/8B model, read from results/single/<dataset>/<model>/metrics.json.
 
 In every mode, any missing method/checkpoint/result is left empty rather than
 erroring. Every mode also appends a second table (same grid, same cell
@@ -45,8 +45,8 @@ TASKS_DIR = os.path.join(ROOT_DIR, "data", "tasks")
 # Mirrors PRIMARY_MODELS in the Makefile (3x3 grid by default).
 PRIMARY_MODELS = [
     "Qwen/Qwen3-0.6B",
-    "unsloth/Llama-3.2-1B-Instruct",
-    "unsloth/gemma-3-4b-it",
+    "unsloth/gemma-3-1b-it",
+    "unsloth/Llama-3.2-3B-Instruct",
 ]
 # Opt-in large tier, appended to the grid by --extra-models (Makefile:
 # EXTRA_MODELS=TRUE) -- mirrors EXTRA_MODELS in scripts/run_sweep.py.
@@ -67,8 +67,8 @@ ALL_DATASETS = [
 # Representative sizes drawn from PRIMARY_MODELS, used for the ITEM=datasets
 # "typical score" columns (single-model oracle: one model, all evidence).
 SIZE_MODELS = [
-    ("1B", "unsloth/Llama-3.2-1B-Instruct"),
-    ("4B", "unsloth/gemma-3-4b-it"),
+    ("1B", "unsloth/gemma-3-1b-it"),
+    ("3B", "unsloth/Llama-3.2-3B-Instruct"),
     ("8B", "mistralai/Ministral-8B-Instruct-2410"),
 ]
 

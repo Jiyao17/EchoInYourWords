@@ -77,13 +77,13 @@ Per-Receiver-layer flow. **Bold** = the LCF-X-specific step.
    `2·H_s·D_s + 2·H_r·D_r` — the paper's own shared-context pair is asymmetric,
    joint width 2304) → `z = W_down x` → **2-layer MLP** (intermediate `4d`) →
    **input-dependent per-head gates** `α_i = σ(W_gate z)` (from the full latent)
-   → **separate per-layer up-projections** `Δ_i = W_up^i z` (always emitting
+   → latent split `z → (z_K, z_V)`, each `d/2` → **separate per-layer
+   up-projections** `Δ_i = W_up^i z_i` (always emitting
    Receiver geometry) → **per-layer per-type gate** `g_i` (`i ∈ {K,V}`,
    Gumbel-sigmoid in training, **hard `{0,1}` at inference**). The paper's prose
-   describes a latent split `z → (z_K, z_V)` feeding the up-projections, but its
-   own reported parameter counts (693K/layer for LCF-128, 25.87M for LCF-X) only
-   reproduce with the **full** `d`-dim latent feeding each `W_up^i`
-   (693,010/layer exactly); we match the reported counts.
+   and equations specify this split. Its reported parameter counts
+   (693K/layer for LCF-128, 25.87M for LCF-X) instead imply full-`d` inputs and
+   are internally inconsistent; the implementation follows the equations.
 4. **Fuse:** gated residual add into the Receiver cache: `R_i' = R_i + g_i·(α_i⊙Δ_i)`.
 5. **Generate:** the Receiver answers from its own context + fused cache; score
    free-form with EM/F1.
@@ -128,8 +128,8 @@ touch torch (deferred imports).
 | `schema.py` | `LCFXExample` — cross-context example (`id, question, choices, answer, sharer_context, receiver_context, metadata`). Mirrors `T2TExample`. |
 | `prompts.py` | Build the Sharer encode prompt (its context) and the Receiver answer prompt (its context + fused summary); reuse T2T answer formatting. |
 | `cache.py` | `extract_kv` (raw per-layer KV) + `add_residual_inplace` (gated residual add). All pooling/alignment lives in the fuser. Targets transformers-5 `DynamicCache` (`.layers[i].keys/.values`). |
-| `fuser.py` | `LCFXFuser(nn.Module)` — `align` (**per-layer 2-stage pooling**: within-span `N_S→P` with `q_base^(l)`, then cross-span `P→1` with `q_layer^(l)` over that layer's own span summaries; Sharer geometry throughout, layer-aligned 1:1, `layer_map` linear bridge only when `L_s≠L_r`) + `project` (the paper's **per-layer** joint KV bottleneck on `[S* (Sharer geom, broadcast) ; R (Receiver geom)]`: `W_down` (input width `2·H_s·D_s + 2·H_r·D_r`) → 2-layer MLP → input-dependent per-head gates `α(z)` → separate `W_up^K/W_up^V` from the full latent (always Receiver geometry) → per-layer per-type gate `g_K/g_V`, Gumbel-sigmoid in training / hard `{0,1}` at eval). `zero_init` zeroes the up-projections (Δ=0 ⇒ residual 0; gates stay nonzero so up still gets gradient). |
-| `spans.py` | `paragraph_span_starts(tok, text)` — token start offsets of the sharer text's `\n\n` blocks (the paper's natural-paragraph span scheme; E.1 trains with HotpotQA's 5-paragraph structure). |
+| `fuser.py` | `LCFXFuser(nn.Module)` — `align` (**per-layer 2-stage pooling**: within-span `N_S→P` with `q_base^(l)`, then cross-span `P→1` with `q_layer^(l)` over that layer's own span summaries; Sharer geometry throughout, layer-aligned 1:1, `layer_map` linear bridge only when `L_s≠L_r`) + `project` (the paper's **per-layer** joint KV bottleneck on `[S* (Sharer geom, broadcast) ; R (Receiver geom)]`: `W_down` (input width `2·H_s·D_s + 2·H_r·D_r`) → 2-layer MLP with dropout → split `z_K/z_V` → input-dependent per-head gates `α(z)` → separate `W_up^K(z_K)/W_up^V(z_V)` (always Receiver geometry) → per-layer per-type gate `g_K/g_V`, Gumbel-sigmoid in training / hard `{0,1}` at eval). `zero_init` remains an opt-in plumbing diagnostic only; training uses the paper's Kaiming ×0.06 up-projection initialization. |
+| `spans.py` | `paragraph_span_starts(tok, text, context)` — token start offsets of raw evidence paragraphs, excluding prompt/question blocks (E.1 trains with HotpotQA's 5-paragraph structure). |
 | `model.py` | `load_lcfx_pair(...)` (frozen Sharer + Receiver, deferred torch), `sharer_summary` (encode → raw KV), `decode_receiver` (greedy; computes the residual from the prefilled Receiver cache via a `residual_fn` callback, then injects), `check_pair_compatible`. |
 | `runner.py` | `run_lcfx_example` (encode→align[2-stage pool]→project[with Receiver cache]→fuse→generate) and `run_receiver_only_example` (no fusion, for the equality check); `LCFXResult` (`method="lcf_x"`). |
 | `io.py` | Mirror of T2T `io.py` for `LCFXResult`; same four output files; uniform latency contract `sharer_ms` (encode), `fuser_ms` (align[pool]+project), `receiver_ms` (generate), `total_ms`. |

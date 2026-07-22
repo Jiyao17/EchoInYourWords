@@ -14,7 +14,7 @@ Example (cross-context HotpotQA-bridge, trained translator):
 
     python scripts/run_eiyw.py \
         --dataset data/tasks/hotpotqa_bridge_val.jsonl \
-        --sharer-model unsloth/Llama-3.2-1B-Instruct \
+        --sharer-model unsloth/Llama-3.2-3B-Instruct \
         --receiver-model Qwen/Qwen3-0.6B \
         --translator-checkpoint data/checkpoints/eiyw/translator.pt \
         --output-dir results/eiyw_hotpotqa

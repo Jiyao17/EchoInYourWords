@@ -11,7 +11,7 @@ token. Only the files transformers actually loads are fetched — duplicate
 ``consolidated.safetensors``, raw ``original/`` checkpoints, ``*.pth`` and
 ``*.gguf`` are skipped.
 
-    python scripts/download_model.py --model unsloth/gemma-3-4b-it
+    python scripts/download_model.py --model unsloth/gemma-3-1b-it
 """
 
 from __future__ import annotations
@@ -192,7 +192,7 @@ def download_from_modelscope(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--model", required=True, help="HF model id, e.g. unsloth/gemma-3-4b-it"
+        "--model", required=True, help="HF model id, e.g. unsloth/gemma-3-1b-it"
     )
     parser.add_argument(
         "--max-attempts",

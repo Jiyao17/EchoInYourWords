@@ -233,4 +233,7 @@ APIKey.txt
 /data/*
 
 # Run outputs.
-/results/*
+/results/
+# /results/*.tsv
+# /results/*.jsonl
+# /results/comparison/

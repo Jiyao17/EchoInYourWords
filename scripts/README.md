@@ -87,7 +87,7 @@ context + that message.
 ```bash
 python scripts/run_text_to_text.py \
   --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
-  --sharer-model unsloth/Llama-3.2-1B-Instruct \
+  --sharer-model unsloth/Llama-3.2-3B-Instruct \
   --receiver-model Qwen/Qwen3-0.6B \
   --output-dir results/t2t_hotpotqa_bridge
 ```
@@ -121,7 +121,7 @@ the method receiver prompts.
 ```bash
 python scripts/run_single_model.py \
   --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
-  --model unsloth/Llama-3.2-1B-Instruct \
+  --model unsloth/gemma-3-1b-it \
   --output-dir results/single_model
 ```
 
@@ -159,7 +159,8 @@ python scripts/run_lcfx.py \
 | `--fuser-checkpoint` | (none) | Trained fuser weights. **Omit → zero-init fuser.** |
 | `--allow-model-mismatch` | off | Load a checkpoint whose stamped Sharer/Receiver differ from the pair (otherwise a hard error). |
 | `--bottleneck-dim` | `128` | Joint KV bottleneck width (must match the checkpoint). |
-| `--span-scheme` | `paragraphs` | Span partition: natural blank-line blocks (paper's scheme) or `fixed` token chunks. Any trained checkpoint accepts either (paper E.4). |
+| `--dropout` | `0.1` | Two-layer bottleneck-MLP dropout (must match the checkpoint). |
+| `--span-scheme` | `paragraphs` | Span partition: raw evidence paragraphs (prompt/question blocks do not add spans) or `fixed` token chunks. Any trained checkpoint accepts either (paper E.4). |
 | `--num-spans` | `5` | Span count for `--span-scheme fixed`. |
 | `--max-new-tokens` | `64` | Receiver answer budget. |
 
@@ -177,6 +178,11 @@ python scripts/run_lcfx.py --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
 
 Frozen Sharer/Receiver; only the fuser learns (teacher-forced next-token CE on the
 gold answer, with the Sharer summary fused into the Receiver's prompt cache).
+Training uses the paper's nonzero Kaiming-scaled up-projector initialization,
+the explicit `z -> (z_K, z_V)` (`d/2` each) latent split, MLP dropout 0.1,
+per-layer K/V Gumbel gates, and the final one-epoch checkpoint. Warmup defaults
+to 10% of the exact resolved optimizer-step count; `--warmup N` is an explicit
+override.
 
 ```bash
 python scripts/train_lcfx_fuser.py \
@@ -277,13 +283,13 @@ for the original receiver-anchored design.
 # Train the translator, then evaluate it.
 python scripts/train_eiyw.py \
   --train-data data/tasks/hotpotqa_bridge_train.jsonl \
-  --sharer-model unsloth/Llama-3.2-1B-Instruct --receiver-model Qwen/Qwen3-0.6B \
+  --sharer-model unsloth/Llama-3.2-3B-Instruct --receiver-model Qwen/Qwen3-0.6B \
   --d-model 512 --queries-per-layer 1 --num-blocks 1 \
   --checkpoint-out data/checkpoints/eiyw/translator.pt
 
 python scripts/run_eiyw.py \
   --dataset data/tasks/hotpotqa_bridge_val.jsonl \
-  --sharer-model unsloth/Llama-3.2-1B-Instruct --receiver-model Qwen/Qwen3-0.6B \
+  --sharer-model unsloth/Llama-3.2-3B-Instruct --receiver-model Qwen/Qwen3-0.6B \
   --translator-checkpoint data/checkpoints/eiyw/translator.pt \
   --output-dir results/eiyw_trained
 ```
@@ -333,13 +339,13 @@ prompt embeddings.
 # Train the translator, then evaluate it.
 python scripts/train_kvtok.py \
   --train-data data/tasks/hotpotqa_bridge_train.jsonl \
-  --sharer-model unsloth/Llama-3.2-1B-Instruct --receiver-model Qwen/Qwen3-0.6B \
+  --sharer-model unsloth/Llama-3.2-3B-Instruct --receiver-model Qwen/Qwen3-0.6B \
   --num-spans 5 --num-tokens 8 --d-model 512 --num-heads 8 \
   --checkpoint-out data/checkpoints/kvtok/translator.pt
 
 python scripts/run_kvtok.py \
   --dataset data/tasks/hotpotqa_bridge_val.jsonl \
-  --sharer-model unsloth/Llama-3.2-1B-Instruct --receiver-model Qwen/Qwen3-0.6B \
+  --sharer-model unsloth/Llama-3.2-3B-Instruct --receiver-model Qwen/Qwen3-0.6B \
   --num-spans 5 --num-tokens 8 --d-model 512 --num-heads 8 \
   --translator-checkpoint data/checkpoints/kvtok/translator.pt \
   --output-dir results/kvtok_trained
@@ -376,14 +382,15 @@ same `MAX_TRAIN` / `MAX_STEPS` / `BATCH_SIZE` / `GRAD_ACCUM` knobs work via
 XKV runs the frozen Sharer and Receiver prefix once. Both caches use the same
 vectorized learned-query attention pool, reducing raw positions directly from
 `N → k` per layer/head with no intermediate spans. The pool default is Receiver
-tiered (`k=1/2/3/4` for 0.6B/1B/4B/8B), while translation depth defaults to `n=1`
+tiered (`k=1/2/3/4` for 0.6B/1B/3B/8B), while translation depth defaults to `n=1`
 for every Receiver; `--pool-k` and `--num-blocks` override them. After the learned
 Sharer layer-axis map when `L_s != L_r`, the joint bottleneck input has width
 `2*k*(H_s*D_s + H_r*D_r)` and its output remains `[B,L_r,d]`. Raw Receiver K/V
 positions then query the translated layer memory through shared
 cross-attention. Two shared K/V up-projections produce distinct updates at
 different cache positions, scaled by learned per-head sigmoids. There is no
-stochastic layer/type gate. Pooling uses the v9 Kaiming-normal `x0.02` query
+stochastic layer/type gate. Pooling
+uses the v9 Kaiming-normal `x0.02` query
 initialization and has no learned temperature. Train events log normalized
 entropy and, for `k>1`, inter-slot map cosine for both sides at the existing `--log-every`
 cadence, without adding inference work.
@@ -393,14 +400,14 @@ full sweeps halve/double those values through the existing model-size tiers.
 ```bash
 python scripts/train_xkv.py \
   --train-data data/tasks/hotpotqa_bridge_train.jsonl \
-  --sharer-model unsloth/Llama-3.2-1B-Instruct \
+  --sharer-model unsloth/Llama-3.2-3B-Instruct \
   --receiver-model Qwen/Qwen3-0.6B \
   --d-model eighth \
   --checkpoint-out data/checkpoints/xkv/translator.pt
 
 python scripts/run_xkv.py \
   --dataset data/tasks/hotpotqa_bridge_val.jsonl \
-  --sharer-model unsloth/Llama-3.2-1B-Instruct \
+  --sharer-model unsloth/Llama-3.2-3B-Instruct \
   --receiver-model Qwen/Qwen3-0.6B \
   --d-model eighth \
   --translator-checkpoint data/checkpoints/xkv/translator.pt \
@@ -432,7 +439,7 @@ After a run, the headline numbers are in `<output-dir>/metrics.json`:
 
 > The small smoke runs so far (Qwen3-0.6B, 10 examples) are for plumbing
 > validation only; report numbers from a larger sample and a stronger Receiver
-> (e.g. `unsloth/Llama-3.2-1B-Instruct`) over `--num-examples 200`+.
+> (e.g. `unsloth/Llama-3.2-3B-Instruct`) over `--num-examples 200`+.
 
 ---
 
