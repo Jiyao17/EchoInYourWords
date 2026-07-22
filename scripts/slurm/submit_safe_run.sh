@@ -27,6 +27,7 @@ SAFE_MODELS=(
 )
 SAFE_MODELS_STR="${SAFE_MODELS[*]}"
 LOG_DIR="${REPO_ROOT}/logs"
+DEPENDENCY="${DEPENDENCY:-${SBATCH_DEPENDENCY:-}}"
 
 usage() {
   cat <<'EOF'
@@ -49,6 +50,7 @@ Environment variables:
   CONCURRENCY_PER_GPU   default: 1
   RESUME                default: 0
   DRY_RUN               default: 0
+  DEPENDENCY            optional sbatch dependency, e.g. afterok:<jobid>
   METHOD                required for method / exp
   DATASET               required for method / exp
   DATASETS              optional for sweep, space-separated dataset list
@@ -80,6 +82,9 @@ sbatch_common_args() {
     "--mem=${MEM}"
     "--time=${TIME_LIMIT}"
   )
+  if [[ -n "${DEPENDENCY}" ]]; then
+    args+=("--dependency=${DEPENDENCY}")
+  fi
   printf '%s\n' "${args[@]}"
 }
 
