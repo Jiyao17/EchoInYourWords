@@ -11,8 +11,10 @@ cd "${REPO_ROOT}"
 : "${SAFE_MODELS:?SAFE_MODELS is required}"
 
 EXP_STAGE="${EXP_STAGE:-smoke}"
+PAIR_SCOPE="${PAIR_SCOPE:-all}"
 CONCURRENCY_PER_GPU="${CONCURRENCY_PER_GPU:-1}"
 RESUME="${RESUME:-0}"
+DRY_RUN="${DRY_RUN:-0}"
 
 source "${ENV_SCRIPT}"
 
@@ -24,6 +26,7 @@ echo "[exp] slurm_job_id=${SLURM_JOB_ID:-unset}"
 echo "[exp] slurm_job_name=${SLURM_JOB_NAME:-unset}"
 echo "[exp] log_file=${REPO_ROOT}/logs/${SLURM_JOB_NAME:-job}-${SLURM_JOB_ID:-manual}.out"
 echo "[exp] method=${METHOD} dataset=${DATASET} stage=${EXP_STAGE}"
+echo "[exp] pair_scope=${PAIR_SCOPE}"
 echo "[exp] safe_models=${SAFE_MODELS}"
 echo "[exp] cuda_visible_devices=${CUDA_VISIBLE_DEVICES:-unset}"
 echo "[exp] python=$(command -v python)"
@@ -33,6 +36,7 @@ CMD=(
   --dataset "${DATASET}"
   --method "${METHOD}"
   --stage "${EXP_STAGE}"
+  --pair-scope "${PAIR_SCOPE}"
   --concurrency-per-gpu "${CONCURRENCY_PER_GPU}"
 )
 
@@ -42,6 +46,10 @@ fi
 
 if [[ "${RESUME}" == "1" ]]; then
   CMD+=(--resume)
+fi
+
+if [[ "${DRY_RUN}" == "1" ]]; then
+  CMD+=(--dry-run)
 fi
 
 for model in ${SAFE_MODELS}; do

@@ -5,26 +5,26 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SLURM_DIR="${REPO_ROOT}/scripts/slurm"
 
 ENV_SCRIPT="${ENV_SCRIPT:-${SLURM_DIR}/hpg_env.sh}"
-PARTITION="${PARTITION:-hpg-turin}"
+PARTITION="${PARTITION:-hpg-b200}"
 ACCOUNT="${ACCOUNT:-}"
-TIME_LIMIT="${TIME_LIMIT:-24:00:00}"
-GRES="${GRES:-gpu:1}"
-CPUS="${CPUS:-8}"
-MEM="${MEM:-64G}"
+TIME_LIMIT="${TIME_LIMIT:-4-00:00:00}"
+GRES="${GRES:-gpu:b200:1}"
+CPUS="${CPUS:-16}"
+MEM="${MEM:-128G}"
 METHOD="${METHOD:-}"
 DATASET="${DATASET:-}"
+DATASETS="${DATASETS:-}"
 EXP_STAGE="${EXP_STAGE:-smoke}"
 CONCURRENCY_PER_GPU="${CONCURRENCY_PER_GPU:-1}"
 RESUME="${RESUME:-0}"
-INCLUDE_8B="${INCLUDE_8B:-0}"
+DRY_RUN="${DRY_RUN:-0}"
+PAIR_SCOPE="${PAIR_SCOPE:-all}"
 
 SAFE_MODELS=(
-  "unsloth/Llama-3.2-1B-Instruct"
-  "unsloth/gemma-3-4b-it"
+  "unsloth/gemma-3-1b-it"
+  "unsloth/Llama-3.2-3B-Instruct"
+  "mistralai/Ministral-8B-Instruct-2410"
 )
-if [[ "${INCLUDE_8B}" == "1" || "${INCLUDE_8B}" == "true" || "${INCLUDE_8B}" == "TRUE" ]]; then
-  SAFE_MODELS+=("mistralai/Ministral-8B-Instruct-2410")
-fi
 SAFE_MODELS_STR="${SAFE_MODELS[*]}"
 LOG_DIR="${REPO_ROOT}/logs"
 
@@ -38,18 +38,20 @@ Usage:
 
 Environment variables:
   ENV_SCRIPT            default: scripts/slurm/hpg_env.sh
-  PARTITION             default: hpg-turin
+  PARTITION             default: hpg-b200
   ACCOUNT               default: unset
-  TIME_LIMIT            default: 24:00:00
-  GRES                  default: gpu:1
-  CPUS                  default: 8
-  MEM                   default: 64G
-  INCLUDE_8B            default: 0
+  TIME_LIMIT            default: 4-00:00:00
+  GRES                  default: gpu:b200:1
+  CPUS                  default: 16
+  MEM                   default: 128G
   EXP_STAGE             default: smoke
+  PAIR_SCOPE            default: all
   CONCURRENCY_PER_GPU   default: 1
   RESUME                default: 0
+  DRY_RUN               default: 0
   METHOD                required for method / exp
   DATASET               required for method / exp
+  DATASETS              optional for sweep, space-separated dataset list
 
 Examples:
   scripts/slurm/submit_safe_run.sh prepare
@@ -111,7 +113,7 @@ main() {
   case "${mode}" in
     prepare)
       submit "${SLURM_DIR}/run_safe_prepare.slurm" \
-        "ALL,REPO_ROOT=${REPO_ROOT},ENV_SCRIPT=${ENV_SCRIPT},SAFE_MODELS=${SAFE_MODELS_STR}"
+        "ALL,REPO_ROOT=${REPO_ROOT},ENV_SCRIPT=${ENV_SCRIPT},DATASETS=${DATASETS},SAFE_MODELS=${SAFE_MODELS_STR}"
       ;;
     method)
       if [[ -z "${METHOD}" || -z "${DATASET}" ]]; then
@@ -127,11 +129,11 @@ main() {
         exit 1
       fi
       submit "${SLURM_DIR}/run_safe_exp.slurm" \
-        "ALL,REPO_ROOT=${REPO_ROOT},ENV_SCRIPT=${ENV_SCRIPT},METHOD=${METHOD},DATASET=${DATASET},EXP_STAGE=${EXP_STAGE},CONCURRENCY_PER_GPU=${CONCURRENCY_PER_GPU},RESUME=${RESUME},SAFE_MODELS=${SAFE_MODELS_STR}"
+        "ALL,REPO_ROOT=${REPO_ROOT},ENV_SCRIPT=${ENV_SCRIPT},METHOD=${METHOD},DATASET=${DATASET},EXP_STAGE=${EXP_STAGE},PAIR_SCOPE=${PAIR_SCOPE},CONCURRENCY_PER_GPU=${CONCURRENCY_PER_GPU},RESUME=${RESUME},DRY_RUN=${DRY_RUN},SAFE_MODELS=${SAFE_MODELS_STR}"
       ;;
     sweep)
       submit "${SLURM_DIR}/run_safe_sweep.slurm" \
-        "ALL,REPO_ROOT=${REPO_ROOT},ENV_SCRIPT=${ENV_SCRIPT},EXP_STAGE=${EXP_STAGE},CONCURRENCY_PER_GPU=${CONCURRENCY_PER_GPU},RESUME=${RESUME},METHOD=${METHOD},SAFE_MODELS=${SAFE_MODELS_STR}"
+        "ALL,REPO_ROOT=${REPO_ROOT},ENV_SCRIPT=${ENV_SCRIPT},EXP_STAGE=${EXP_STAGE},PAIR_SCOPE=${PAIR_SCOPE},CONCURRENCY_PER_GPU=${CONCURRENCY_PER_GPU},RESUME=${RESUME},DRY_RUN=${DRY_RUN},METHOD=${METHOD},DATASETS=${DATASETS},SAFE_MODELS=${SAFE_MODELS_STR}"
       ;;
     *)
       echo "Unknown mode: ${mode}" >&2

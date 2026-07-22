@@ -21,18 +21,20 @@ to the real checkout instead of treating `/var/spool` as the project root.
 - `run_safe_exp.slurm`: run one sweep cell family on one dataset with safe models only
 - `run_safe_sweep.slurm`: run the multi-dataset sweep with safe models only
 - `../../Makefile.hpg`: optional submit wrapper if you prefer `make`
+- `submit_all_nonqwen_full.sh`: submit one Slurm job per method/dataset for the
+  current HPG target datasets (`musique`, `2wikimultihop`)
 
 ## Default safe models
 
 By default, all wrappers exclude Qwen and use only:
 
-- `unsloth/Llama-3.2-1B-Instruct`
-- `unsloth/gemma-3-4b-it`
-
-If you want to also include the non-Qwen 8B model, set `INCLUDE_8B=1` when using
-`Makefile.hpg`. That adds:
-
+- `unsloth/gemma-3-1b-it`
+- `unsloth/Llama-3.2-3B-Instruct`
 - `mistralai/Ministral-8B-Instruct-2410`
+
+The wrappers pass `--pair-scope all` plus explicit `--sharer/--receiver`
+filters, giving the non-Qwen 3x3 Gemma/Llama/Mistral grid. This intentionally
+excludes Qwen even though the upstream `make exp` defaults include it.
 
 ## First-time setup
 
@@ -63,7 +65,7 @@ bash scripts/slurm/check_echo_env.sh
 3. Submit prepare first:
 
 ```bash
-bash scripts/slurm/submit_safe_run.sh prepare
+DATASETS="musique 2wikimultihop" bash scripts/slurm/submit_safe_run.sh prepare
 ```
 
 ## Suggested run order
@@ -71,27 +73,27 @@ bash scripts/slurm/submit_safe_run.sh prepare
 ### 1. Prepare data and safe models
 
 ```bash
-bash scripts/slurm/submit_safe_run.sh prepare
+DATASETS="musique 2wikimultihop" bash scripts/slurm/submit_safe_run.sh prepare
 ```
 
 ### 2. Smoke test one dataset
 
 ```bash
-METHOD=t2t DATASET=hotpotqa_bridge bash scripts/slurm/submit_safe_run.sh exp
-METHOD=lcfx DATASET=hotpotqa_bridge bash scripts/slurm/submit_safe_run.sh exp
-METHOD=xkv DATASET=hotpotqa_bridge bash scripts/slurm/submit_safe_run.sh exp
+METHOD=t2t DATASET=musique bash scripts/slurm/submit_safe_run.sh exp
+METHOD=lcfx DATASET=musique bash scripts/slurm/submit_safe_run.sh exp
+METHOD=xkv DATASET=musique bash scripts/slurm/submit_safe_run.sh exp
 ```
 
 ### 3. Full run one dataset
 
 ```bash
-METHOD=t2t DATASET=hotpotqa_bridge EXP_STAGE=full bash scripts/slurm/submit_safe_run.sh exp
+METHOD=t2t DATASET=musique EXP_STAGE=full bash scripts/slurm/submit_safe_run.sh exp
 ```
 
 ### 4. Full multi-dataset sweep
 
 ```bash
-EXP_STAGE=full bash scripts/slurm/submit_safe_run.sh sweep
+EXP_STAGE=full DATASETS="musique 2wikimultihop" bash scripts/slurm/submit_safe_run.sh sweep
 ```
 
 ## Preferred usage
@@ -109,8 +111,8 @@ Examples:
 bash scripts/slurm/submit_safe_run.sh prepare
 METHOD=lcfx DATASET=ropes bash scripts/slurm/submit_safe_run.sh method
 METHOD=t2t DATASET=musique EXP_STAGE=full bash scripts/slurm/submit_safe_run.sh exp
-EXP_STAGE=full RESUME=1 bash scripts/slurm/submit_safe_run.sh sweep
-INCLUDE_8B=1 EXP_STAGE=full bash scripts/slurm/submit_safe_run.sh sweep
+EXP_STAGE=full RESUME=1 DATASETS="musique 2wikimultihop" bash scripts/slurm/submit_safe_run.sh sweep
+EXP_STAGE=full RESUME=1 bash scripts/slurm/submit_all_nonqwen_full.sh
 ```
 
 ## Why not use the repository defaults directly?
@@ -127,5 +129,5 @@ These wrappers solve that by always passing explicit non-Qwen model filters.
 
 ## Results and upload
 
-Current `.gitignore` still contains `/results/*`, so if you later need git to
-track run outputs, remove or narrow that ignore rule before committing results.
+Current `.gitignore` allows `results/` to be tracked for HPG experiment upload
+and ignores Slurm stdout logs under `logs/`.
