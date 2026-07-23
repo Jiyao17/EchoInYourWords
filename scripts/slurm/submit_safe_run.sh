@@ -11,6 +11,11 @@ TIME_LIMIT="${TIME_LIMIT:-4-00:00:00}"
 GRES="${GRES:-gpu:b200:1}"
 CPUS="${CPUS:-16}"
 MEM="${MEM:-128G}"
+PREPARE_PARTITION="${PREPARE_PARTITION:-hpg-default}"
+PREPARE_TIME_LIMIT="${PREPARE_TIME_LIMIT:-08:00:00}"
+PREPARE_GRES="${PREPARE_GRES:-}"
+PREPARE_CPUS="${PREPARE_CPUS:-4}"
+PREPARE_MEM="${PREPARE_MEM:-32G}"
 METHOD="${METHOD:-}"
 DATASET="${DATASET:-}"
 DATASETS="${DATASETS:-}"
@@ -54,6 +59,11 @@ Environment variables:
   METHOD                required for method / exp
   DATASET               required for method / exp
   DATASETS              optional for sweep, space-separated dataset list
+  PREPARE_PARTITION     default: hpg-default
+  PREPARE_GRES          default: unset (CPU-only prepare)
+  PREPARE_CPUS          default: 4
+  PREPARE_MEM           default: 32G
+  PREPARE_TIME_LIMIT    default: 08:00:00
 
 Examples:
   scripts/slurm/submit_safe_run.sh prepare
@@ -77,11 +87,13 @@ sbatch_common_args() {
   fi
   args+=(
     "--partition=${PARTITION}"
-    "--gres=${GRES}"
     "--cpus-per-task=${CPUS}"
     "--mem=${MEM}"
     "--time=${TIME_LIMIT}"
   )
+  if [[ -n "${GRES}" ]]; then
+    args+=("--gres=${GRES}")
+  fi
   if [[ -n "${DEPENDENCY}" ]]; then
     args+=("--dependency=${DEPENDENCY}")
   fi
@@ -117,6 +129,11 @@ main() {
 
   case "${mode}" in
     prepare)
+      PARTITION="${PREPARE_PARTITION}"
+      TIME_LIMIT="${PREPARE_TIME_LIMIT}"
+      GRES="${PREPARE_GRES}"
+      CPUS="${PREPARE_CPUS}"
+      MEM="${PREPARE_MEM}"
       submit "${SLURM_DIR}/run_safe_prepare.slurm" \
         "ALL,REPO_ROOT=${REPO_ROOT},ENV_SCRIPT=${ENV_SCRIPT},DATASETS=${DATASETS},SAFE_MODELS=${SAFE_MODELS_STR}"
       ;;
