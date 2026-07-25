@@ -16,23 +16,19 @@ from __future__ import annotations
 from typing import Any
 
 
-def paragraph_span_starts(
-    tokenizer: Any,
+def paragraph_span_starts_from_offsets(
     text: str,
+    offsets: list[tuple[int, int]],
     context: str | None = None,
 ) -> list[int]:
-    """Token starts for natural evidence paragraphs in a formatted prompt.
+    """Map natural paragraph starts to an already-tokenized text.
 
-    Tokenizes with the same arguments the sharer encode uses (defaults, so the
-    offsets index the same id sequence) and returns the first token at-or-after
-    each paragraph start. When ``context`` is provided, question/choice blocks
-    in ``text`` do not create spans; the first span remains anchored at token 0
-    so the prompt prefix is retained. Consecutive blank lines and blocks that
-    vanish into a single token collapse naturally. Returns ``[0]`` for
-    unstructured text.
+    This is the offset-level form of :func:`paragraph_span_starts`.  It lets
+    callers use the exact same paragraph policy with token sequences produced
+    by a chat template, whose rendered text must be tokenized with
+    ``add_special_tokens=False``.
     """
 
-    offsets = tokenizer(text, return_offsets_mapping=True)["offset_mapping"]
     if not offsets:
         return [0]
 
@@ -66,4 +62,24 @@ def paragraph_span_starts(
     return sorted(set(starts))
 
 
-__all__ = ["paragraph_span_starts"]
+def paragraph_span_starts(
+    tokenizer: Any,
+    text: str,
+    context: str | None = None,
+) -> list[int]:
+    """Token starts for natural evidence paragraphs in a formatted prompt.
+
+    Tokenizes with the same arguments the sharer encode uses (defaults, so the
+    offsets index the same id sequence) and returns the first token at-or-after
+    each paragraph start. When ``context`` is provided, question/choice blocks
+    in ``text`` do not create spans; the first span remains anchored at token 0
+    so the prompt prefix is retained. Consecutive blank lines and blocks that
+    vanish into a single token collapse naturally. Returns ``[0]`` for
+    unstructured text.
+    """
+
+    offsets = tokenizer(text, return_offsets_mapping=True)["offset_mapping"]
+    return paragraph_span_starts_from_offsets(text, offsets, context)
+
+
+__all__ = ["paragraph_span_starts", "paragraph_span_starts_from_offsets"]

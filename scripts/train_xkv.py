@@ -17,6 +17,8 @@ from scripts._hf_cache import configure_hf_cache  # noqa: E402
 
 configure_hf_cache()
 
+from methods.xkv.translator import XKV_VARIANTS  # noqa: E402
+
 
 def _read_jsonl(path: Path) -> list:
     with path.open("r", encoding="utf-8") as handle:
@@ -45,6 +47,7 @@ def main() -> None:
     )
     parser.add_argument("--num-heads", type=int, default=8)
     parser.add_argument("--dropout", type=float, default=0.1)
+    parser.add_argument("--variant", choices=XKV_VARIANTS, default="xkv")
     parser.add_argument(
         "--pool-k",
         "--pool-slots",
@@ -54,6 +57,15 @@ def main() -> None:
         help=(
             "Learned summaries per layer/head/side. Default follows Receiver "
             "size: 0.6B=1, 1B=2, 3B=3, 8B=4."
+        ),
+    )
+    parser.add_argument(
+        "--pool-spans",
+        type=int,
+        default=5,
+        help=(
+            "Fallback fixed spans P for exact xkv-lcfx-pooling N->P->1; "
+            "natural evidence paragraphs are used when available."
         ),
     )
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -106,6 +118,14 @@ def main() -> None:
         device=args.device,
         dtype=args.dtype,
     )
+    if args.variant == "xkv-lcfx-pooling":
+        # Only corrected LCFP uses the new controlled initialization path.
+        # Full XKV, −RP, and −RX remain on their finalized v11 behavior.
+        import torch
+
+        torch.manual_seed(args.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(args.seed)
     translator = XKVTranslator.from_specs(
         pair.sharer_spec,
         pair.receiver_spec,
@@ -114,6 +134,8 @@ def main() -> None:
         num_heads=args.num_heads,
         dropout=args.dropout,
         pool_slots=args.pool_slots,
+        variant=args.variant,
+        pool_spans=args.pool_spans,
         zero_init=True,
     ).to(pair.device)
     train_translator(

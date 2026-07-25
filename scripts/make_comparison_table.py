@@ -1,6 +1,10 @@
 #!/usr/bin/env python
 """Build comparison tables for the LCF-X/XKV/T2T experiments.
 
+``--study ablation`` keeps the same Sharer x Receiver Markdown layouts but
+shows only Full XKV and the no-Receiver-pooling, no-Receiver-cross-attention,
+and exact LCF-X-pooling variants.
+
 ITEM=scores (default): Sharer x Receiver grid of lcfx / xkv / t2t
 EM+F1 for one DATASET, read from
 results/<method>/<dataset>/<sharer>/<receiver>/metrics.json
@@ -63,6 +67,7 @@ ALL_DATASETS = [
     "ropes",
     "strategyqa",
 ]
+CLASSIFICATION_DATASETS = {"qasc", "strategyqa"}
 
 # Representative sizes drawn from PRIMARY_MODELS, used for the ITEM=datasets
 # "typical score" columns (single-model oracle: one model, all evidence).
@@ -81,6 +86,13 @@ TRAINED_METHODS = [
     ("lcfx", "L"),
     ("xkv", "X"),
 ]
+ABLATION_METHODS = [
+    ("xkv", "F"),
+    ("xkv-no-receiver-pooling", "−RP"),
+    ("xkv-no-receiver-xattn", "−RX"),
+    ("xkv-lcfx-pooling", "LCFP"),
+]
+STUDY = "comparison"
 
 # LCF-X and XKV checkpoint/result dirs nest a hyperparameter path under the
 # pair directory. Candidates are tried in order — current defaults first, then
@@ -158,10 +170,17 @@ def find_method_file(method, base, filename, receiver):
         path = os.path.join(base, selected, filename)
         return path if os.path.isfile(path) else None
     preferred = PREFERRED_HP.get(method)
-    if method == "xkv":
-        receiver_default = (
-            f"dh8_n1_h8_do0p1_k{default_xkv_receiver_k(receiver)}_v11"
-        )
+    if method.startswith("xkv"):
+        if method == "xkv-lcfx-pooling":
+            receiver_default = "dh8_n1_h8_do0p1_k1_sp5_v12"
+        elif method == "xkv":
+            receiver_default = (
+                f"dh8_n1_h8_do0p1_k{default_xkv_receiver_k(receiver)}_v11"
+            )
+        else:
+            receiver_default = (
+                f"dh8_n1_h8_do0p1_k{default_xkv_receiver_k(receiver)}_v11"
+            )
         preferred = [receiver_default] + [
             candidate for candidate in preferred or [] if candidate != receiver_default
         ]
@@ -270,7 +289,7 @@ def cell_latency_text(dataset, sharer, receiver):
         (
             component
             for method, _, _, component in results
-            if method in ("lcfx", "xkv") and component is not None
+            if method in {name for name, _ in TRAINED_METHODS} and component is not None
         ),
         default=None,
     )
@@ -281,7 +300,10 @@ def cell_latency_text(dataset, sharer, receiver):
             lines.append(label)
         else:
             total_text = fmt_ms(total_ms, total_ms == best_total)
-            if method in ("lcfx", "xkv") and component_ms is not None:
+            if (
+                method in {name for name, _ in TRAINED_METHODS}
+                and component_ms is not None
+            ):
                 component_text = fmt_ms(component_ms, component_ms == best_component)
                 text = f"{label} {component_text}/{total_text}"
             else:
@@ -376,6 +398,18 @@ def build_grid(models, cell_fn, title, caption):
             row.append(cell_fn(sharer, receiver))
         rows.append(row)
     selected_configs = [("XKV", SELECTED_HP.get("xkv"))]
+    if STUDY == "ablation":
+        selected_configs = [
+            ("Full XKV", SELECTED_HP.get("xkv")),
+            (
+                "Receiver-path ablations",
+                SELECTED_HP.get("xkv-no-receiver-pooling"),
+            ),
+            (
+                "exact LCF-X-pooling ablation",
+                SELECTED_HP.get("xkv-lcfx-pooling"),
+            ),
+        ]
     for method_name, config in selected_configs:
         if config:
             caption += f" Selected {method_name} configuration: `{config}`."
@@ -386,15 +420,42 @@ def build_grid(models, cell_fn, title, caption):
 
 
 def build_scores_table(dataset, models):
+    classification = dataset in CLASSIFICATION_DATASETS
+    metric_label = "accuracy" if classification else "EM/F1"
+    metric_caption = (
+        "accuracy (best in each cell is bolded)"
+        if classification
+        else "EM/F1 (best of each in a cell is bolded)"
+    )
+    if STUDY == "ablation":
+        return build_grid(
+            models,
+            lambda sharer, receiver: cell_text(dataset, sharer, receiver),
+            f"{dataset}: XKV ablation study ({metric_label}, %)",
+            "Each cell: F=Full XKV, −RP=no Receiver pooling, "
+            "−RX=no raw Receiver-KV cross-attention, LCFP=original "
+            f"non-vectorized LCF-X pooling. Values are {metric_caption}. Missing results "
+            "are left blank.",
+        )
     return build_grid(
         models,
         lambda sharer, receiver: cell_text(dataset, sharer, receiver),
-        f"{dataset}: lcfx / xkv / t2t (EM/F1, %)",
-        "Each cell: L=lcfx, X=xkv, T=t2t, values are EM/F1 (best of each in a cell is bolded). Missing results are left blank.",
+        f"{dataset}: lcfx / xkv / t2t ({metric_label}, %)",
+        "Each cell: L=lcfx, X=xkv, T=t2t, "
+        f"values are {metric_caption}. Missing results are left blank.",
     )
 
 
 def build_params_table(dataset, models):
+    if STUDY == "ablation":
+        return build_grid(
+            models,
+            lambda sharer, receiver: cell_params_text(dataset, sharer, receiver),
+            f"{dataset}: XKV ablation trainable parameters",
+            "Each cell: F=Full XKV, −RP=no Receiver pooling, "
+            "−RX=no raw Receiver-KV cross-attention, LCFP=original "
+            "non-vectorized LCF-X pooling. Missing checkpoints are left blank.",
+        )
     return build_grid(
         models,
         lambda sharer, receiver: cell_params_text(dataset, sharer, receiver),
@@ -404,6 +465,17 @@ def build_params_table(dataset, models):
 
 
 def build_latency_table(dataset, models):
+    if STUDY == "ablation":
+        return build_grid(
+            models,
+            lambda sharer, receiver: cell_latency_text(dataset, sharer, receiver),
+            f"{dataset}: XKV ablation average latency per example",
+            "Each entry is translator/total latency. F=Full XKV, −RP=no "
+            "Receiver pooling, −RX=no raw Receiver-KV cross-attention, "
+            "LCFP=original non-vectorized LCF-X pooling. The fastest component and "
+            "total in each cell are bolded independently. Missing results are "
+            "left blank.",
+        )
     return build_grid(
         models,
         lambda sharer, receiver: cell_latency_text(dataset, sharer, receiver),
@@ -413,6 +485,15 @@ def build_latency_table(dataset, models):
 
 
 def build_scores_time_table(dataset, models):
+    if STUDY == "ablation":
+        return build_grid(
+            models,
+            lambda sharer, receiver: cell_scores_time_text(dataset, sharer, receiver),
+            f"{dataset}: XKV ablation score result times",
+            "Each cell uses F/−RP/−RX/LCFP labels and shows the UTC mtime of "
+            "the metrics.json backing the score table above. Missing results "
+            "are left blank.",
+        )
     return build_grid(
         models,
         lambda sharer, receiver: cell_scores_time_text(dataset, sharer, receiver),
@@ -422,6 +503,15 @@ def build_scores_time_table(dataset, models):
 
 
 def build_params_time_table(dataset, models):
+    if STUDY == "ablation":
+        return build_grid(
+            models,
+            lambda sharer, receiver: cell_params_time_text(dataset, sharer, receiver),
+            f"{dataset}: XKV ablation parameter result times",
+            "Each cell uses F/−RP/−RX/LCFP labels and shows the UTC training "
+            "start time backing the parameter table above. Missing checkpoints "
+            "are left blank.",
+        )
     return build_grid(
         models,
         lambda sharer, receiver: cell_params_time_text(dataset, sharer, receiver),
@@ -431,6 +521,15 @@ def build_params_time_table(dataset, models):
 
 
 def build_latency_time_table(dataset, models):
+    if STUDY == "ablation":
+        return build_grid(
+            models,
+            lambda sharer, receiver: cell_latency_time_text(dataset, sharer, receiver),
+            f"{dataset}: XKV ablation latency result times",
+            "Each cell uses F/−RP/−RX/LCFP labels and shows the UTC mtime of "
+            "the latency.json backing the latency table above. Missing results "
+            "are left blank.",
+        )
     return build_grid(
         models,
         lambda sharer, receiver: cell_latency_time_text(dataset, sharer, receiver),
@@ -508,10 +607,16 @@ def build_datasets_table(datasets):
 
 
 def main():
-    global SELECTED_HP
+    global METHODS, SELECTED_HP, STUDY, TRAINED_METHODS
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset")
+    parser.add_argument(
+        "--study",
+        choices=["comparison", "ablation"],
+        default="comparison",
+        help="Method set to render; ablation includes only Full XKV and its three variants.",
+    )
     parser.add_argument(
         "--item", choices=["scores", "params", "latency", "datasets"], default="scores"
     )
@@ -527,8 +632,20 @@ def main():
     parser.add_argument(
         "--xkv-hp", help="Exact XKV hyperparameter subdirectory to display"
     )
+    parser.add_argument(
+        "--xkv-ablation-hp",
+        help="Exact hyperparameter subdirectory for Receiver-path XKV ablations",
+    )
+    parser.add_argument(
+        "--xkv-lcfx-pooling-hp",
+        help="Exact hyperparameter subdirectory for the LCF-X-pooling ablation",
+    )
     parser.add_argument("--output")
     args = parser.parse_args()
+    STUDY = args.study
+    if STUDY == "ablation":
+        METHODS = list(ABLATION_METHODS)
+        TRAINED_METHODS = list(ABLATION_METHODS)
 
     if args.models is None:
         args.models = PRIMARY_MODELS + (EXTRA_MODELS if args.extra_models else [])
@@ -540,6 +657,15 @@ def main():
         for method, hp in (
             ("lcfx", args.lcfx_hp),
             ("xkv", args.xkv_hp),
+            (
+                "xkv-no-receiver-pooling",
+                args.xkv_ablation_hp if STUDY == "ablation" else None,
+            ),
+            (
+                "xkv-no-receiver-xattn",
+                args.xkv_ablation_hp if STUDY == "ablation" else None,
+            ),
+            ("xkv-lcfx-pooling", args.xkv_lcfx_pooling_hp),
         )
         if hp is not None
     }
@@ -551,8 +677,11 @@ def main():
         output = args.output or os.path.join(RESULTS_DIR, "comparison", "datasets.md")
     else:
         suffix = "" if args.item == "scores" else f"_{args.item}"
+        output_parts = [RESULTS_DIR, "comparison"]
+        if STUDY == "ablation":
+            output_parts.append("ablation")
         output = args.output or os.path.join(
-            RESULTS_DIR, "comparison", f"{args.dataset}{suffix}.md"
+            *output_parts, f"{args.dataset}{suffix}.md"
         )
     os.makedirs(os.path.dirname(output), exist_ok=True)
 
@@ -571,7 +700,7 @@ def main():
     with open(output, "w") as f:
         f.write(table)
     label = args.dataset if args.item != "datasets" else "all datasets"
-    print(f"Wrote {args.item} comparison table for '{label}' -> {output}")
+    print(f"Wrote {args.item} {STUDY} table for '{label}' -> {output}")
 
 
 if __name__ == "__main__":

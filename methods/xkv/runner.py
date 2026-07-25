@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from methods.common.parsing import parse_choice_answer
 from methods.common.prompts import build_receiver_prompt, build_sharer_encode_text
+from methods.lcfx.spans import paragraph_span_starts
 
 from .cache import extract_kv
 from .model import XKVPair
@@ -77,19 +78,64 @@ def run_xkv_example(
     started = perf_counter()
     sharer_cache, sharer_tokens = pair.sharer_summary(sharer_text)
     sharer_ms = (perf_counter() - started) * 1000.0
+    exact_lcfx_pool = translator.pooling_mode == "lcfx_exact"
 
     translator_times: list[float] = []
 
-    def residual_fn(receiver_dynamic_cache: Any) -> list[tuple[Any, Any]]:
-        tic = perf_counter()
-        residual = translator.translate(
-            sharer_cache,
-            extract_kv(receiver_dynamic_cache),
-            sharer_windowed_cache=pair.sharer_spec.has_hybrid_cache,
-            receiver_windowed_cache=pair.receiver_spec.has_hybrid_cache,
-        )
-        translator_times.append((perf_counter() - tic) * 1000.0)
-        return residual
+    if exact_lcfx_pool:
+
+        def residual_fn(receiver_dynamic_cache: Any) -> list[tuple[Any, Any]]:
+            import torch
+
+            tic = perf_counter()
+            sharer_mask = torch.ones(
+                (1, sharer_tokens),
+                device=sharer_cache[0][0].device,
+                dtype=torch.long,
+            )
+            receiver_ids = pair._encode_chat(pair.receiver_tok, receiver_prompt)
+            receiver_mask = torch.ones(
+                (1, int(receiver_ids.shape[1]) - 1),
+                device=extract_kv(receiver_dynamic_cache)[0][0].device,
+                dtype=torch.long,
+            )
+            sharer_boundaries = paragraph_span_starts(
+                pair.sharer_tok,
+                sharer_text,
+                example.sharer_context,
+            )
+            receiver_boundaries = pair.receiver_span_starts(
+                receiver_prompt,
+                example.receiver_context,
+                encoded_ids=receiver_ids[0],
+            )
+            residual = translator.translate(
+                sharer_cache,
+                extract_kv(receiver_dynamic_cache),
+                sharer_attention_mask=sharer_mask,
+                receiver_attention_mask=receiver_mask,
+                sharer_span_boundaries=[sharer_boundaries],
+                receiver_span_boundaries=[receiver_boundaries],
+                sharer_windowed_cache=pair.sharer_spec.has_hybrid_cache,
+                receiver_windowed_cache=pair.receiver_spec.has_hybrid_cache,
+            )
+            translator_times.append((perf_counter() - tic) * 1000.0)
+            return residual
+
+    else:
+
+        # Finalized v11 Full XKV path, kept byte-for-byte equivalent to the
+        # original inference call and latency boundary.
+        def residual_fn(receiver_dynamic_cache: Any) -> list[tuple[Any, Any]]:
+            tic = perf_counter()
+            residual = translator.translate(
+                sharer_cache,
+                extract_kv(receiver_dynamic_cache),
+                sharer_windowed_cache=pair.sharer_spec.has_hybrid_cache,
+                receiver_windowed_cache=pair.receiver_spec.has_hybrid_cache,
+            )
+            translator_times.append((perf_counter() - tic) * 1000.0)
+            return residual
 
     started = perf_counter()
     output, receiver_in, receiver_out, first_ms, last_ms = pair.decode_receiver(
@@ -107,12 +153,13 @@ def run_xkv_example(
     is_correct, scores = _score(prediction, example.answer, score_fn)
     return XKVResult(
         id=example.id,
-        method="xkv",
+        method=translator.variant,
         sharer_prompt=sharer_text,
         sharer_message=(
-            f"[XKV dual-cache update: {len(sharer_cache)} Sharer layers, "
+            f"[{translator.variant}: {len(sharer_cache)} Sharer layers, "
             f"{translator.receiver_layers} Receiver layers, "
-            f"{translator.pool_slots} direct attention slots/layer and side]"
+            f"{translator.pool_slots} slots/layer, "
+            f"pool={translator.pooling_mode}, output={translator.output_mode}]"
         ),
         receiver_prompt=receiver_prompt,
         receiver_output=output,

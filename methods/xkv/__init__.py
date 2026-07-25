@@ -1,7 +1,5 @@
 """XKV: dual-cache attention translation into Receiver KV updates."""
 
-from functools import partial
-
 from methods.common.io import write_run_outputs as _write_run_outputs
 from methods.common.prompts import build_receiver_prompt, build_sharer_encode_text
 
@@ -17,17 +15,29 @@ from .training import (
     save_translator,
     train_translator,
 )
-from .translator import AttentionPool, XKVTranslator
+from .translator import (
+    AttentionPool,
+    LCFXExactAttentionPool,
+    XKVTranslator,
+    XKV_VARIANTS,
+)
 
-write_run_outputs = partial(_write_run_outputs, method="xkv")
+
+def write_run_outputs(results, output_dir, *, method="xkv", metadata=None):
+    """Write standardized outputs under the selected XKV variant name."""
+
+    return _write_run_outputs(results, output_dir, method=method, metadata=metadata)
+
 
 __all__ = [
     "ModelSpec",
     "AttentionPool",
+    "LCFXExactAttentionPool",
     "XKVExample",
     "XKVPair",
     "XKVResult",
     "XKVTranslator",
+    "XKV_VARIANTS",
     "batched_example_loss",
     "build_receiver_prompt",
     "build_sharer_encode_text",

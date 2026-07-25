@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from methods.common.decoding import resolve_stop_ids
+from methods.lcfx.spans import (
+    paragraph_span_starts,
+    paragraph_span_starts_from_offsets,
+)
 
 from .cache import add_residual_inplace, extract_kv
 
@@ -175,6 +179,50 @@ class XKVPair:
                 encoded = tokenizer.apply_chat_template(messages, **kwargs)
             return encoded["input_ids"].to(self.device)
         return self._encode_plain(tokenizer, text)
+
+    def receiver_span_starts(
+        self,
+        text: str,
+        context: str,
+        *,
+        encoded_ids: "Any | None" = None,
+    ) -> list[int]:
+        """Natural LCF-X paragraph starts in Receiver-prefix token coordinates."""
+
+        tokenizer = self.receiver_tok
+        if not getattr(tokenizer, "chat_template", None):
+            return paragraph_span_starts(tokenizer, text, context)
+
+        messages = [{"role": "user", "content": text}]
+        kwargs = dict(tokenize=False, add_generation_prompt=True)
+        try:
+            rendered = tokenizer.apply_chat_template(
+                messages, enable_thinking=False, **kwargs
+            )
+        except TypeError:
+            rendered = tokenizer.apply_chat_template(messages, **kwargs)
+        offset_encoding = tokenizer(
+            rendered,
+            add_special_tokens=False,
+            return_offsets_mapping=True,
+        )
+        offset_ids = offset_encoding["input_ids"]
+        expected = (
+            encoded_ids
+            if encoded_ids is not None
+            else self._encode_chat(tokenizer, text)[0]
+        )
+        expected_ids = expected.detach().cpu().tolist()
+        if offset_ids != expected_ids:
+            raise ValueError(
+                "Receiver chat rendering did not reproduce apply_chat_template "
+                "token ids; cannot compute exact LCF-X paragraph boundaries"
+            )
+        return paragraph_span_starts_from_offsets(
+            rendered,
+            offset_encoding["offset_mapping"],
+            context,
+        )
 
     def sharer_summary(self, text: str) -> tuple[list[tuple[Any, Any]], int]:
         import torch

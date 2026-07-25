@@ -26,6 +26,7 @@ from methods.common import (  # noqa: E402
 from methods.xkv import (  # noqa: E402
     XKVExample,
     XKVTranslator,
+    XKV_VARIANTS,
     check_pair_compatible,
     load_translator,
     load_xkv_pair,
@@ -68,6 +69,7 @@ def main() -> None:
     )
     parser.add_argument("--num-heads", type=int, default=8)
     parser.add_argument("--dropout", type=float, default=0.1)
+    parser.add_argument("--variant", choices=XKV_VARIANTS, default="xkv")
     parser.add_argument(
         "--pool-k",
         "--pool-slots",
@@ -77,6 +79,15 @@ def main() -> None:
         help=(
             "Learned summaries per layer/head/side. Default follows Receiver "
             "size: 0.6B=1, 1B=2, 3B=3, 8B=4."
+        ),
+    )
+    parser.add_argument(
+        "--pool-spans",
+        type=int,
+        default=5,
+        help=(
+            "Fallback fixed spans P for exact xkv-lcfx-pooling N->P->1; "
+            "natural evidence paragraphs are used when available."
         ),
     )
     parser.add_argument("--allow-model-mismatch", action="store_true")
@@ -122,6 +133,8 @@ def main() -> None:
             num_heads=args.num_heads,
             dropout=args.dropout,
             pool_slots=args.pool_slots,
+            variant=args.variant,
+            pool_spans=args.pool_spans,
         ).to(pair.device)
         print(f"Loaded XKV checkpoint: {args.translator_checkpoint}")
     else:
@@ -133,6 +146,8 @@ def main() -> None:
             num_heads=args.num_heads,
             dropout=args.dropout,
             pool_slots=args.pool_slots,
+            variant=args.variant,
+            pool_spans=args.pool_spans,
             zero_init=True,
         ).to(pair.device)
         print("No checkpoint: zero-init XKV (Receiver-only equivalence)")
@@ -142,7 +157,7 @@ def main() -> None:
     progress = ProgressLogger(
         args.output_dir / "eval_log.jsonl",
         config={
-            "method": "xkv",
+            "method": args.variant,
             "dataset": str(args.dataset),
             "sharer_model": args.sharer_model,
             "receiver_model": args.receiver_model,
@@ -175,8 +190,9 @@ def main() -> None:
     paths = write_run_outputs(
         results,
         args.output_dir,
+        method=args.variant,
         metadata={
-            "method": "xkv",
+            "method": args.variant,
             "dataset": str(args.dataset),
             "sharer_model": args.sharer_model,
             "receiver_model": args.receiver_model,
@@ -190,6 +206,13 @@ def main() -> None:
             "pool_k": translator.pool_slots,
             "pooling_mode": translator.pooling_mode,
             "output_mode": translator.output_mode,
+            "receiver_pooling": translator.receiver_pooling,
+            "pool_spans": translator.pool_spans,
+            **(
+                {"training_seed": translator.training_seed}
+                if hasattr(translator, "training_seed")
+                else {}
+            ),
             "translator_checkpoint": str(args.translator_checkpoint)
             if args.translator_checkpoint
             else None,

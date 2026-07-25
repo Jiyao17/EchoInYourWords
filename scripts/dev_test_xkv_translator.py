@@ -13,8 +13,10 @@ if str(REPO_ROOT) not in sys.path:
 
 import torch  # noqa: E402
 
+from methods.lcfx.fuser import LCFXFuser  # noqa: E402
 from methods.xkv.training import load_translator, save_translator  # noqa: E402
 from methods.xkv.translator import (  # noqa: E402
+    LCFXExactAttentionPool,
     XKVTranslator,
     _default_pool_slots,
     _resolve_d_model,
@@ -139,6 +141,90 @@ def main() -> None:
     receiver = _cache(2, 2, 1, 5, 6)
     sharer_mask = torch.tensor([[1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0, 0]])
     receiver_mask = torch.tensor([[1, 1, 1, 1, 1], [0, 0, 1, 1, 1]])
+
+    no_receiver_pool = XKVTranslator(
+        **kwargs, variant="xkv-no-receiver-pooling", zero_init=False
+    )
+    assert no_receiver_pool.receiver_pool is None
+    assert no_receiver_pool.position_decoder is not None
+    assert no_receiver_pool.down.in_features == 2 * 2 * (2 * 4)
+
+    no_receiver_xattn = XKVTranslator(
+        **kwargs, variant="xkv-no-receiver-xattn", zero_init=False
+    )
+    assert no_receiver_xattn.receiver_pool is not None
+    assert no_receiver_xattn.position_decoder is None
+    assert no_receiver_xattn.output_mode == "broadcast_layer_memory"
+
+    lcfx_pooling = XKVTranslator(
+        **kwargs,
+        variant="xkv-lcfx-pooling",
+        pool_slots=1,
+        pool_spans=3,
+        zero_init=False,
+    )
+    assert isinstance(lcfx_pooling.sharer_pool, LCFXExactAttentionPool)
+    assert isinstance(lcfx_pooling.receiver_pool, LCFXExactAttentionPool)
+    assert lcfx_pooling.pooling_mode == "lcfx_exact"
+    assert lcfx_pooling.pool_slots == 1
+    assert lcfx_pooling.pool_spans == 3
+
+    # The ablation deliberately retains LCF-X's original non-vectorized
+    # batch/layer/span loop. With identical queries, its pooled tensors must be
+    # numerically identical to LCFXFuser.align, including natural boundaries.
+    exact_cache = _cache(2, 2, 2, 7, 4)
+    exact_pool = LCFXExactAttentionPool(2, 2, 4, num_spans=3)
+    reference = LCFXFuser(
+        sharer_layers=2,
+        sharer_kv_heads=2,
+        sharer_head_dim=4,
+        receiver_layers=2,
+        receiver_kv_heads=2,
+        receiver_head_dim=4,
+        bottleneck_dim=8,
+        dropout=0.0,
+    )
+    with torch.no_grad():
+        reference.q_base.copy_(exact_pool.q_base)
+        reference.q_layer.copy_(exact_pool.q_layer)
+    boundaries = [[0, 2, 5], [0, 3]]
+    exact_output = exact_pool(exact_cache, span_boundaries=boundaries)
+    reference_output = reference.align(
+        exact_cache,
+        num_spans=3,
+        span_boundaries=boundaries,
+    )
+    reference_key = torch.stack(
+        [key for key, _ in reference_output], dim=1
+    ).reshape(2, 2, -1)
+    reference_value = torch.stack(
+        [value for _, value in reference_output], dim=1
+    ).reshape(2, 2, -1)
+    assert torch.allclose(
+        exact_output,
+        torch.cat([reference_key, reference_value], dim=-1),
+    )
+
+    for variant in (no_receiver_pool, no_receiver_xattn, lcfx_pooling):
+        residual = variant.translate(
+            sharer,
+            receiver,
+            sharer_attention_mask=sharer_mask,
+            receiver_attention_mask=receiver_mask,
+        )
+        assert residual[0][0].shape == (2, 1, 5, 6)
+        loss = sum(
+            key.square().mean() + value.square().mean() for key, value in residual
+        )
+        loss.backward()
+        missing = [
+            name
+            for name, parameter in variant.named_parameters()
+            if parameter.requires_grad
+            and (parameter.grad is None or not torch.isfinite(parameter.grad).all())
+        ]
+        assert not missing, (variant.variant, missing)
+    print("three XKV ablation architecture/gradient checks OK")
 
     zero = XKVTranslator(**kwargs, zero_init=True).eval()
     three_slot = XKVTranslator(**kwargs, pool_slots=3, zero_init=True).eval()
@@ -300,6 +386,50 @@ def main() -> None:
             dropout=0.0,
         )
         assert loaded.arch_config() == trained.arch_config()
+        pre_ablation_path = str(Path(directory) / "pre_ablation_full.pt")
+        pre_ablation = torch.load(path, map_location="cpu", weights_only=True)
+        for field in ("variant", "receiver_pooling", "pool_spans"):
+            pre_ablation["arch"].pop(field)
+        torch.save(pre_ablation, pre_ablation_path)
+        loaded_pre_ablation = load_translator(
+            pre_ablation_path,
+            specs,
+            device="cpu",
+            d_model=8,
+            num_blocks=1,
+            num_heads=2,
+            dropout=0.0,
+        )
+        assert loaded_pre_ablation.arch_config() == trained.arch_config()
+        ablation_path = str(Path(directory) / "lcfx_pooling.pt")
+        save_translator(lcfx_pooling, ablation_path, specs)
+        loaded_ablation = load_translator(
+            ablation_path,
+            specs,
+            device="cpu",
+            d_model=8,
+            num_blocks=1,
+            num_heads=2,
+            dropout=0.0,
+            variant="xkv-lcfx-pooling",
+            pool_spans=3,
+        )
+        assert loaded_ablation.arch_config() == lcfx_pooling.arch_config()
+        try:
+            load_translator(
+                ablation_path,
+                specs,
+                device="cpu",
+                d_model=8,
+                num_blocks=1,
+                num_heads=2,
+                dropout=0.0,
+                variant="xkv",
+            )
+        except ValueError as exc:
+            assert "arch.variant" in str(exc)
+        else:
+            raise AssertionError("cross-variant XKV checkpoint was accepted")
         legacy_path = str(Path(directory) / "legacy.pt")
         legacy = torch.load(path, map_location="cpu", weights_only=True)
         legacy["format"] = 9

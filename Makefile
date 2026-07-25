@@ -50,17 +50,22 @@ help:
 	@echo "  make kvtok-eval    KVTok: eval a trained translator (or zero-init floor)"
 	@echo "  make kvtok-hetero  KVTok on a heterogeneous pair (Llama -> Qwen preset)"
 	@echo "  make xkv           XKV: train dual-cache translator -> EM/F1 on val"
+	@echo "  make xkv-no-receiver-pooling  XKV ablation: remove pooled Receiver slots"
+	@echo "  make xkv-no-receiver-xattn    XKV ablation: remove raw Receiver-KV cross-attention"
+	@echo "  make xkv-lcfx-pooling         XKV ablation: use original non-vectorized LCF-X N->P->1 pooling"
 	@echo "  make xkv-train     XKV: train the translator only"
 	@echo "  make xkv-eval      XKV: eval a trained translator"
 	@echo "  make xkv-hetero    XKV on a heterogeneous pair (Llama -> Qwen preset)"
 	@echo "  make t2t           T2T baseline: EM/F1 on val (no training)"
 	@echo "  make single        Upper bound: MODEL answers with ALL evidence (MODEL=/DATASET= each: given=one, unset=all)"
 	@echo "  make exp           Sweep LCF-X/XKV/T2T over base model pairs, split by METHOD= then DATASET= (each: given=one, unset=all)"
+	@echo "  make exp-ablation  Sweep the three ablations; reuse frozen Full XKV v11 results"
 	@echo "  make exp-extend    Sweep only the 7 pairs where Sharer and/or Receiver is Ministral-8B"
 	@echo "  make exp-all       Sweep the full 0.6B/1B/3B/8B 4x4 grid (16 pairs)"
 	@echo "  make sweep         Full pipeline: prepare + 4x4 exp-all for every dataset, parallel across CUDA_VISIBLE_DEVICES"
 	@echo "  make visual        Comparison table: DATASET= (ITEM= given=one of scores/params/latency, unset=all three); ITEM=datasets for a size/oracle-score overview of every dataset"
 	@echo "  make visual-all    Same reports as visual, with the opt-in 8B model included (4x4 grid)"
+	@echo "  make visual-ablation  Full XKV vs its three ablations only (scores/params/latency)"
 	@echo ""
 	@echo "Pick models with SHARER=/RECEIVER= (default Qwen/Qwen3-0.6B both sides):"
 	@echo "  make lcfx-train SHARER=<id> RECEIVER=<id>   train a pair"
@@ -125,6 +130,7 @@ KVTOK_RECEIVER ?= $(RECEIVER)
 # XKV (dual-cache KV update method)
 XKV_SHARER   ?= $(SHARER)
 XKV_RECEIVER ?= $(RECEIVER)
+XKV_VARIANT  ?= xkv
 
 # Per-run slugs so results AND checkpoints from different dataset / Sharer / Receiver
 # combinations land in their own folders instead of overwriting each other. Layout is
@@ -142,12 +148,14 @@ T2T_SLUG   = $(DATASET)/$(subst /,--,$(T2T_SHARER))/$(subst /,--,$(T2T_RECEIVER)
 EIYW_SLUG  = $(DATASET)/$(subst /,--,$(EIYW_SHARER))/$(subst /,--,$(EIYW_RECEIVER))/sp$(SPANS)_dm$(EIYW_DMODEL)_k$(EIYW_QPL)$(if $(filter-out 0,$(EIYW_ADAPT)),_ad$(EIYW_ADAPT),)
 KVTOK_SLUG = $(DATASET)/$(subst /,--,$(KVTOK_SHARER))/$(subst /,--,$(KVTOK_RECEIVER))/sp$(SPANS)_tok$(KVTOK_TOKENS)_dm$(KVTOK_DMODEL)_h$(KVTOK_HEADS)
 XKV_DMODEL_TAG = $(if $(filter eighth hidden/8 hidden//8 receiver/8,$(XKV_DMODEL)),h8,$(XKV_DMODEL))
-XKV_SLUG   = $(DATASET)/$(subst /,--,$(XKV_SHARER))/$(subst /,--,$(XKV_RECEIVER))/d$(XKV_DMODEL_TAG)_n$(XKV_BLOCKS)_h$(XKV_HEADS)_do$(subst .,p,$(XKV_DROPOUT))_k$(XKV_POOL_SLOTS)_v11
+XKV_POOL_SPAN_TAG = $(if $(filter xkv-lcfx-pooling,$(XKV_VARIANT)),_sp$(XKV_POOL_SPANS),)
+XKV_RUN_VERSION = $(if $(filter xkv-lcfx-pooling,$(XKV_VARIANT)),v12,v11)
+XKV_SLUG   = $(DATASET)/$(subst /,--,$(XKV_SHARER))/$(subst /,--,$(XKV_RECEIVER))/d$(XKV_DMODEL_TAG)_n$(XKV_BLOCKS)_h$(XKV_HEADS)_do$(subst .,p,$(XKV_DROPOUT))_k$(XKV_POOL_SLOTS)$(XKV_POOL_SPAN_TAG)_$(XKV_RUN_VERSION)
 LCFX_OUT   ?= results/lcfx/$(LCFX_SLUG)
 T2T_OUT    ?= results/t2t/$(T2T_SLUG)
 EIYW_OUT   ?= results/eiyw/$(EIYW_SLUG)
 KVTOK_OUT  ?= results/kvtok/$(KVTOK_SLUG)
-XKV_OUT    ?= results/xkv/$(XKV_SLUG)
+XKV_OUT    ?= results/$(XKV_VARIANT)/$(XKV_SLUG)
 
 # --- LCF-X fuser (architecture + training) ---
 # Checkpoint path is dataset+pair-scoped by default (override CKPT= to place it elsewhere).
@@ -237,10 +245,11 @@ XKV_DMODEL ?= eighth
 XKV_BLOCKS ?= 1
 XKV_HEADS  ?= 8
 XKV_DROPOUT ?= 0.1
+XKV_POOL_SPANS ?= 5
 XKV_POOL_K ?=
 XKV_POOL_DEFAULT = $(if $(or $(findstring 0.6B,$(XKV_RECEIVER)),$(findstring 0.6b,$(XKV_RECEIVER))),1,$(if $(or $(findstring 1B,$(XKV_RECEIVER)),$(findstring 1b,$(XKV_RECEIVER))),2,$(if $(or $(findstring 3B,$(XKV_RECEIVER)),$(findstring 3b,$(XKV_RECEIVER)),$(findstring 4B,$(XKV_RECEIVER)),$(findstring 4b,$(XKV_RECEIVER))),3,$(if $(or $(findstring 8B,$(XKV_RECEIVER)),$(findstring 8b,$(XKV_RECEIVER))),4,2))))
-XKV_POOL_SLOTS ?= $(if $(strip $(XKV_POOL_K)),$(XKV_POOL_K),$(XKV_POOL_DEFAULT))
-XKV_CKPT ?= data/checkpoints/xkv/$(XKV_SLUG)/translator.pt
+XKV_POOL_SLOTS ?= $(if $(filter xkv-lcfx-pooling,$(XKV_VARIANT)),1,$(if $(strip $(XKV_POOL_K)),$(XKV_POOL_K),$(XKV_POOL_DEFAULT)))
+XKV_CKPT ?= data/checkpoints/$(XKV_VARIANT)/$(XKV_SLUG)/translator.pt
 
 # --- T2T baseline: caps the Sharer message at SHARER_MAX tokens (paper default
 #     was "T2T Max 200"; ours defaults to 100 -- override with SHARER_MAX=)
@@ -514,7 +523,8 @@ kvtok-hetero:
 	$(MAKE) kvtok KVTOK_SHARER=$(HETERO_SHARER) KVTOK_RECEIVER=$(HETERO_RECEIVER)
 
 # ===== XKV (dual-cache attention translator -> Receiver KV residual) =========
-.PHONY: xkv xkv-train xkv-eval xkv-hetero
+.PHONY: xkv xkv-train xkv-eval xkv-hetero \
+	xkv-no-receiver-pooling xkv-no-receiver-xattn xkv-lcfx-pooling
 
 # ROPES XKV fits a 32-example micro-batch for the reference pair. Preserve the
 # effective batch of 256 by reducing accumulation to 8. Explicit command-line
@@ -527,7 +537,7 @@ xkv-train: data
 	$(OFFLINE) $(PY) scripts/train_xkv.py \
 	  --train-data $(TRAIN) \
 	  --sharer-model $(XKV_SHARER) --receiver-model $(XKV_RECEIVER) \
-	  --d-model $(XKV_DMODEL) --num-blocks $(XKV_BLOCKS) --num-heads $(XKV_HEADS) --dropout $(XKV_DROPOUT) --pool-k $(XKV_POOL_SLOTS) \
+	  --variant $(XKV_VARIANT) --d-model $(XKV_DMODEL) --num-blocks $(XKV_BLOCKS) --num-heads $(XKV_HEADS) --dropout $(XKV_DROPOUT) --pool-k $(XKV_POOL_SLOTS) --pool-spans $(XKV_POOL_SPANS) \
 	  --lr $(LR) --epochs $(EPOCHS) --batch-size $(BATCH_SIZE) --grad-accum $(GRAD_ACCUM) --warmup $(WARMUP) \
 	  --val-frac $(VAL_FRAC) --eval-max-examples $(EVAL_MAX) --eval-em-examples $(EVAL_EM) \
 	  --log-every $(LOG_EVERY) --eval-every $(EVAL_EVERY) --save-every $(SAVE_EVERY) \
@@ -538,11 +548,20 @@ xkv-train: data
 xkv-eval: data
 	$(OFFLINE) $(PY) scripts/run_xkv.py --dataset $(VAL) \
 	  --sharer-model $(XKV_SHARER) --receiver-model $(XKV_RECEIVER) \
-	  --d-model $(XKV_DMODEL) --num-blocks $(XKV_BLOCKS) --num-heads $(XKV_HEADS) --dropout $(XKV_DROPOUT) --pool-k $(XKV_POOL_SLOTS) \
+	  --variant $(XKV_VARIANT) --d-model $(XKV_DMODEL) --num-blocks $(XKV_BLOCKS) --num-heads $(XKV_HEADS) --dropout $(XKV_DROPOUT) --pool-k $(XKV_POOL_SLOTS) --pool-spans $(XKV_POOL_SPANS) \
 	  $(if $(EVAL_N),--num-examples $(EVAL_N),) \
 	  --translator-checkpoint $(XKV_CKPT) --output-dir $(XKV_OUT)
 
 xkv: xkv-train xkv-eval
+
+xkv-no-receiver-pooling:
+	$(MAKE) xkv XKV_VARIANT=xkv-no-receiver-pooling
+
+xkv-no-receiver-xattn:
+	$(MAKE) xkv XKV_VARIANT=xkv-no-receiver-xattn
+
+xkv-lcfx-pooling:
+	$(MAKE) xkv XKV_VARIANT=xkv-lcfx-pooling XKV_POOL_SLOTS=1
 
 xkv-hetero:
 	$(MAKE) xkv XKV_SHARER=$(HETERO_SHARER) XKV_RECEIVER=$(HETERO_RECEIVER)
@@ -645,6 +664,7 @@ endif
 #   make exp-all METHOD=t2t DATASET=hotpotqa_bridge SHARER=mistralai/Ministral-8B-Instruct-2410 RECEIVER=mistralai/Ministral-8B-Instruct-2410
 #   make exp METHOD=t2t DATASET=hotpotqa_bridge EXP_STAGE=smoke   # cheap reduced-budget sanity pass
 EXP_METHODS             := lcfx xkv t2t
+EXP_ABLATION_METHODS    := xkv-no-receiver-pooling xkv-no-receiver-xattn xkv-lcfx-pooling
 EXP_STAGE               ?= full
 # By default, turn every id visible to this make process into a sweep worker.
 # EXP_GPUS= remains an explicit override (including EXP_GPUS= for one unpinned
@@ -662,7 +682,7 @@ EXP_RECEIVER_FILTER     = $(if $(filter command line environment,$(origin RECEIV
 # Outer loop: method. With METHOD= given, hand off straight to the dataset
 # loop below; otherwise run every method in turn (each recursive call then
 # resolves its own DATASET= the same way `data`/`model` resolve DATASET=).
-.PHONY: exp exp-all exp-extend
+.PHONY: exp exp-ablation exp-all exp-extend
 exp:
 ifeq ($(origin METHOD),command line)
 	$(MAKE) _exp-dataset METHOD=$(METHOD)
@@ -671,6 +691,20 @@ else ifeq ($(origin METHOD),environment)
 else
 	@status=0; for m in $(EXP_METHODS); do \
 	  $(MAKE) exp METHOD=$$m || status=$$?; \
+	done; exit $$status
+endif
+
+# The three one-change ablations enter one run_sweep.py queue. Finalized Full
+# XKV v11 is intentionally excluded so this command can never overwrite it.
+# DATASET= selects one dataset; when omitted, follow `exp` and run every dataset.
+exp-ablation:
+ifeq ($(origin DATASET),command line)
+	$(MAKE) _exp-ablation-dataset DATASET=$(DATASET)
+else ifeq ($(origin DATASET),environment)
+	$(MAKE) _exp-ablation-dataset DATASET=$(DATASET)
+else
+	@status=0; for d in $(ALL_DATASETS); do \
+	  $(MAKE) _exp-ablation-dataset DATASET=$$d || status=$$?; \
 	done; exit $$status
 endif
 
@@ -699,6 +733,14 @@ else
 	  $(MAKE) _exp-dataset METHOD=$(METHOD) DATASET=$$d || status=$$?; \
 	done; exit $$status
 endif
+
+.PHONY: _exp-ablation-dataset
+_exp-ablation-dataset:
+	$(PY) scripts/run_sweep.py --dataset $(DATASET) \
+	  $(foreach m,$(EXP_ABLATION_METHODS),--method $(m)) --stage $(EXP_STAGE) \
+	  --concurrency-per-gpu $(EXP_CONCURRENCY_PER_GPU) \
+	  $(if $(EXP_GPUS),--gpus $(EXP_GPUS),) --pair-scope $(EXP_PAIR_SCOPE) \
+	  $(EXP_SHARER_FILTER) $(EXP_RECEIVER_FILTER) $(EXP_ARGS)
 
 # ===== Full pipeline (prepare everything, then sweep every dataset in
 # parallel across GPUs) ==========================================================
@@ -767,10 +809,16 @@ ALL_VISUAL_ITEMS := scores params latency
 XKV_POOL_EXPLICIT = $(or $(filter command line environment,$(origin XKV_POOL_K)),$(filter command line environment,$(origin XKV_POOL_SLOTS)))
 XKV_VISUAL_K = $(if $(XKV_POOL_EXPLICIT),$(XKV_POOL_SLOTS),{receiver_k})
 XKV_VISUAL_HP = d$(XKV_DMODEL_TAG)_n$(XKV_BLOCKS)_h$(XKV_HEADS)_do$(subst .,p,$(XKV_DROPOUT))_k$(XKV_VISUAL_K)_v11
+XKV_ABLATION_VISUAL_HP = d$(XKV_DMODEL_TAG)_n$(XKV_BLOCKS)_h$(XKV_HEADS)_do$(subst .,p,$(XKV_DROPOUT))_k$(XKV_VISUAL_K)_v11
+XKV_LCFX_VISUAL_HP = d$(XKV_DMODEL_TAG)_n$(XKV_BLOCKS)_h$(XKV_HEADS)_do$(subst .,p,$(XKV_DROPOUT))_k1_sp$(XKV_POOL_SPANS)_v12
 VISUAL_HP_FLAGS = --lcfx-hp sp$(SPANS) \
 	--xkv-hp $(XKV_VISUAL_HP)
+ABLATION_VISUAL_HP_FLAGS = --xkv-hp $(XKV_VISUAL_HP) \
+	--xkv-ablation-hp $(XKV_ABLATION_VISUAL_HP) \
+	--xkv-lcfx-pooling-hp $(XKV_LCFX_VISUAL_HP)
+ABLATION_VISUAL_OUT ?= results/comparison/ablation/$(DATASET)$(VISUAL_SUFFIX).md
 
-.PHONY: visual visual-all
+.PHONY: visual visual-all visual-ablation
 visual-all:
 	$(MAKE) visual EXTRA_MODELS=TRUE
 
@@ -782,5 +830,16 @@ else ifeq ($(origin ITEM),environment)
 else
 	@status=0; for i in $(ALL_VISUAL_ITEMS); do \
 	  $(MAKE) visual ITEM=$$i || status=$$?; \
+	done; exit $$status
+endif
+
+visual-ablation:
+ifeq ($(origin ITEM),command line)
+	$(PY) scripts/make_comparison_table.py --study ablation --item $(ITEM) --dataset $(DATASET) $(ABLATION_VISUAL_HP_FLAGS) $(EXTRA_MODELS_FLAG) $(if $(MODELS),--models $(MODELS),) --output $(if $(OUT),$(OUT),$(ABLATION_VISUAL_OUT))
+else ifeq ($(origin ITEM),environment)
+	$(PY) scripts/make_comparison_table.py --study ablation --item $(ITEM) --dataset $(DATASET) $(ABLATION_VISUAL_HP_FLAGS) $(EXTRA_MODELS_FLAG) $(if $(MODELS),--models $(MODELS),) --output $(if $(OUT),$(OUT),$(ABLATION_VISUAL_OUT))
+else
+	@status=0; for i in $(ALL_VISUAL_ITEMS); do \
+	  $(MAKE) visual-ablation ITEM=$$i || status=$$?; \
 	done; exit $$status
 endif

@@ -52,6 +52,11 @@ EXTRA_MODELS = [
     "mistralai/Ministral-8B-Instruct-2410",
 ]
 METHODS = ["lcfx", "xkv", "t2t"]
+METHOD_CHOICES = METHODS + [
+    "xkv-no-receiver-pooling",
+    "xkv-no-receiver-xattn",
+    "xkv-lcfx-pooling",
+]
 
 # Approx parameter count (billions) per roster model, used only to size
 # BATCH_SIZE/GRAD_ACCUM for the full stage (see pick_batch_grad_accum below).
@@ -91,9 +96,9 @@ STAGE_OVERRIDES = {
 # slower, not different, matching README's guidance on this tradeoff.
 # (threshold_billions, batch_size, grad_accum), first match wins:
 BATCH_ACCUM_TIERS = [
-    (2.5, 16, 16),   # up to 1B+1B
-    (5.5, 8, 32),    # up to 1B+3B
-    (9.5, 4, 64),    # up to 3B+3B / 1B+8B
+    (2.5, 16, 16),  # up to 1B+1B
+    (5.5, 8, 32),  # up to 1B+3B
+    (9.5, 4, 64),  # up to 3B+3B / 1B+8B
     (13.0, 2, 128),  # up to 3B+8B
     (float("inf"), 1, 256),  # 8B+8B
 ]
@@ -123,7 +128,7 @@ def pick_batch_grad_accum(
     # XKV's no-grad dual-prefix path fits twice the reference micro-batch on
     # ROPES. Keep the same effective batch and the same pair-size progression:
     # 32/8 -> 16/16 -> 8/32 -> 4/64 -> 2/128.
-    if method == "xkv" and dataset == "ropes":
+    if method.startswith("xkv") and dataset == "ropes":
         batch *= 2
         accum = max(1, accum // 2)
     mult = DATASET_BATCH_MULT.get(dataset, 1)
@@ -147,6 +152,7 @@ def resolve_overrides(
         overrides["BATCH_SIZE"] = str(batch)
         overrides["GRAD_ACCUM"] = str(accum)
     return overrides
+
 
 # Substrings (checked case-insensitively against the tail of a failed run's
 # log) that indicate an out-of-memory failure rather than a generic bug.
@@ -244,7 +250,9 @@ def run_cell(
         env = os.environ.copy()
         env["CUDA_VISIBLE_DEVICES"] = gpu
 
-    base_log = log_dir / stage / method / dataset / f"{_slug(sharer)}__{_slug(receiver)}.log"
+    base_log = (
+        log_dir / stage / method / dataset / f"{_slug(sharer)}__{_slug(receiver)}.log"
+    )
     base_log.parent.mkdir(parents=True, exist_ok=True)
 
     # Unattended-run resilience: one automatic retry at half batch / double
@@ -254,7 +262,13 @@ def run_cell(
     # retry marks the cell ok.
     attempt = 0
     while True:
-        cmd = ["make", method, f"DATASET={dataset}", f"SHARER={sharer}", f"RECEIVER={receiver}"]
+        cmd = [
+            "make",
+            method,
+            f"DATASET={dataset}",
+            f"SHARER={sharer}",
+            f"RECEIVER={receiver}",
+        ]
         cmd += [f"{key}={value}" for key, value in overrides.items()]
         log_path = (
             base_log if attempt == 0 else base_log.with_suffix(f".retry{attempt}.log")
@@ -262,7 +276,9 @@ def run_cell(
 
         label = f"[{stage}/{method}] {dataset} {sharer} -> {receiver}"
         if "BATCH_SIZE" in overrides:
-            label += f" (batch={overrides['BATCH_SIZE']} accum={overrides['GRAD_ACCUM']})"
+            label += (
+                f" (batch={overrides['BATCH_SIZE']} accum={overrides['GRAD_ACCUM']})"
+            )
         if gpu is not None:
             label += f" (gpu {gpu})"
         if attempt:
@@ -322,23 +338,39 @@ def worker_loop(gpu: str | None, cell_queue: "queue.Queue", run_kwargs: dict) ->
         except queue.Empty:
             return
         try:
-            run_cell(method=method, dataset=dataset, sharer=sharer, receiver=receiver, gpu=gpu, **run_kwargs)
+            run_cell(
+                method=method,
+                dataset=dataset,
+                sharer=sharer,
+                receiver=receiver,
+                gpu=gpu,
+                **run_kwargs,
+            )
         finally:
             cell_queue.task_done()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset", required=True, help="Single dataset name, e.g. hotpotqa_bridge")
+    parser.add_argument(
+        "--dataset", required=True, help="Single dataset name, e.g. hotpotqa_bridge"
+    )
     parser.add_argument("--stage", default="smoke", choices=sorted(STAGE_OVERRIDES))
     parser.add_argument(
-        "--method", action="append", choices=METHODS, help="Repeatable; default all 3 (lcfx, xkv, t2t)"
+        "--method",
+        action="append",
+        choices=METHOD_CHOICES,
+        help="Repeatable; default lcfx, xkv, t2t (XKV ablations are opt-in)",
     )
     parser.add_argument(
-        "--sharer", action="append", help="Repeatable filter; default all models in PRIMARY_MODELS"
+        "--sharer",
+        action="append",
+        help="Repeatable filter; default all models in PRIMARY_MODELS",
     )
     parser.add_argument(
-        "--receiver", action="append", help="Repeatable filter; default all models in PRIMARY_MODELS"
+        "--receiver",
+        action="append",
+        help="Repeatable filter; default all models in PRIMARY_MODELS",
     )
     parser.add_argument(
         "--extra-models",
@@ -352,7 +384,9 @@ def main() -> None:
         help="Pair grid: base=0.6/1/3B 3x3 (9), extend=only pairs touching 8B (7), all=0.6/1/3/8B 4x4 (16)",
     )
     parser.add_argument(
-        "--gpus", default=None, help="Comma-separated GPU ids, e.g. 1,2,3 (default: no pinning, one worker)"
+        "--gpus",
+        default=None,
+        help="Comma-separated GPU ids, e.g. 1,2,3 (default: no pinning, one worker)",
     )
     parser.add_argument("--concurrency-per-gpu", type=int, default=1)
     parser.add_argument(
@@ -363,11 +397,15 @@ def main() -> None:
             "interrupted sweep). Default: rerun every selected cell fresh."
         ),
     )
-    parser.add_argument("--dry-run", action="store_true", help="Print the resolved cell list and exit")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Print the resolved cell list and exit"
+    )
     parser.add_argument(
         "--manifest", type=Path, default=REPO_ROOT / "results" / "sweep_manifest.jsonl"
     )
-    parser.add_argument("--log-dir", type=Path, default=REPO_ROOT / "results" / "sweep_logs")
+    parser.add_argument(
+        "--log-dir", type=Path, default=REPO_ROOT / "results" / "sweep_logs"
+    )
     args = parser.parse_args()
 
     pair_scope = "all" if args.extra_models else args.pair_scope
@@ -403,7 +441,11 @@ def main() -> None:
 
     if args.concurrency_per_gpu < 1:
         parser.error("--concurrency-per-gpu must be at least 1")
-    gpu_ids = [gpu.strip() for gpu in args.gpus.split(",") if gpu.strip()] if args.gpus else [None]
+    gpu_ids = (
+        [gpu.strip() for gpu in args.gpus.split(",") if gpu.strip()]
+        if args.gpus
+        else [None]
+    )
     if not gpu_ids:
         parser.error("--gpus must contain at least one GPU id")
     slots = [gpu for gpu in gpu_ids for _ in range(args.concurrency_per_gpu)]
@@ -434,7 +476,9 @@ def main() -> None:
     )
 
     threads = [
-        threading.Thread(target=worker_loop, args=(gpu, cell_queue, run_kwargs), daemon=True)
+        threading.Thread(
+            target=worker_loop, args=(gpu, cell_queue, run_kwargs), daemon=True
+        )
         for gpu in slots
     ]
     for t in threads:

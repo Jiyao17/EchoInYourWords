@@ -657,6 +657,67 @@ make xkv DATASET=hotpotqa_bridge \
 make exp METHOD=xkv DATASET=hotpotqa_bridge
 ```
 
+### XKV ablations
+
+The three XKV ablations use the same training/evaluation implementation.
+The first two retain Full XKV's Receiver-dependent `k`; the LCF-X pooling
+ablation uses the original pool's single output slot. Full XKV, `−RP`, and
+`−RX` remain frozen at their finalized `v11` implementations and result paths;
+only corrected LCFP uses a separate `v12` path. Each method name has isolated
+checkpoint and result roots under `data/checkpoints/<method>/...` and
+`results/<method>/...`:
+
+```bash
+make exp METHOD=xkv-no-receiver-pooling DATASET=ropes
+make exp METHOD=xkv-no-receiver-xattn DATASET=ropes
+make exp METHOD=xkv-lcfx-pooling DATASET=ropes
+
+make exp METHOD=xkv-no-receiver-pooling DATASET=qasc
+make exp METHOD=xkv-no-receiver-xattn DATASET=qasc
+make exp METHOD=xkv-lcfx-pooling DATASET=qasc
+```
+
+Launch all three ablations together in one 27-cell sweep. Finalized Full XKV
+v11 is deliberately not rerun; the visual command reads its existing results:
+
+```bash
+make exp-ablation DATASET=ropes
+make exp-ablation DATASET=qasc
+```
+
+It accepts the same sweep controls as `make exp`, including `EXP_GPUS=`,
+`EXP_STAGE=smoke`, `SHARER=`, `RECEIVER=`, and
+`EXP_ARGS="--resume"`/`EXP_ARGS="--dry-run"`.
+
+Render ablation-only Markdown grids with:
+
+```bash
+make visual-ablation DATASET=ropes
+make visual-ablation DATASET=qasc
+
+# Or render one view only:
+make visual-ablation DATASET=ropes ITEM=scores
+make visual-ablation DATASET=ropes ITEM=params
+make visual-ablation DATASET=ropes ITEM=latency
+```
+
+With no `ITEM=`, the command writes all three views under
+`results/comparison/ablation/<dataset>[_params|_latency].md`. The cells use
+`F` for Full XKV, `−RP` for no Receiver pooling, `−RX` for no raw Receiver-KV
+cross-attention, and `LCFP` for exact LCF-X pooling.
+
+`xkv-no-receiver-pooling` removes only the pooled Receiver slots from the joint
+memory; raw Receiver KV still drives the position decoder.
+`xkv-no-receiver-xattn` keeps both pools but broadcasts translated per-layer
+memory across Receiver positions instead of using raw Receiver KV as
+cross-attention queries. `xkv-lcfx-pooling` changes both side pools from direct
+`N -> k` attention to LCF-X's original, intentionally non-vectorized
+`N -> P -> 1` attention. It uses the same two query tensors, query
+initialization, shared K/V weights, natural-paragraph boundaries, span
+allocation, and batch/layer/span loops as LCF-X; `P=5` remains the fallback
+for inputs without natural boundaries and can be changed with
+`XKV_POOL_SPANS=`.
+
 Key settings are `XKV_DMODEL=eighth` (`receiver_hidden//8`), `XKV_BLOCKS=1`,
 `XKV_HEADS=8`, and `XKV_POOL_K` (`XKV_POOL_SLOTS` is an alias; `k` applies to
 both caches). When unset, `k` is 1/2/3/4 for a 0.6B/1B/3B/8B Receiver; an explicit

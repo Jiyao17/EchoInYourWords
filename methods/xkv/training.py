@@ -10,16 +10,20 @@ from typing import Any, Iterable
 from methods.common.decoding import resolve_answer_stop_id
 from methods.common.progress import ProgressLogger
 from methods.common.prompts import build_receiver_prompt, build_sharer_encode_text
+from methods.lcfx.spans import paragraph_span_starts
 
 from .cache import add_residual_inplace, extract_kv
 from .model import XKVPair
 from .runner import run_xkv_example
 from .schema import XKVExample
 from .translator import (
+    XKV_FULL,
+    XKV_LCFX_POOLING,
     XKVTranslator,
     _default_pool_slots,
     _resolve_d_model,
     _safe_num_heads,
+    _variant_options,
 )
 
 CHECKPOINT_FORMAT = 10
@@ -75,6 +79,7 @@ def batched_example_loss(
     from torch.nn import functional as F
 
     stop_id = resolve_answer_stop_id(pair.receiver_tok, pair.receiver)
+    exact_lcfx_pool = translator.pooling_mode == "lcfx_exact"
     rows = []
     for raw in examples:
         example = _as_example(raw)
@@ -98,11 +103,43 @@ def batched_example_loss(
         )
         if prompt.numel() < 2 or answer.numel() < 1 or sharer.numel() < 1:
             continue
-        rows.append((prompt, answer, sharer))
+        sharer_boundaries = (
+            paragraph_span_starts(
+                pair.sharer_tok,
+                sharer_text,
+                example.sharer_context,
+            )
+            if exact_lcfx_pool
+            else None
+        )
+        receiver_boundaries = (
+            pair.receiver_span_starts(
+                receiver_prompt,
+                example.receiver_context,
+                encoded_ids=prompt,
+            )
+            if exact_lcfx_pool
+            else None
+        )
+        if exact_lcfx_pool:
+            rows.append(
+                (prompt, answer, sharer, sharer_boundaries, receiver_boundaries)
+            )
+        else:
+            rows.append((prompt, answer, sharer))
     if not rows:
         return None
 
-    prompts, answers, sharers = zip(*rows)
+    if exact_lcfx_pool:
+        (
+            prompts,
+            answers,
+            sharers,
+            sharer_boundaries,
+            receiver_boundaries,
+        ) = zip(*rows)
+    else:
+        prompts, answers, sharers = zip(*rows)
     sharer_side = "left" if pair.sharer_spec.is_gemma3 else "right"
     sharer_ids, sharer_mask = _pad(
         list(sharers), pair.sharer_tok.pad_token_id, sharer_side
@@ -130,14 +167,26 @@ def batched_example_loss(
             use_cache=True,
         ).past_key_values
 
-    residual = translator.translate(
-        extract_kv(sharer_dynamic_cache),
-        extract_kv(receiver_dynamic_cache),
-        sharer_attention_mask=sharer_mask,
-        receiver_attention_mask=prefix_mask,
-        sharer_windowed_cache=pair.sharer_spec.has_hybrid_cache,
-        receiver_windowed_cache=pair.receiver_spec.has_hybrid_cache,
-    )
+    if exact_lcfx_pool:
+        residual = translator.translate(
+            extract_kv(sharer_dynamic_cache),
+            extract_kv(receiver_dynamic_cache),
+            sharer_attention_mask=sharer_mask,
+            receiver_attention_mask=prefix_mask,
+            sharer_span_boundaries=list(sharer_boundaries),
+            receiver_span_boundaries=list(receiver_boundaries),
+            sharer_windowed_cache=pair.sharer_spec.has_hybrid_cache,
+            receiver_windowed_cache=pair.receiver_spec.has_hybrid_cache,
+        )
+    else:
+        residual = translator.translate(
+            extract_kv(sharer_dynamic_cache),
+            extract_kv(receiver_dynamic_cache),
+            sharer_attention_mask=sharer_mask,
+            receiver_attention_mask=prefix_mask,
+            sharer_windowed_cache=pair.sharer_spec.has_hybrid_cache,
+            receiver_windowed_cache=pair.receiver_spec.has_hybrid_cache,
+        )
     add_residual_inplace(receiver_dynamic_cache, residual)
 
     answer_ids, answer_mask = _pad(
@@ -281,16 +330,16 @@ def save_translator(
     directory = os.path.dirname(path)
     if directory:
         os.makedirs(directory, exist_ok=True)
-    torch.save(
-        {
-            "format": CHECKPOINT_FORMAT,
-            "state_dict": translator.state_dict(),
-            "arch": translator.arch_config(),
-            "sharer_model": pair.sharer_spec.name,
-            "receiver_model": pair.receiver_spec.name,
-        },
-        path,
-    )
+    checkpoint = {
+        "format": CHECKPOINT_FORMAT,
+        "state_dict": translator.state_dict(),
+        "arch": translator.arch_config(),
+        "sharer_model": pair.sharer_spec.name,
+        "receiver_model": pair.receiver_spec.name,
+    }
+    if hasattr(translator, "training_seed"):
+        checkpoint["training_seed"] = translator.training_seed
+    torch.save(checkpoint, path)
 
 
 def load_translator(
@@ -304,6 +353,8 @@ def load_translator(
     num_heads: int = 8,
     dropout: float = 0.1,
     pool_slots: int | None = None,
+    variant: str = XKV_FULL,
+    pool_spans: int = 5,
 ) -> XKVTranslator:
     import torch
 
@@ -317,10 +368,15 @@ def load_translator(
         )
     resolved_d_model = _resolve_d_model(d_model, pair.receiver_spec.hidden)
     resolved_pool_slots = (
-        _default_pool_slots(pair.receiver_spec.name)
+        (
+            1
+            if variant == "xkv-lcfx-pooling"
+            else _default_pool_slots(pair.receiver_spec.name)
+        )
         if pool_slots is None
         else int(pool_slots)
     )
+    pooling_mode, output_mode, receiver_pooling = _variant_options(variant)
     expected = {
         **_pair_arch(pair),
         "d_model": resolved_d_model,
@@ -328,8 +384,11 @@ def load_translator(
         "num_heads": _safe_num_heads(resolved_d_model, int(num_heads)),
         "dropout": float(dropout),
         "pool_slots": resolved_pool_slots,
-        "pooling_mode": "direct_attention_k",
-        "output_mode": "position_cross_attention",
+        "variant": variant,
+        "pooling_mode": pooling_mode,
+        "output_mode": output_mode,
+        "receiver_pooling": receiver_pooling,
+        "pool_spans": int(pool_spans),
     }
     mismatches: list[str] = []
     if checkpoint.get("sharer_model") != pair.sharer_spec.name:
@@ -341,9 +400,17 @@ def load_translator(
             f"receiver_model={checkpoint.get('receiver_model')!r} != {pair.receiver_spec.name!r}"
         )
     architecture = checkpoint.get("arch", {})
+    normalized_architecture = dict(architecture)
+    # Format-10 Full checkpoints created before ablations did not stamp these
+    # fields; their defaults exactly describe the old architecture.
+    normalized_architecture.setdefault("variant", XKV_FULL)
+    normalized_architecture.setdefault("receiver_pooling", True)
+    normalized_architecture.setdefault("pool_spans", 5)
     for key, wanted in expected.items():
-        if architecture.get(key) != wanted:
-            mismatches.append(f"arch.{key}={architecture.get(key)!r} != {wanted!r}")
+        if normalized_architecture.get(key) != wanted:
+            mismatches.append(
+                f"arch.{key}={normalized_architecture.get(key)!r} != {wanted!r}"
+            )
     if mismatches:
         message = f"XKV checkpoint {path} mismatch:\n  - " + "\n  - ".join(mismatches)
         if not allow_model_mismatch:
@@ -351,8 +418,12 @@ def load_translator(
                 message + "\nPass --allow-model-mismatch to force loading."
             )
         print(f"[load_translator] WARNING (forced): {message}")
-    translator = XKVTranslator.from_arch_config(architecture, zero_init=False)
+    translator = XKVTranslator.from_arch_config(
+        normalized_architecture, zero_init=False
+    )
     translator.load_state_dict(checkpoint["state_dict"])
+    if "training_seed" in checkpoint:
+        translator.training_seed = checkpoint["training_seed"]
     return translator
 
 
@@ -385,6 +456,10 @@ def train_translator(
     _freeze(pair.receiver)
     translator.train()
     torch.manual_seed(seed)
+    if translator.variant == XKV_LCFX_POOLING and torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    if translator.variant == XKV_LCFX_POOLING:
+        translator.training_seed = int(seed)
     rng = random.Random(seed)
     training = list(train_data)
     evaluation = list(eval_data) if eval_data is not None else None
@@ -402,7 +477,8 @@ def train_translator(
     logger = ProgressLogger(
         log_path,
         config={
-            "method": "xkv",
+            "method": translator.variant,
+            **({"seed": seed} if translator.variant == XKV_LCFX_POOLING else {}),
             "sharer_model": pair.sharer_spec.name,
             "receiver_model": pair.receiver_spec.name,
             "trainable_params": translator.trainable_parameters(),
@@ -419,6 +495,8 @@ def train_translator(
             "pool_k": translator.pool_slots,
             "pooling_mode": translator.pooling_mode,
             "output_mode": translator.output_mode,
+            "receiver_pooling": translator.receiver_pooling,
+            "pool_spans": translator.pool_spans,
             "checkpoint_path": checkpoint_path,
             "total_steps": total_steps,
         },
@@ -433,7 +511,7 @@ def train_translator(
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_scale)
     print(
-        f"Training XKV: {len(training)} train"
+        f"Training {translator.variant}: {len(training)} train"
         + (f" / {len(evaluation)} eval" if evaluation else "")
         + f" | {translator.trainable_parameters()} params | d={translator.d_model}"
         f" n={translator.num_blocks} | epochs={epochs} lr={lr}"
@@ -530,17 +608,17 @@ def train_translator(
                 pool_diagnostics = translator.pool_diagnostics()
                 pool_text = ""
                 if pool_diagnostics:
-                    pool_text = (
-                        " | pool H(s/r) "
-                        f"{pool_diagnostics['sharer_pool_entropy']:.4f}/"
-                        f"{pool_diagnostics['receiver_pool_entropy']:.4f}"
-                    )
+                    entropy = f"{pool_diagnostics['sharer_pool_entropy']:.4f}"
+                    if "receiver_pool_entropy" in pool_diagnostics:
+                        entropy += f"/{pool_diagnostics['receiver_pool_entropy']:.4f}"
+                    pool_text = f" | pool H(s/r) {entropy}"
                     if "sharer_pool_slot_cosine" in pool_diagnostics:
-                        pool_text += (
-                            " cos(s/r) "
-                            f"{pool_diagnostics['sharer_pool_slot_cosine']:.4f}/"
-                            f"{pool_diagnostics['receiver_pool_slot_cosine']:.4f}"
-                        )
+                        cosine = f"{pool_diagnostics['sharer_pool_slot_cosine']:.4f}"
+                        if "receiver_pool_slot_cosine" in pool_diagnostics:
+                            cosine += (
+                                f"/{pool_diagnostics['receiver_pool_slot_cosine']:.4f}"
+                            )
+                        pool_text += f" cos(s/r) {cosine}"
                 print(
                     f"epoch {epoch + 1}/{epochs} opt_step {opt_step}"
                     f" | train_loss {train_loss:.4f} | lr {current_lr:.2e}"
