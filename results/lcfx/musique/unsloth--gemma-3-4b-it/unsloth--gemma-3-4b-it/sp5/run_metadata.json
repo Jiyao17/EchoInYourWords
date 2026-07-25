@@ -1,0 +1,15 @@
+{
+  "method": "lcf_x",
+  "created_at": "2026-07-21T08:08:08.064293+00:00",
+  "dataset": "data/tasks/musique_val.jsonl",
+  "sharer_model": "unsloth/gemma-3-4b-it",
+  "receiver_model": "unsloth/gemma-3-4b-it",
+  "num_examples": 1252,
+  "max_new_tokens": 64,
+  "num_spans": 5,
+  "span_scheme": "paragraphs",
+  "bottleneck_dim": 128,
+  "fuser_checkpoint": "data/checkpoints/lcfx/musique/unsloth--gemma-3-4b-it/unsloth--gemma-3-4b-it/sp5/fuser.pt",
+  "scoring": "free_form",
+  "dtype": "auto"
+}

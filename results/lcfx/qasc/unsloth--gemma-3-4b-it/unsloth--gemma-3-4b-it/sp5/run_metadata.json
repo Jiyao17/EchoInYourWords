@@ -1,0 +1,15 @@
+{
+  "method": "lcf_x",
+  "created_at": "2026-07-21T08:51:21.201508+00:00",
+  "dataset": "data/tasks/qasc_val.jsonl",
+  "sharer_model": "unsloth/gemma-3-4b-it",
+  "receiver_model": "unsloth/gemma-3-4b-it",
+  "num_examples": 926,
+  "max_new_tokens": 64,
+  "num_spans": 5,
+  "span_scheme": "paragraphs",
+  "bottleneck_dim": 128,
+  "fuser_checkpoint": "data/checkpoints/lcfx/qasc/unsloth--gemma-3-4b-it/unsloth--gemma-3-4b-it/sp5/fuser.pt",
+  "scoring": "multiple_choice",
+  "dtype": "auto"
+}

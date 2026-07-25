@@ -1,0 +1,20 @@
+{
+  "method": "xkv",
+  "created_at": "2026-07-21T01:29:22.230292+00:00",
+  "dataset": "data/tasks/qasc_val.jsonl",
+  "sharer_model": "unsloth/gemma-3-4b-it",
+  "receiver_model": "unsloth/gemma-3-4b-it",
+  "num_examples": 926,
+  "d_model": 320,
+  "d_model_spec": "eighth",
+  "num_blocks": 1,
+  "num_heads": 8,
+  "dropout": 0.1,
+  "pool_slots": 3,
+  "pool_k": 3,
+  "pooling_mode": "direct_attention_k",
+  "output_mode": "position_cross_attention",
+  "translator_checkpoint": "data/checkpoints/xkv/qasc/unsloth--gemma-3-4b-it/unsloth--gemma-3-4b-it/dh8_n1_h8_do0p1_k3_v11/translator.pt",
+  "scoring": "multiple_choice",
+  "dtype": "auto"
+}
