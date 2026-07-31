@@ -99,6 +99,9 @@ def load_record(method: str, dataset: str, sharer: str, receiver: str) -> dict |
         "accuracy": metrics.get("accuracy"),
         "em": scores.get("em") if scores else None,
         "f1": scores.get("f1") if scores else None,
+        "communication_ms": (
+            latency.get("sharer_ms") if method == "t2t" else latency.get("fuser_ms")
+        ),
         "component_ms": (
             None if method == "t2t" else latency.get("fuser_ms")
         ),
@@ -168,14 +171,17 @@ def fmt_latency(value: float | None, bold: bool = False) -> str:
 
 
 def fmt_latency_cell(
-    record: dict | None, best_component: float | None, best_total: float | None
+    record: dict | None,
+    latency_key: str,
+    best_latency: float | None,
+    best_total: float | None,
 ) -> str:
     if record is None:
         return "--"
-    component = record["component_ms"]
+    latency = record[latency_key]
     total = record["total_ms"]
     return (
-        f"{fmt_latency(component, component == best_component)}/"
+        f"{fmt_latency(latency, latency == best_latency)}/"
         f"{fmt_latency(total, total == best_total)}"
     )
 
@@ -207,14 +213,16 @@ def method_score_average_text(
     return "; ".join(parts)
 
 
-def method_latency_average_text(grid: dict, methods: list[tuple[str, str]]) -> str:
+def method_latency_average_text(
+    grid: dict, methods: list[tuple[str, str]], latency_key: str
+) -> str:
     parts = []
     for method, label in methods:
         records = [cell[method] for cell in grid.values()]
         n = sample_count(records)
         suffix = f" ($n={n}$)" if n != 9 else ""
         parts.append(
-            f"{label} {average(records, 'component_ms'):.1f}/"
+            f"{label} {average(records, latency_key):.1f}/"
             f"{average(records, 'total_ms'):.1f}{suffix}"
         )
     return "; ".join(parts)
@@ -290,7 +298,7 @@ def latency_grid_table(
     dataset: str, methods: list[tuple[str, str]], label_prefix: str
 ) -> str:
     grid = load_grid(dataset, methods)
-    averages = method_latency_average_text(grid, methods)
+    averages = method_latency_average_text(grid, methods, "component_ms")
     caption = (
         f"{DATASET_NAMES[dataset]} ablation latency in milliseconds per example. "
         f"Entries are translator/total; lower is better and cell-wise minima are "
@@ -321,8 +329,62 @@ def latency_grid_table(
             best_component = min(components) if components else None
             best_total = min(totals) if totals else None
             values = [
-                fmt_latency_cell(cell[method], best_component, best_total)
+                fmt_latency_cell(
+                    cell[method], "component_ms", best_component, best_total
+                )
                 for method, _ in methods
+            ]
+            lines.append(
+                f"    {sharer_name} & {receiver_name} & "
+                + " & ".join(values)
+                + r" \\"
+            )
+    lines.extend(table_footer())
+    return "\n".join(lines)
+
+
+def method_latency_grid_table(dataset: str) -> str:
+    grid = load_grid(dataset, METHODS)
+    averages = method_latency_average_text(grid, METHODS, "communication_ms")
+    caption = (
+        f"{DATASET_NAMES[dataset]} communication/end-to-end latency in milliseconds "
+        f"per example. Communication is fuser/translator time for LCF-X and XKV, "
+        f"and Sharer text-generation time for T2T. Lower is better; cell-wise "
+        f"minima are bold. Mean across available model pairs: {averages}."
+    )
+    lines = table_header(
+        "llccc",
+        caption,
+        f"tab:methods-{dataset.replace('_', '-')}-latency",
+    )
+    lines.append(
+        r"    Sharer & Receiver & \textsc{LCF-X} & \textsc{XKV} & \textsc{T2T} \\"
+    )
+    lines.append(r"    \midrule")
+    for sharer, sharer_name in MODELS:
+        for receiver, receiver_name in MODELS:
+            cell = grid[(sharer, receiver)]
+            records = [cell[method] for method, _ in METHODS]
+            communications = [
+                record["communication_ms"]
+                for record in records
+                if record and record["communication_ms"] is not None
+            ]
+            totals = [
+                record["total_ms"]
+                for record in records
+                if record and record["total_ms"] is not None
+            ]
+            best_communication = min(communications) if communications else None
+            best_total = min(totals) if totals else None
+            values = [
+                fmt_latency_cell(
+                    cell[method],
+                    "communication_ms",
+                    best_communication,
+                    best_total,
+                )
+                for method, _ in METHODS
             ]
             lines.append(
                 f"    {sharer_name} & {receiver_name} & "
@@ -339,6 +401,7 @@ def method_summary_data() -> tuple[dict, dict]:
         method: {
             "scores": [],
             "totals": [],
+            "communications": [],
             "components": [],
             "params": [],
             "wins": 0,
@@ -360,6 +423,11 @@ def method_summary_data() -> tuple[dict, dict]:
             summary[method]["scores"].append(mean(primary) * 100)
             summary[method]["totals"].extend(
                 record["total_ms"] for record in records if record
+            )
+            summary[method]["communications"].extend(
+                record["communication_ms"]
+                for record in records
+                if record and record["communication_ms"] is not None
             )
             summary[method]["components"].extend(
                 record["component_ms"]
@@ -418,26 +486,27 @@ def method_conclusion_tables() -> str:
     lines.extend(
         table_header(
             "lcccc",
-            "Overall efficiency on five datasets (45 model pairs). XKV is 26.4\\% "
-            "faster end-to-end than LCF-X, 6.8$\\times$ faster than T2T, and uses "
-            "76.1\\% fewer trainable parameters than LCF-X. T2T trains no adapter.",
+            "Overall efficiency on five datasets (45 model pairs). Communication "
+            "uses fuser/translator time for LCF-X and XKV and Sharer text-generation "
+            "time for T2T. XKV is 26.4\\% faster end-to-end than LCF-X, "
+            "6.8$\\times$ faster than T2T, and uses 76.1\\% fewer trainable "
+            "parameters than LCF-X. T2T trains no adapter.",
             "tab:method-efficiency-summary",
         )
     )
     lines.append(
-        r"    Method & Component (ms) & Total (ms) & Relative to XKV & Trainable params \\"
+        r"    Method & Communication (ms) & Total (ms) & Relative to XKV & "
+        r"Trainable params \\"
     )
     lines.append(r"    \midrule")
     xkv_total = mean(summary["xkv"]["totals"])
     for method, _ in METHODS:
         row = summary[method]
-        component = (
-            f"{mean(row['components']):.1f}" if row["components"] else "--"
-        )
+        communication = f"{mean(row['communications']):.1f}"
         params = mean(row["params"])
         params_text = "0" if params == 0 else f"{params / 1e6:.2f}M"
         lines.append(
-            f"    {labels[method]} & {component} & "
+            f"    {labels[method]} & {communication} & "
             f"{mean(row['totals']):.1f} & "
             f"{mean(row['totals']) / xkv_total:.2f}$\\times$ & {params_text}"
             + r" \\"
@@ -599,12 +668,13 @@ def build_document() -> str:
         "% Scores and latencies are read from the current selected result paths.",
         "",
         "% ------------------------------------------------------------------",
-        "% 1. LCF-X / XKV / T2T score grids",
+        "% 1. LCF-X / XKV / T2T score and latency grids",
         "% ------------------------------------------------------------------",
         "",
     ]
     for dataset in METHOD_DATASETS:
         sections.append(score_grid_table(dataset, METHODS, "methods"))
+        sections.append(method_latency_grid_table(dataset))
 
     sections.extend(
         [
