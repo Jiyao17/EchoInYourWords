@@ -86,7 +86,7 @@ EchoInYourWords/
 │   ├── run_eiyw.py / train_eiyw.py         # EIYW eval / translator training
 │   ├── run_kvtok.py / train_kvtok.py       # KVTok eval / translator training
 │   ├── run_xkv.py / train_xkv.py             # XKV eval / translator training
-│   └── run_single_model.py       # single-model inference baseline (full context)
+│   └── run_single_model.py       # matched Receiver baselines (half/full context)
 ├── data/
 │   ├── hf_cache/                 # HuggingFace cache (its native single-root layout)
 │   │   ├── hub/                  #   all Hub downloads — models--… and datasets--…
@@ -147,10 +147,11 @@ and the single-model baseline stays decoupled.
   (`build_sharer_encode_text`): the LCF-X/EIYW pair — the Receiver answers from
   its own context with no text message (the Sharer's information arrives via the
   fused cache / soft tokens), and the Sharer encodes its own context + question.
-- **Single-model prompt** (`build_single_model_prompt`): a *dedicated* prompt for
-  the single-model inference baseline (one model answers from a given context),
-  deliberately separate so it and the method receiver prompts never disturb each
-  other.
+- **Historical single-model prompt** (`build_single_model_prompt`): the dedicated
+  prompt used by older flat full-context outputs. Current single-model baselines
+  reuse `build_receiver_prompt` and the method Receiver's no-residual greedy
+  decoding path, saving private/full contexts in separate `half/` and `full/`
+  subfolders.
 
 ### Data contract — `Example`
 
@@ -182,7 +183,7 @@ Every run writes four files into its `--output-dir` (under `results/`):
 | `predictions_brief.tsv` | quick-scan companion: one row per example with just `id`, `em`, `f1`, `prediction`, `answer` (no prompts). For eyeballing answer-vs-prediction fast. |
 | `metrics.json` | aggregate accuracy, free-form `scores` (EM/F1), and `token_counts` totals/averages. |
 | `latency.json` | per-stage and total latency totals/averages, using a uniform cross-method contract: `sharer_ms`, `fuser_ms` (translation/fusion — `0.0` for text-to-text, `>0` for cache/latent methods), `receiver_ms`, `total_ms`. |
-| `run_metadata.json` | method, models, dataset, budgets, scoring mode, timestamp. |
+| `run_metadata.json` | method, models, dataset, budgets, scoring mode, replicate id, resolved seed, timestamp. |
 
 Comparison/analysis depends only on these files, never on internal method
 classes — so T2T, the receiver baselines, and the latent methods (LCF-X and

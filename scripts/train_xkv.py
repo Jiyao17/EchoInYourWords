@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts._defaults import DEFAULT_RECEIVER, DEFAULT_SHARER  # noqa: E402
+from scripts._defaults import DEFAULT_RECEIVER, DEFAULT_SHARER, resolve_seed  # noqa: E402
 from scripts._hf_cache import configure_hf_cache  # noqa: E402
 
 configure_hf_cache()
@@ -82,7 +82,7 @@ def main() -> None:
     parser.add_argument("--eval-em-examples", type=int, default=0)
     parser.add_argument("--log-file", type=Path, default=None)
     parser.add_argument("--val-frac", type=float, default=0.028)
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=None)
     parser.add_argument(
         "--checkpoint-out",
         type=Path,
@@ -91,6 +91,8 @@ def main() -> None:
     parser.add_argument("--device", default=None)
     parser.add_argument("--dtype", default="auto")
     args = parser.parse_args()
+    args.seed = resolve_seed(args.seed)
+    print(f"Training seed: {args.seed}")
 
     from methods.xkv import XKVTranslator, load_xkv_pair, train_translator
 
@@ -118,14 +120,11 @@ def main() -> None:
         device=args.device,
         dtype=args.dtype,
     )
-    if args.variant == "xkv-lcfx-pooling":
-        # Only corrected LCFP uses the new controlled initialization path.
-        # Full XKV, −RP, and −RX remain on their finalized v11 behavior.
-        import torch
+    import torch
 
-        torch.manual_seed(args.seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
     translator = XKVTranslator.from_specs(
         pair.sharer_spec,
         pair.receiver_spec,

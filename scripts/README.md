@@ -3,7 +3,8 @@
 This folder holds the runnable entrypoints. Every script writes the same
 standardized output files (`predictions.jsonl`, `predictions_brief.tsv`,
 `metrics.json`, `latency.json`, `run_metadata.json`) into its `--output-dir`, so
-all runs are directly comparable. `predictions_brief.tsv` is a quick-scan
+all runs are directly comparable. Evaluation metadata includes the replicate
+id and the resolved seed; an omitted seed is generated randomly. `predictions_brief.tsv` is a quick-scan
 companion to `predictions.jsonl` — one row per example with just `id`, `em`,
 `f1`, `prediction`, `answer` (no prompts), e.g. `column -t -s$'\t' <file>` to
 eyeball answer vs. prediction. For the project layout and data/output contracts,
@@ -39,7 +40,7 @@ The scripts:
 | `run_eiyw.py` | Run EIYW (Sharer context → LCF-X's pooling unmodified → k·L_s slots cross-attend into the Receiver's own context *embeddings* (lookup only, no Receiver forward) → soft tokens in the Receiver's embedding width → prepended to the Receiver's input). |
 | `run_kvtok.py` | Run KVTok (Sharer cache → Stage-1 pool → factorized feature/token-axis projection → Receiver embedding memory, with no initial Receiver forward/cache → `--num-tokens` soft tokens prepended to the Receiver's input). |
 | `run_xkv.py` | Run XKV (dual vectorized `N→k` attention pools → layer map → bottleneck/attention translation → Receiver KV residual). |
-| `run_single_model.py` | Run the single-model inference baseline (one model answers from the full context — no Sharer, no communication). |
+| `run_single_model.py` | Run matched Receiver baselines with private (`half`), combined (`full`), or both contexts, without Sharer inference or translation. |
 | `train_lcfx_fuser.py` | Train the LCF-X fuser (frozen Sharer/Receiver; only the fuser learns). |
 | `train_eiyw.py` | Train the EIYW translator (frozen Sharer/Receiver; only the translator learns). |
 | `train_kvtok.py` | Train the KVTok translator (frozen Sharer/Receiver; only the translator learns). |
@@ -111,31 +112,41 @@ for the full list).
 message length is also recorded per example as `token_counts.sharer_output`, so
 you can sweep the budget and plot accuracy vs. message length.
 
-### Test B — Single-model inference baseline
+### Test B — Receiver baselines with half/full context
 
-The reference point the communication methods are measured against: **one model**
-answers each question from the **full** context (both partitions combined) — no
-Sharer, no communication. It uses a dedicated single-model prompt, separate from
-the method receiver prompts.
+One frozen model answers with its original Receiver evidence (`half`) or both
+partitions combined (`full`). The default `both` runs each condition after
+loading the model once. Both use `build_receiver_prompt` and the XKV/LCF-X
+Receiver's greedy prefix-cache decoding path with no residual, so no Sharer
+inference or translator computation is performed.
 
 ```bash
 python scripts/run_single_model.py \
-  --dataset data/tasks/hotpotqa_bridge_cross.jsonl \
+  --dataset data/tasks/ropes_val.jsonl \
   --model unsloth/gemma-3-1b-it \
-  --output-dir results/single_model
+  --context-mode both \
+  --run-id 7 --seed 2131195937 \
+  --output-dir results/runs/run-7/single/ropes/unsloth--gemma-3-1b-it
 ```
 
 | Flag | Default | Meaning |
 |------|---------|---------|
 | `--model` | `Qwen/Qwen3-0.6B` | The single model that answers. |
+| `--context-mode` | `both` | `half` = original Receiver partition; `full` = both partitions; `both` = evaluate each. |
+| `--output-dir` | required | Root for condition subfolders `half/` and `full/`. |
 | `--max-new-tokens` | `64` | Answer budget. |
 | `--num-examples` | all | Cap the number of examples. |
 | `--scoring` | `auto` | `auto` / `choice` / `free_form`. |
 | `--device`, `--dtype` | auto / `auto` | Device and weight dtype. |
 
-This full-context single model is the upper bound: a communication method's value
-is how much of the gap up to it the method recovers using only a Sharer message /
-latent summary / soft tokens.
+Every condition writes its own complete output set, with its context mode,
+prompt/decoder identity and seed recorded. Empty or unparseable labeled answers
+count as incorrect rather than disappearing from the metric denominator. The
+full-context result is a reference, not a guaranteed upper bound. Historical
+flat single-model outputs used a dedicated prompt and remain separate.
+
+The Makefile equivalent is `make single DATASET=ropes SINGLE_CONTEXT=both RUN=7`;
+omit `MODEL=` to evaluate all three primary models (six conditions in total).
 
 ### Test C — LCF-X latent cache communication
 

@@ -57,13 +57,15 @@ help:
 	@echo "  make xkv-eval      XKV: eval a trained translator"
 	@echo "  make xkv-hetero    XKV on a heterogeneous pair (Llama -> Qwen preset)"
 	@echo "  make t2t           T2T baseline: EM/F1 on val (no training)"
-	@echo "  make single        Upper bound: MODEL answers with ALL evidence (MODEL=/DATASET= each: given=one, unset=all)"
+	@echo "  make single        Receiver baselines: SINGLE_CONTEXT=both (default), half, or full; MODEL=/DATASET= select axes"
 	@echo "  make exp           Sweep LCF-X/XKV/T2T over base model pairs, split by METHOD= then DATASET= (each: given=one, unset=all)"
+	@echo "  make repeat        Repeat REPEAT_TARGET=exp for RUNS=1:5 (also accepts RANGE=); each run gets an isolated tree and fresh seed"
 	@echo "  make exp-ablation  Sweep the three ablations; reuse frozen Full XKV v11 results"
 	@echo "  make exp-extend    Sweep only the 7 pairs where Sharer and/or Receiver is Ministral-8B"
 	@echo "  make exp-all       Sweep the full 0.6B/1B/3B/8B 4x4 grid (16 pairs)"
 	@echo "  make sweep         Full pipeline: prepare + 4x4 exp-all for every dataset, parallel across CUDA_VISIBLE_DEVICES"
 	@echo "  make visual        Comparison table: DATASET= (ITEM= given=one of scores/params/latency, unset=all three); ITEM=datasets for a size/oracle-score overview of every dataset"
+	@echo "  make compare       Three pairwise method-difference rows across every dataset; RUNS= selects repetitions"
 	@echo "  make visual-all    Same reports as visual, with the opt-in 8B model included (4x4 grid)"
 	@echo "  make visual-ablation  Full XKV vs its three ablations only (scores/params/latency)"
 	@echo ""
@@ -81,6 +83,7 @@ help:
 	@echo "  results + checkpoints auto-separate (results/<method>/<dataset>/<sharer>/<receiver>/sp<SPANS>)."
 	@echo ""
 	@echo "Common knobs:  DATASET=  CKPT=  EVAL_N=  MAX_TRAIN=  MAX_STEPS=  BATCH_SIZE=  GRAD_ACCUM="
+	@echo "  Replicates: RUN=0 is the existing/current tree; positive RUN= (or N=) is isolated; RUNS=0:5 aggregates current + new runs"
 	@echo "  Pooling spans:  SPAN_SCHEME= (default: paragraphs; LCF-X+EIYW)  SPANS= (default: 5; chunk count for SPAN_SCHEME=fixed, and KVTok's Stage-1 pooling)"
 	@echo "  LCF-X-only bottleneck dim: BOTTLENECK=  (default: 128; a hidden projection width, not a token count)"
 	@echo "  EIYW-only knobs: EIYW_DMODEL= (default: half=receiver_hidden//2; also 'hidden' or int)  EIYW_QPL= (default: 1; cross-span queries/layer k, tokens=k*(Ls+Lr))  EIYW_BLOCKS= (default: 2; self-attn blocks)"
@@ -90,6 +93,15 @@ help:
 
 # ===== Config =================================================================
 PY         ?= python
+
+# Optional replicate id. Run 0 is the historical/unscoped tree, so existing
+# artifacts are reusable without moving them. Positive runs are isolated below
+# runs/run-<id>; leaving RUN empty retains the same run-0 layout.
+N          ?=
+RUN        ?= $(N)
+RUN_SUBDIR = $(if $(filter-out 0,$(strip $(RUN))),/runs/run-$(RUN),)
+RESULTS_ROOT ?= results$(RUN_SUBDIR)
+CHECKPOINTS_ROOT ?= data/checkpoints$(RUN_SUBDIR)
 
 # --- dataset selection (shared by all methods/baselines) ---
 DATASET    ?= hotpotqa_bridge
@@ -151,15 +163,15 @@ XKV_DMODEL_TAG = $(if $(filter eighth hidden/8 hidden//8 receiver/8,$(XKV_DMODEL
 XKV_POOL_SPAN_TAG = $(if $(filter xkv-lcfx-pooling,$(XKV_VARIANT)),_sp$(XKV_POOL_SPANS),)
 XKV_RUN_VERSION = $(if $(filter xkv-lcfx-pooling,$(XKV_VARIANT)),v12,v11)
 XKV_SLUG   = $(DATASET)/$(subst /,--,$(XKV_SHARER))/$(subst /,--,$(XKV_RECEIVER))/d$(XKV_DMODEL_TAG)_n$(XKV_BLOCKS)_h$(XKV_HEADS)_do$(subst .,p,$(XKV_DROPOUT))_k$(XKV_POOL_SLOTS)$(XKV_POOL_SPAN_TAG)_$(XKV_RUN_VERSION)
-LCFX_OUT   ?= results/lcfx/$(LCFX_SLUG)
-T2T_OUT    ?= results/t2t/$(T2T_SLUG)
-EIYW_OUT   ?= results/eiyw/$(EIYW_SLUG)
-KVTOK_OUT  ?= results/kvtok/$(KVTOK_SLUG)
-XKV_OUT    ?= results/$(XKV_VARIANT)/$(XKV_SLUG)
+LCFX_OUT   ?= $(RESULTS_ROOT)/lcfx/$(LCFX_SLUG)
+T2T_OUT    ?= $(RESULTS_ROOT)/t2t/$(T2T_SLUG)
+EIYW_OUT   ?= $(RESULTS_ROOT)/eiyw/$(EIYW_SLUG)
+KVTOK_OUT  ?= $(RESULTS_ROOT)/kvtok/$(KVTOK_SLUG)
+XKV_OUT    ?= $(RESULTS_ROOT)/$(XKV_VARIANT)/$(XKV_SLUG)
 
 # --- LCF-X fuser (architecture + training) ---
 # Checkpoint path is dataset+pair-scoped by default (override CKPT= to place it elsewhere).
-CKPT       ?= data/checkpoints/lcfx/$(LCFX_SLUG)/fuser.pt
+CKPT       ?= $(CHECKPOINTS_ROOT)/lcfx/$(LCFX_SLUG)/fuser.pt
 SPANS      ?= 5
 # Span partition for LCF-X and EIYW pooling. In LCF-X, 'paragraphs' uses raw
 # evidence paragraphs only (prompt/question blocks stay inside the first/last
@@ -224,7 +236,7 @@ EIYW_DMODEL ?= 512
 EIYW_QPL    ?= 1
 EIYW_ADAPT  ?= 0
 EIYW_BLOCKS ?= 1
-EIYW_CKPT ?= data/checkpoints/eiyw/$(EIYW_SLUG)/translator.pt
+EIYW_CKPT ?= $(CHECKPOINTS_ROOT)/eiyw/$(EIYW_SLUG)/translator.pt
 
 # --- KVTok (baseline): translator checkpoint ---
 # Reuses LCF-X's Stage 1 (within-span attention) only -- no across-span
@@ -238,7 +250,7 @@ EIYW_CKPT ?= data/checkpoints/eiyw/$(EIYW_SLUG)/translator.pt
 KVTOK_TOKENS ?= 8
 KVTOK_DMODEL ?= 512
 KVTOK_HEADS  ?= 8
-KVTOK_CKPT   ?= data/checkpoints/kvtok/$(KVTOK_SLUG)/translator.pt
+KVTOK_CKPT   ?= $(CHECKPOINTS_ROOT)/kvtok/$(KVTOK_SLUG)/translator.pt
 
 # --- XKV dual-cache attention translator ---
 XKV_DMODEL ?= eighth
@@ -249,7 +261,7 @@ XKV_POOL_SPANS ?= 5
 XKV_POOL_K ?=
 XKV_POOL_DEFAULT = $(if $(or $(findstring 0.6B,$(XKV_RECEIVER)),$(findstring 0.6b,$(XKV_RECEIVER))),1,$(if $(or $(findstring 1B,$(XKV_RECEIVER)),$(findstring 1b,$(XKV_RECEIVER))),2,$(if $(or $(findstring 3B,$(XKV_RECEIVER)),$(findstring 3b,$(XKV_RECEIVER)),$(findstring 4B,$(XKV_RECEIVER)),$(findstring 4b,$(XKV_RECEIVER))),3,$(if $(or $(findstring 8B,$(XKV_RECEIVER)),$(findstring 8b,$(XKV_RECEIVER))),4,2))))
 XKV_POOL_SLOTS ?= $(if $(filter xkv-lcfx-pooling,$(XKV_VARIANT)),1,$(if $(strip $(XKV_POOL_K)),$(XKV_POOL_K),$(XKV_POOL_DEFAULT)))
-XKV_CKPT ?= data/checkpoints/$(XKV_VARIANT)/$(XKV_SLUG)/translator.pt
+XKV_CKPT ?= $(CHECKPOINTS_ROOT)/$(XKV_VARIANT)/$(XKV_SLUG)/translator.pt
 
 # --- T2T baseline: caps the Sharer message at SHARER_MAX tokens (paper default
 #     was "T2T Max 200"; ours defaults to 100 -- override with SHARER_MAX=)
@@ -258,7 +270,15 @@ SHARER_MAX ?= 100
 RECV_MAX   ?= 64
 
 # --- shared knobs ---
-SEED       ?= 0
+# Dataset construction stays fixed across repetitions. Training/evaluation gets
+# one fresh process-safe random seed per top-level make invocation unless SEED
+# is supplied explicitly; recursive experiment calls forward the resolved value.
+DATA_SEED  ?= 0
+SEED_EXPLICIT := $(if $(strip $(SEED)),1,)
+ifeq ($(strip $(SEED)),)
+SEED := $(shell $(PY) -c "import secrets; print(secrets.randbelow(2147483647))")
+endif
+RUN_METADATA_ARGS = $(if $(strip $(RUN)),--run-id $(RUN),) --seed $(SEED)
 MAX_TRAIN  ?=          # cap number of training examples (partial run); empty = all
 MAX_STEPS  ?=          # cap number of optimizer steps; empty = full epoch(s)
 EVAL_N     ?=          # cap eval examples in lcfx-eval / eiyw-eval / kvtok-eval / t2t; empty = full val split
@@ -290,58 +310,58 @@ endif
 data-hotpotqa-bridge: $(TASKS)/hotpotqa_bridge_train.jsonl $(TASKS)/hotpotqa_bridge_val.jsonl
 
 $(TASKS)/hotpotqa_bridge_train.jsonl:
-	$(PY) scripts/prepare_hotpotqa_bridge.py --split train --num-examples -1 --seed $(SEED) --output $@
+	$(PY) scripts/prepare_hotpotqa_bridge.py --split train --num-examples -1 --seed $(DATA_SEED) --output $@
 
 $(TASKS)/hotpotqa_bridge_val.jsonl:
-	$(PY) scripts/prepare_hotpotqa_bridge.py --split validation --num-examples -1 --seed $(SEED) --output $@
+	$(PY) scripts/prepare_hotpotqa_bridge.py --split validation --num-examples -1 --seed $(DATA_SEED) --output $@
 
 # --- musique: partitioned MuSiQue-Ans 2-hop (downloads on first run) ---
 data-musique: $(TASKS)/musique_train.jsonl $(TASKS)/musique_val.jsonl
 
 $(TASKS)/musique_train.jsonl:
-	$(PY) scripts/prepare_musique.py --split train --num-examples -1 --seed $(SEED) --output $@
+	$(PY) scripts/prepare_musique.py --split train --num-examples -1 --seed $(DATA_SEED) --output $@
 
 $(TASKS)/musique_val.jsonl:
-	$(PY) scripts/prepare_musique.py --split validation --num-examples -1 --seed $(SEED) --output $@
+	$(PY) scripts/prepare_musique.py --split validation --num-examples -1 --seed $(DATA_SEED) --output $@
 
 # --- qasc: 8-way multiple-choice science QA; two-fact bridge split (fact1|fact2) ---
 data-qasc: $(TASKS)/qasc_train.jsonl $(TASKS)/qasc_val.jsonl
 
 $(TASKS)/qasc_train.jsonl:
-	$(PY) scripts/prepare_qasc.py --split train --num-examples -1 --seed $(SEED) --output $@
+	$(PY) scripts/prepare_qasc.py --split train --num-examples -1 --seed $(DATA_SEED) --output $@
 
 $(TASKS)/qasc_val.jsonl:
-	$(PY) scripts/prepare_qasc.py --split validation --num-examples -1 --seed $(SEED) --output $@
+	$(PY) scripts/prepare_qasc.py --split validation --num-examples -1 --seed $(DATA_SEED) --output $@
 
 # --- 2wikimultihop: 2WikiMultihopQA compositional (bridge-chain) questions, same
 #     10-paragraph/2-gold shape as hotpotqa_bridge (downloads on first run) ---
 data-2wikimultihop: $(TASKS)/2wikimultihop_train.jsonl $(TASKS)/2wikimultihop_val.jsonl
 
 $(TASKS)/2wikimultihop_train.jsonl:
-	$(PY) scripts/prepare_2wikimultihop.py --split train --num-examples -1 --seed $(SEED) --output $@
+	$(PY) scripts/prepare_2wikimultihop.py --split train --num-examples -1 --seed $(DATA_SEED) --output $@
 
 $(TASKS)/2wikimultihop_val.jsonl:
-	$(PY) scripts/prepare_2wikimultihop.py --split validation --num-examples -1 --seed $(SEED) --output $@
+	$(PY) scripts/prepare_2wikimultihop.py --split validation --num-examples -1 --seed $(DATA_SEED) --output $@
 
 # --- ropes: natively two-part (background rule | situation scenario); no
 #     invented partitioning needed (downloads on first run) ---
 data-ropes: $(TASKS)/ropes_train.jsonl $(TASKS)/ropes_val.jsonl
 
 $(TASKS)/ropes_train.jsonl:
-	$(PY) scripts/prepare_ropes.py --split train --num-examples -1 --seed $(SEED) --output $@
+	$(PY) scripts/prepare_ropes.py --split train --num-examples -1 --seed $(DATA_SEED) --output $@
 
 $(TASKS)/ropes_val.jsonl:
-	$(PY) scripts/prepare_ropes.py --split validation --num-examples -1 --seed $(SEED) --output $@
+	$(PY) scripts/prepare_ropes.py --split validation --num-examples -1 --seed $(DATA_SEED) --output $@
 
 # --- strategyqa: implicit multi-hop boolean QA; facts list split in half
 #     (downloads on first run; train/val is our own carve-out, see the script) ---
 data-strategyqa: $(TASKS)/strategyqa_train.jsonl $(TASKS)/strategyqa_val.jsonl
 
 $(TASKS)/strategyqa_train.jsonl:
-	$(PY) scripts/prepare_strategyqa.py --split train --num-examples -1 --seed $(SEED) --output $@
+	$(PY) scripts/prepare_strategyqa.py --split train --num-examples -1 --seed $(DATA_SEED) --output $@
 
 $(TASKS)/strategyqa_val.jsonl:
-	$(PY) scripts/prepare_strategyqa.py --split validation --num-examples -1 --seed $(SEED) --output $@
+	$(PY) scripts/prepare_strategyqa.py --split validation --num-examples -1 --seed $(DATA_SEED) --output $@
 
 # ===== Model download (into data/hf_cache; like `make data` for datasets) ======
 # Fetch a model once so later (offline) runs find it locally. Idempotent. MODEL is
@@ -408,6 +428,7 @@ lcfx-eval: data
 	$(OFFLINE) $(PY) scripts/run_lcfx.py --dataset $(VAL) --num-spans $(SPANS) --span-scheme $(SPAN_SCHEME) \
 	  --sharer-model $(LCFX_SHARER) --receiver-model $(LCFX_RECEIVER) --bottleneck-dim $(BOTTLENECK) --dropout $(LCFX_DROPOUT) \
 	  $(if $(EVAL_N),--num-examples $(EVAL_N),) \
+	  $(RUN_METADATA_ARGS) \
 	  --fuser-checkpoint $(CKPT) --output-dir $(LCFX_OUT)
 
 lcfx: lcfx-train lcfx-eval
@@ -424,7 +445,7 @@ HETERO_RECEIVER ?= Qwen/Qwen3-0.6B
 
 .PHONY: lcfx-hetero
 lcfx-hetero:
-	$(MAKE) lcfx LCFX_SHARER=$(HETERO_SHARER) LCFX_RECEIVER=$(HETERO_RECEIVER)
+	$(MAKE) lcfx LCFX_SHARER=$(HETERO_SHARER) LCFX_RECEIVER=$(HETERO_RECEIVER) SEED=$(SEED)
 
 # ===== EIYW (our method: train a translator, then evaluate) ====================
 # Pools BOTH the Sharer's and the Receiver's own KV cache per layer with the
@@ -465,6 +486,7 @@ eiyw-eval: data
 	  --num-spans $(SPANS) --span-scheme $(SPAN_SCHEME) \
 	  --sharer-model $(EIYW_SHARER) --receiver-model $(EIYW_RECEIVER) \
 	  $(if $(EVAL_N),--num-examples $(EVAL_N),) \
+	  $(RUN_METADATA_ARGS) \
 	  --translator-checkpoint $(EIYW_CKPT) --output-dir $(EIYW_OUT)
 
 eiyw: eiyw-train eiyw-eval
@@ -472,7 +494,7 @@ eiyw: eiyw-train eiyw-eval
 # Heterogeneous preset (Llama -> Qwen), mirrors lcfx-hetero.
 .PHONY: eiyw-hetero
 eiyw-hetero:
-	$(MAKE) eiyw EIYW_SHARER=$(HETERO_SHARER) EIYW_RECEIVER=$(HETERO_RECEIVER)
+	$(MAKE) eiyw EIYW_SHARER=$(HETERO_SHARER) EIYW_RECEIVER=$(HETERO_RECEIVER) SEED=$(SEED)
 
 # ===== KVTok (baseline: train a translator, then evaluate) ====================
 # Reuses LCF-X's Stage 1 (Fig. 3 within-span attention) *only* -- no
@@ -513,6 +535,7 @@ kvtok-eval: data
 	  --d-model $(KVTOK_DMODEL) --num-heads $(KVTOK_HEADS) \
 	  --sharer-model $(KVTOK_SHARER) --receiver-model $(KVTOK_RECEIVER) \
 	  $(if $(EVAL_N),--num-examples $(EVAL_N),) \
+	  $(RUN_METADATA_ARGS) \
 	  --translator-checkpoint $(KVTOK_CKPT) --output-dir $(KVTOK_OUT)
 
 kvtok: kvtok-train kvtok-eval
@@ -520,7 +543,7 @@ kvtok: kvtok-train kvtok-eval
 # Heterogeneous preset (Llama -> Qwen), mirrors lcfx-hetero/eiyw-hetero.
 .PHONY: kvtok-hetero
 kvtok-hetero:
-	$(MAKE) kvtok KVTOK_SHARER=$(HETERO_SHARER) KVTOK_RECEIVER=$(HETERO_RECEIVER)
+	$(MAKE) kvtok KVTOK_SHARER=$(HETERO_SHARER) KVTOK_RECEIVER=$(HETERO_RECEIVER) SEED=$(SEED)
 
 # ===== XKV (dual-cache attention translator -> Receiver KV residual) =========
 .PHONY: xkv xkv-train xkv-eval xkv-hetero \
@@ -550,21 +573,22 @@ xkv-eval: data
 	  --sharer-model $(XKV_SHARER) --receiver-model $(XKV_RECEIVER) \
 	  --variant $(XKV_VARIANT) --d-model $(XKV_DMODEL) --num-blocks $(XKV_BLOCKS) --num-heads $(XKV_HEADS) --dropout $(XKV_DROPOUT) --pool-k $(XKV_POOL_SLOTS) --pool-spans $(XKV_POOL_SPANS) \
 	  $(if $(EVAL_N),--num-examples $(EVAL_N),) \
+	  $(RUN_METADATA_ARGS) \
 	  --translator-checkpoint $(XKV_CKPT) --output-dir $(XKV_OUT)
 
 xkv: xkv-train xkv-eval
 
 xkv-no-receiver-pooling:
-	$(MAKE) xkv XKV_VARIANT=xkv-no-receiver-pooling
+	$(MAKE) xkv XKV_VARIANT=xkv-no-receiver-pooling SEED=$(SEED)
 
 xkv-no-receiver-xattn:
-	$(MAKE) xkv XKV_VARIANT=xkv-no-receiver-xattn
+	$(MAKE) xkv XKV_VARIANT=xkv-no-receiver-xattn SEED=$(SEED)
 
 xkv-lcfx-pooling:
-	$(MAKE) xkv XKV_VARIANT=xkv-lcfx-pooling XKV_POOL_SLOTS=1
+	$(MAKE) xkv XKV_VARIANT=xkv-lcfx-pooling XKV_POOL_SLOTS=1 SEED=$(SEED)
 
 xkv-hetero:
-	$(MAKE) xkv XKV_SHARER=$(HETERO_SHARER) XKV_RECEIVER=$(HETERO_RECEIVER)
+	$(MAKE) xkv XKV_SHARER=$(HETERO_SHARER) XKV_RECEIVER=$(HETERO_RECEIVER) SEED=$(SEED)
 
 # ===== T2T (baseline: no training, single eval pass) ==========================
 # Same models / data / EM-F1 scoring as lcfx-eval. Sharer message budget is
@@ -577,31 +601,38 @@ t2t-eval t2t: data
 	  --sharer-model $(T2T_SHARER) --receiver-model $(T2T_RECEIVER) \
 	  --sharer-max-new-tokens $(SHARER_MAX) --receiver-max-new-tokens $(RECV_MAX) \
 	  $(if $(EVAL_N),--num-examples $(EVAL_N),) \
+	  $(RUN_METADATA_ARGS) \
 	  --output-dir $(T2T_OUT)
 
-# ===== Single-model oracle (baseline: ONE model sees ALL evidence) =============
-# Upper bound: a single model answers from both partitions combined (no split, no
-# Sharer) -- i.e. how each model does on the dataset with all available info. It's
-# a single model (not a pair). Split MODEL-major, DATASET-minor, same "given=one,
-# unset=all" pattern as `exp`: with no MODEL=, tests every model in PRIMARY_MODELS
+# ===== Single-model Receiver baselines (no communication) ======================
+# The same Receiver prompt/greedy decoder sees its original private context
+# (half), both evidence portions (full), or both conditions (default). Full is
+# a reference, not a guaranteed upper bound. One model is loaded per dataset
+# invocation and reused across conditions. Split MODEL-major, DATASET-minor,
+# same "given=one, unset=all" pattern as `exp`: with no MODEL=, tests every
+# model in PRIMARY_MODELS
 # (EXTRA_MODELS=TRUE adds Ministral-8B, same as exp-all/sweep); with no DATASET=, tests
 # every dataset.
 #   make single                                        # every model, every dataset
 #   make single MODEL=Qwen/Qwen3-0.6B                  # one model, every dataset
 #   make single DATASET=musique                        # every model, one dataset
 #   make single MODEL=Qwen/Qwen3-0.6B DATASET=musique   # one model, one dataset
-SINGLE_OUT ?= results/single/$(DATASET)/$(subst /,--,$(MODEL))
+#   make single DATASET=ropes SINGLE_CONTEXT=both RUN=7 # six baseline evaluations
+#   make single MODEL=Qwen/Qwen3-0.6B DATASET=ropes SINGLE_CONTEXT=half
+SINGLE_CONTEXT ?= both
+# The runner appends half/ or full/ under this root, preserving old flat outputs.
+SINGLE_OUT ?= $(RESULTS_ROOT)/single/$(DATASET)/$(subst /,--,$(MODEL))
 
 # Outer loop: model.
 .PHONY: single
 single:
 ifeq ($(origin MODEL),command line)
-	$(MAKE) _single-dataset MODEL=$(MODEL)
+	$(MAKE) _single-dataset MODEL=$(MODEL) SEED=$(SEED)
 else ifeq ($(origin MODEL),environment)
-	$(MAKE) _single-dataset MODEL=$(MODEL)
+	$(MAKE) _single-dataset MODEL=$(MODEL) SEED=$(SEED)
 else
 	@status=0; for m in $(PRIMARY_MODELS); do \
-	  $(MAKE) single MODEL=$$m || status=$$?; \
+	  $(MAKE) single MODEL=$$m SEED=$(SEED) || status=$$?; \
 	done; exit $$status
 endif
 
@@ -611,19 +642,21 @@ endif
 _single-dataset: data
 ifeq ($(origin DATASET),command line)
 	$(OFFLINE) $(PY) scripts/run_single_model.py --dataset $(VAL) \
-	  --model $(MODEL) \
+	  --model $(MODEL) --context-mode $(SINGLE_CONTEXT) \
 	  --max-new-tokens $(RECV_MAX) \
 	  $(if $(EVAL_N),--num-examples $(EVAL_N),) \
+	  $(RUN_METADATA_ARGS) \
 	  --output-dir $(SINGLE_OUT)
 else ifeq ($(origin DATASET),environment)
 	$(OFFLINE) $(PY) scripts/run_single_model.py --dataset $(VAL) \
-	  --model $(MODEL) \
+	  --model $(MODEL) --context-mode $(SINGLE_CONTEXT) \
 	  --max-new-tokens $(RECV_MAX) \
 	  $(if $(EVAL_N),--num-examples $(EVAL_N),) \
+	  $(RUN_METADATA_ARGS) \
 	  --output-dir $(SINGLE_OUT)
 else
 	@status=0; for d in $(ALL_DATASETS); do \
-	  $(MAKE) _single-dataset MODEL=$(MODEL) DATASET=$$d || status=$$?; \
+	  $(MAKE) _single-dataset MODEL=$(MODEL) DATASET=$$d SEED=$(SEED) || status=$$?; \
 	done; exit $$status
 endif
 
@@ -679,18 +712,33 @@ EXP_PAIR_SCOPE          ?= $(if $(filter TRUE true 1,$(EXTRA_MODELS)),all,base)
 EXP_SHARER_FILTER       = $(if $(filter command line environment,$(origin SHARER)),--sharer $(SHARER),)
 EXP_RECEIVER_FILTER     = $(if $(filter command line environment,$(origin RECEIVER)),--receiver $(RECEIVER),)
 
+# Repetition wrapper. RANGE is retained as an alias for the originally proposed
+# interface; RUNS also accepts inclusive ranges (1:5 or 1-5) and lists (1,3,5).
+RANGE ?=
+RUNS ?= $(RANGE)
+REPEAT_TARGET ?= exp
+
+.PHONY: repeat
+repeat:
+	@test -n "$(strip $(RUNS))" || { echo "RUNS is required (for example RUNS=1:5)"; exit 2; }
+	@status=0; for r in $$($(PY) scripts/_runs.py "$(RUNS)"); do \
+	  if test "$$r" = "0"; then echo "=== reuse existing run-0 (not rerun) ==="; continue; fi; \
+	  echo "=== replicate run-$$r ($(REPEAT_TARGET)) ==="; \
+	  $(MAKE) $(REPEAT_TARGET) RUN=$$r $(if $(SEED_EXPLICIT),SEED=$(SEED),) || status=$$?; \
+	done; exit $$status
+
 # Outer loop: method. With METHOD= given, hand off straight to the dataset
 # loop below; otherwise run every method in turn (each recursive call then
 # resolves its own DATASET= the same way `data`/`model` resolve DATASET=).
 .PHONY: exp exp-ablation exp-all exp-extend
 exp:
 ifeq ($(origin METHOD),command line)
-	$(MAKE) _exp-dataset METHOD=$(METHOD)
+	$(MAKE) _exp-dataset METHOD=$(METHOD) SEED=$(SEED)
 else ifeq ($(origin METHOD),environment)
-	$(MAKE) _exp-dataset METHOD=$(METHOD)
+	$(MAKE) _exp-dataset METHOD=$(METHOD) SEED=$(SEED)
 else
 	@status=0; for m in $(EXP_METHODS); do \
-	  $(MAKE) exp METHOD=$$m || status=$$?; \
+	  $(MAKE) exp METHOD=$$m SEED=$(SEED) || status=$$?; \
 	done; exit $$status
 endif
 
@@ -699,20 +747,20 @@ endif
 # DATASET= selects one dataset; when omitted, follow `exp` and run every dataset.
 exp-ablation:
 ifeq ($(origin DATASET),command line)
-	$(MAKE) _exp-ablation-dataset DATASET=$(DATASET)
+	$(MAKE) _exp-ablation-dataset DATASET=$(DATASET) SEED=$(SEED)
 else ifeq ($(origin DATASET),environment)
-	$(MAKE) _exp-ablation-dataset DATASET=$(DATASET)
+	$(MAKE) _exp-ablation-dataset DATASET=$(DATASET) SEED=$(SEED)
 else
 	@status=0; for d in $(ALL_DATASETS); do \
-	  $(MAKE) _exp-ablation-dataset DATASET=$$d || status=$$?; \
+	  $(MAKE) _exp-ablation-dataset DATASET=$$d SEED=$(SEED) || status=$$?; \
 	done; exit $$status
 endif
 
 exp-all:
-	$(MAKE) exp EXP_PAIR_SCOPE=all
+	$(MAKE) exp EXP_PAIR_SCOPE=all SEED=$(SEED)
 
 exp-extend:
-	$(MAKE) exp EXP_PAIR_SCOPE=extend
+	$(MAKE) exp EXP_PAIR_SCOPE=extend SEED=$(SEED)
 
 # Inner loop: dataset, for one already-resolved METHOD. Not meant to be
 # called directly -- go through `exp` so the method axis resolves first.
@@ -720,17 +768,21 @@ exp-extend:
 _exp-dataset:
 ifeq ($(origin DATASET),command line)
 	$(PY) scripts/run_sweep.py --dataset $(DATASET) --method $(METHOD) --stage $(EXP_STAGE) \
+	  $(if $(strip $(RUN)),--run-id $(RUN),) --seed $(SEED) \
+	  --results-root "$(RESULTS_ROOT)" --checkpoints-root "$(CHECKPOINTS_ROOT)" \
 	  --concurrency-per-gpu $(EXP_CONCURRENCY_PER_GPU) \
 	  $(if $(EXP_GPUS),--gpus $(EXP_GPUS),) --pair-scope $(EXP_PAIR_SCOPE) \
 	  $(EXP_SHARER_FILTER) $(EXP_RECEIVER_FILTER) $(EXP_ARGS)
 else ifeq ($(origin DATASET),environment)
 	$(PY) scripts/run_sweep.py --dataset $(DATASET) --method $(METHOD) --stage $(EXP_STAGE) \
+	  $(if $(strip $(RUN)),--run-id $(RUN),) --seed $(SEED) \
+	  --results-root "$(RESULTS_ROOT)" --checkpoints-root "$(CHECKPOINTS_ROOT)" \
 	  --concurrency-per-gpu $(EXP_CONCURRENCY_PER_GPU) \
 	  $(if $(EXP_GPUS),--gpus $(EXP_GPUS),) --pair-scope $(EXP_PAIR_SCOPE) \
 	  $(EXP_SHARER_FILTER) $(EXP_RECEIVER_FILTER) $(EXP_ARGS)
 else
 	@status=0; for d in $(ALL_DATASETS); do \
-	  $(MAKE) _exp-dataset METHOD=$(METHOD) DATASET=$$d || status=$$?; \
+	  $(MAKE) _exp-dataset METHOD=$(METHOD) DATASET=$$d SEED=$(SEED) || status=$$?; \
 	done; exit $$status
 endif
 
@@ -738,6 +790,8 @@ endif
 _exp-ablation-dataset:
 	$(PY) scripts/run_sweep.py --dataset $(DATASET) \
 	  $(foreach m,$(EXP_ABLATION_METHODS),--method $(m)) --stage $(EXP_STAGE) \
+	  $(if $(strip $(RUN)),--run-id $(RUN),) --seed $(SEED) \
+	  --results-root "$(RESULTS_ROOT)" --checkpoints-root "$(CHECKPOINTS_ROOT)" \
 	  --concurrency-per-gpu $(EXP_CONCURRENCY_PER_GPU) \
 	  $(if $(EXP_GPUS),--gpus $(EXP_GPUS),) --pair-scope $(EXP_PAIR_SCOPE) \
 	  $(EXP_SHARER_FILTER) $(EXP_RECEIVER_FILTER) $(EXP_ARGS)
@@ -764,7 +818,10 @@ SWEEP_PAIR_SCOPE ?= all
 
 .PHONY: sweep
 sweep: prepare
-	$(PY) scripts/run_all.py --stage $(EXP_STAGE) --pair-scope $(SWEEP_PAIR_SCOPE) $(if $(METHOD),--method $(METHOD),) $(SWEEP_ARGS)
+	$(PY) scripts/run_all.py --stage $(EXP_STAGE) --pair-scope $(SWEEP_PAIR_SCOPE) \
+	  $(if $(strip $(RUN)),--run-id $(RUN),) --seed $(SEED) \
+	  --results-root "$(RESULTS_ROOT)" --checkpoints-root "$(CHECKPOINTS_ROOT)" \
+	  $(if $(METHOD),--method $(METHOD),) $(SWEEP_ARGS)
 
 # ===== Visual comparison table (lcfx vs xkv vs t2t) ============================
 # Sharer x Receiver grid over the primary model roster (3x3 = 9 cells; 4x4 = 16
@@ -805,6 +862,9 @@ sweep: prepare
 ITEM       ?= scores
 VISUAL_SUFFIX = $(if $(filter params latency,$(ITEM)),_$(ITEM),)
 VISUAL_OUT ?= $(if $(filter datasets,$(ITEM)),results/comparison/datasets.md,results/comparison/$(DATASET)$(VISUAL_SUFFIX).md)
+VISUAL_RUN_SELECTION = $(if $(strip $(RUNS)),$(RUNS),$(RUN))
+VISUAL_RUNS_FLAG = $(if $(strip $(VISUAL_RUN_SELECTION)),--runs "$(VISUAL_RUN_SELECTION)",)
+VISUAL_OUTPUT_ARG = $(if $(strip $(OUT)),--output $(OUT),$(if $(strip $(VISUAL_RUN_SELECTION)),,--output $(VISUAL_OUT)))
 ALL_VISUAL_ITEMS := scores params latency
 XKV_POOL_EXPLICIT = $(or $(filter command line environment,$(origin XKV_POOL_K)),$(filter command line environment,$(origin XKV_POOL_SLOTS)))
 XKV_VISUAL_K = $(if $(XKV_POOL_EXPLICIT),$(XKV_POOL_SLOTS),{receiver_k})
@@ -818,15 +878,18 @@ ABLATION_VISUAL_HP_FLAGS = --xkv-hp $(XKV_VISUAL_HP) \
 	--xkv-lcfx-pooling-hp $(XKV_LCFX_VISUAL_HP)
 ABLATION_VISUAL_OUT ?= results/comparison/ablation/$(DATASET)$(VISUAL_SUFFIX).md
 
-.PHONY: visual visual-all visual-ablation
+.PHONY: visual visual-all visual-ablation compare
+compare:
+	$(PY) scripts/make_comparison_table.py --item compare $(VISUAL_HP_FLAGS) $(VISUAL_RUNS_FLAG) $(if $(strip $(OUT)),--output "$(OUT)",)
+
 visual-all:
 	$(MAKE) visual EXTRA_MODELS=TRUE
 
 visual:
 ifeq ($(origin ITEM),command line)
-	$(PY) scripts/make_comparison_table.py --item $(ITEM) $(if $(filter-out datasets,$(ITEM)),--dataset $(DATASET) $(VISUAL_HP_FLAGS),) $(EXTRA_MODELS_FLAG) $(if $(MODELS),--models $(MODELS),) --output $(if $(OUT),$(OUT),$(VISUAL_OUT))
+	$(PY) scripts/make_comparison_table.py --item $(ITEM) $(if $(filter-out datasets,$(ITEM)),--dataset $(DATASET) $(VISUAL_HP_FLAGS),) $(VISUAL_RUNS_FLAG) $(EXTRA_MODELS_FLAG) $(if $(MODELS),--models $(MODELS),) $(VISUAL_OUTPUT_ARG)
 else ifeq ($(origin ITEM),environment)
-	$(PY) scripts/make_comparison_table.py --item $(ITEM) $(if $(filter-out datasets,$(ITEM)),--dataset $(DATASET) $(VISUAL_HP_FLAGS),) $(EXTRA_MODELS_FLAG) $(if $(MODELS),--models $(MODELS),) --output $(if $(OUT),$(OUT),$(VISUAL_OUT))
+	$(PY) scripts/make_comparison_table.py --item $(ITEM) $(if $(filter-out datasets,$(ITEM)),--dataset $(DATASET) $(VISUAL_HP_FLAGS),) $(VISUAL_RUNS_FLAG) $(EXTRA_MODELS_FLAG) $(if $(MODELS),--models $(MODELS),) $(VISUAL_OUTPUT_ARG)
 else
 	@status=0; for i in $(ALL_VISUAL_ITEMS); do \
 	  $(MAKE) visual ITEM=$$i || status=$$?; \
@@ -835,9 +898,9 @@ endif
 
 visual-ablation:
 ifeq ($(origin ITEM),command line)
-	$(PY) scripts/make_comparison_table.py --study ablation --item $(ITEM) --dataset $(DATASET) $(ABLATION_VISUAL_HP_FLAGS) $(EXTRA_MODELS_FLAG) $(if $(MODELS),--models $(MODELS),) --output $(if $(OUT),$(OUT),$(ABLATION_VISUAL_OUT))
+	$(PY) scripts/make_comparison_table.py --study ablation --item $(ITEM) --dataset $(DATASET) $(ABLATION_VISUAL_HP_FLAGS) $(VISUAL_RUNS_FLAG) $(EXTRA_MODELS_FLAG) $(if $(MODELS),--models $(MODELS),) $(if $(strip $(OUT)),--output $(OUT),$(if $(strip $(VISUAL_RUN_SELECTION)),,--output $(ABLATION_VISUAL_OUT)))
 else ifeq ($(origin ITEM),environment)
-	$(PY) scripts/make_comparison_table.py --study ablation --item $(ITEM) --dataset $(DATASET) $(ABLATION_VISUAL_HP_FLAGS) $(EXTRA_MODELS_FLAG) $(if $(MODELS),--models $(MODELS),) --output $(if $(OUT),$(OUT),$(ABLATION_VISUAL_OUT))
+	$(PY) scripts/make_comparison_table.py --study ablation --item $(ITEM) --dataset $(DATASET) $(ABLATION_VISUAL_HP_FLAGS) $(VISUAL_RUNS_FLAG) $(EXTRA_MODELS_FLAG) $(if $(MODELS),--models $(MODELS),) $(if $(strip $(OUT)),--output $(OUT),$(if $(strip $(VISUAL_RUN_SELECTION)),,--output $(ABLATION_VISUAL_OUT)))
 else
 	@status=0; for i in $(ALL_VISUAL_ITEMS); do \
 	  $(MAKE) visual-ablation ITEM=$$i || status=$$?; \

@@ -10,5 +10,15 @@ Override per run via the scripts' ``--sharer-model`` / ``--receiver-model`` flag
 or the Makefile's ``SHARER`` / ``RECEIVER`` variables.
 """
 
+import secrets
+
 DEFAULT_SHARER = "Qwen/Qwen3-0.6B"
 DEFAULT_RECEIVER = "Qwen/Qwen3-0.6B"
+
+MAX_SEED = 2**31 - 1
+
+
+def resolve_seed(seed: int | None) -> int:
+    """Return an explicit seed or generate a fresh process-safe random seed."""
+
+    return int(seed) if seed is not None else secrets.randbelow(MAX_SEED)

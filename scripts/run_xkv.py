@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts._defaults import DEFAULT_RECEIVER, DEFAULT_SHARER  # noqa: E402
+from scripts._defaults import DEFAULT_RECEIVER, DEFAULT_SHARER, resolve_seed  # noqa: E402
 from scripts._hf_cache import configure_hf_cache  # noqa: E402
 
 configure_hf_cache()
@@ -52,6 +52,8 @@ def main() -> None:
     parser.add_argument("--sharer-model", default=DEFAULT_SHARER)
     parser.add_argument("--receiver-model", default=DEFAULT_RECEIVER)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--run-id", default=None)
+    parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--translator-checkpoint", type=Path, default=None)
     parser.add_argument(
         "--d-model",
@@ -101,6 +103,7 @@ def main() -> None:
     )
     parser.add_argument("--print-every", type=int, default=10)
     args = parser.parse_args()
+    args.seed = resolve_seed(args.seed)
 
     examples = _load_examples(args.dataset, args.num_examples)
     if not examples:
@@ -152,12 +155,16 @@ def main() -> None:
         ).to(pair.device)
         print("No checkpoint: zero-init XKV (Receiver-only equivalence)")
     translator.eval()
+    run_seed = int(getattr(translator, "training_seed", args.seed))
+    print(f"Run id: {args.run_id or '(unscoped)'} | seed: {run_seed}")
     print(f"XKV trainable params: {translator.trainable_parameters()}")
 
     progress = ProgressLogger(
         args.output_dir / "eval_log.jsonl",
         config={
             "method": args.variant,
+            "run_id": args.run_id,
+            "seed": run_seed,
             "dataset": str(args.dataset),
             "sharer_model": args.sharer_model,
             "receiver_model": args.receiver_model,
@@ -208,11 +215,7 @@ def main() -> None:
             "output_mode": translator.output_mode,
             "receiver_pooling": translator.receiver_pooling,
             "pool_spans": translator.pool_spans,
-            **(
-                {"training_seed": translator.training_seed}
-                if hasattr(translator, "training_seed")
-                else {}
-            ),
+            **({"training_seed": run_seed} if args.translator_checkpoint else {}),
             "translator_checkpoint": str(args.translator_checkpoint)
             if args.translator_checkpoint
             else None,

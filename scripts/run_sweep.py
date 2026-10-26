@@ -37,6 +37,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts._defaults import resolve_seed  # noqa: E402
 
 # Primary experiment model roster (one flat tier, no sub-tiers): the small
 # Qwen model LCF-X was developed against, plus Gemma 1B and Llama 3B --
@@ -156,7 +160,12 @@ def resolve_overrides(
 
 # Substrings (checked case-insensitively against the tail of a failed run's
 # log) that indicate an out-of-memory failure rather than a generic bug.
-OOM_MARKERS = ("out of memory", "outofmemoryerror", "cuda error: out of memory")
+OOM_MARKERS = (
+    "out of memory",
+    "outofmemoryerror",
+    "cuda error: out of memory",
+    "cublas_status_alloc_failed",
+)
 
 
 def _slug(model_id: str) -> str:
@@ -184,10 +193,10 @@ def resolve_pairs(scope: str = "base") -> list[tuple[str, str]]:
     return pairs
 
 
-def load_manifest(path: Path) -> dict[tuple[str, str, str, str, str], dict]:
+def load_manifest(path: Path) -> dict[tuple[str | None, str, str, str, str, str], dict]:
     """Read the manifest and keep only the latest record per cell key."""
 
-    latest: dict[tuple[str, str, str, str, str], dict] = {}
+    latest: dict[tuple[str | None, str, str, str, str, str], dict] = {}
     if not path.exists():
         return latest
     with path.open("r", encoding="utf-8") as handle:
@@ -197,6 +206,7 @@ def load_manifest(path: Path) -> dict[tuple[str, str, str, str, str], dict]:
                 continue
             record = json.loads(line)
             key = (
+                record.get("run_id"),
                 record["stage"],
                 record["method"],
                 record["dataset"],
@@ -231,6 +241,19 @@ def classify_failure(log_tail: str) -> str:
     return "failed"
 
 
+def reduce_batch_after_oom(overrides: dict[str, str]) -> bool:
+    """Halve per-device batch while preserving the effective batch size."""
+
+    batch = int(overrides.get("BATCH_SIZE", 0) or 0)
+    if batch <= 1:
+        return False
+    reduced = max(1, batch // 2)
+    accum = int(overrides.get("GRAD_ACCUM", 1) or 1)
+    overrides["BATCH_SIZE"] = str(reduced)
+    overrides["GRAD_ACCUM"] = str(accum * batch // reduced)
+    return True
+
+
 def run_cell(
     *,
     stage: str,
@@ -238,6 +261,10 @@ def run_cell(
     dataset: str,
     sharer: str,
     receiver: str,
+    run_id: str | None,
+    seed: int,
+    results_root: Path,
+    checkpoints_root: Path,
     gpu: str | None,
     manifest_path: Path,
     manifest_lock: threading.Lock,
@@ -255,11 +282,11 @@ def run_cell(
     )
     base_log.parent.mkdir(parents=True, exist_ok=True)
 
-    # Unattended-run resilience: one automatic retry at half batch / double
-    # accum on OOM (same effective batch), instead of losing the cell until a
-    # manual relaunch. Each attempt gets its own log + manifest record; the
-    # --resume skip logic reads the latest record per cell, so a successful
-    # retry marks the cell ok.
+    # Unattended-run resilience: repeatedly halve batch and increase gradient
+    # accumulation on OOM, preserving the effective batch, until the cell
+    # succeeds or batch 1 also fails. Each attempt gets its own log + manifest
+    # record; --resume reads the latest record per cell, so a successful retry
+    # marks the cell ok.
     attempt = 0
     while True:
         cmd = [
@@ -268,13 +295,19 @@ def run_cell(
             f"DATASET={dataset}",
             f"SHARER={sharer}",
             f"RECEIVER={receiver}",
+            f"SEED={seed}",
+            f"RESULTS_ROOT={results_root}",
+            f"CHECKPOINTS_ROOT={checkpoints_root}",
         ]
+        if run_id is not None:
+            cmd.append(f"RUN={run_id}")
         cmd += [f"{key}={value}" for key, value in overrides.items()]
         log_path = (
             base_log if attempt == 0 else base_log.with_suffix(f".retry{attempt}.log")
         )
 
-        label = f"[{stage}/{method}] {dataset} {sharer} -> {receiver}"
+        run_label = f"run-{run_id}/" if run_id is not None else ""
+        label = f"[{run_label}{stage}/{method}] {dataset} {sharer} -> {receiver}"
         if "BATCH_SIZE" in overrides:
             label += (
                 f" (batch={overrides['BATCH_SIZE']} accum={overrides['GRAD_ACCUM']})"
@@ -304,6 +337,10 @@ def run_cell(
         print(f"{status.upper():6s} {label} ({wall_s:.0f}s)", flush=True)
 
         record = {
+            "run_id": run_id,
+            "seed": seed,
+            "results_root": str(results_root),
+            "checkpoints_root": str(checkpoints_root),
             "stage": stage,
             "method": method,
             "dataset": dataset,
@@ -322,10 +359,7 @@ def run_cell(
         }
         append_manifest(manifest_path, record, manifest_lock)
 
-        batch = int(overrides.get("BATCH_SIZE", 0) or 0)
-        if status == "oom" and attempt == 0 and batch > 1:
-            overrides["BATCH_SIZE"] = str(batch // 2)
-            overrides["GRAD_ACCUM"] = str(int(overrides["GRAD_ACCUM"]) * 2)
+        if status == "oom" and reduce_batch_after_oom(overrides):
             attempt += 1
             continue
         return
@@ -354,6 +388,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--dataset", required=True, help="Single dataset name, e.g. hotpotqa_bridge"
+    )
+    parser.add_argument("--run-id", default=None, help="Replicate identifier")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Experiment seed (default: a fresh random seed per sweep invocation)",
     )
     parser.add_argument("--stage", default="smoke", choices=sorted(STAGE_OVERRIDES))
     parser.add_argument(
@@ -400,13 +441,31 @@ def main() -> None:
     parser.add_argument(
         "--dry-run", action="store_true", help="Print the resolved cell list and exit"
     )
+    parser.add_argument("--manifest", type=Path, default=None)
+    parser.add_argument("--log-dir", type=Path, default=None)
     parser.add_argument(
-        "--manifest", type=Path, default=REPO_ROOT / "results" / "sweep_manifest.jsonl"
+        "--results-root",
+        type=Path,
+        default=None,
+        help="Explicit result root forwarded to every nested make cell",
     )
     parser.add_argument(
-        "--log-dir", type=Path, default=REPO_ROOT / "results" / "sweep_logs"
+        "--checkpoints-root",
+        type=Path,
+        default=None,
+        help="Explicit checkpoint root forwarded to every nested make cell",
     )
     args = parser.parse_args()
+    args.seed = resolve_seed(args.seed)
+    run_root = REPO_ROOT / "results"
+    checkpoint_root = REPO_ROOT / "data" / "checkpoints"
+    if args.run_id not in (None, "0"):
+        run_root = run_root / "runs" / f"run-{args.run_id}"
+        checkpoint_root = checkpoint_root / "runs" / f"run-{args.run_id}"
+    args.results_root = args.results_root or run_root
+    args.checkpoints_root = args.checkpoints_root or checkpoint_root
+    args.manifest = args.manifest or run_root / "sweep_manifest.jsonl"
+    args.log_dir = args.log_dir or run_root / "sweep_logs"
 
     pair_scope = "all" if args.extra_models else args.pair_scope
     pairs = resolve_pairs(pair_scope)
@@ -425,7 +484,7 @@ def main() -> None:
     to_run: list[tuple[str, str, str, str]] = []
     skipped = 0
     for method, dataset, sharer, receiver in all_cells:
-        key = (args.stage, method, dataset, sharer, receiver)
+        key = (args.run_id, args.stage, method, dataset, sharer, receiver)
         prev = manifest_latest.get(key)
         prev_status = prev["status"] if prev else None
         if should_run(prev_status, args.resume):
@@ -435,9 +494,12 @@ def main() -> None:
 
     skip_note = f", {skipped} skipped (already ok; --resume)" if skipped else ""
     print(
-        f"[{args.stage}] dataset={args.dataset}: "
+        f"[{args.run_id or 'unscoped'}/{args.stage}] seed={args.seed} "
+        f"dataset={args.dataset}: "
         f"{len(all_cells)} cells total, {len(to_run)} to run{skip_note}"
     )
+    print(f"Results: {args.results_root}")
+    print(f"Checkpoints: {args.checkpoints_root}")
 
     if args.concurrency_per_gpu < 1:
         parser.error("--concurrency-per-gpu must be at least 1")
@@ -470,6 +532,10 @@ def main() -> None:
 
     run_kwargs = dict(
         stage=args.stage,
+        run_id=args.run_id,
+        seed=args.seed,
+        results_root=args.results_root,
+        checkpoints_root=args.checkpoints_root,
         manifest_path=args.manifest,
         manifest_lock=manifest_lock,
         log_dir=args.log_dir,
@@ -489,7 +555,7 @@ def main() -> None:
     manifest_latest = load_manifest(args.manifest)
     counts: dict[str, int] = {}
     for method, dataset, sharer, receiver in to_run:
-        key = (args.stage, method, dataset, sharer, receiver)
+        key = (args.run_id, args.stage, method, dataset, sharer, receiver)
         status = manifest_latest.get(key, {}).get("status", "unknown")
         counts[status] = counts.get(status, 0) + 1
     print(f"Done. {counts}")

@@ -380,6 +380,8 @@ def save_translator(
         "num_spans": num_spans,
         "span_scheme": span_scheme,
     }
+    if hasattr(translator, "training_seed"):
+        payload["training_seed"] = translator.training_seed
     torch.save(payload, path)
 
 
@@ -447,6 +449,8 @@ def load_translator(
 
     translator = EIYWTranslator.from_arch_config(ckpt_arch, zero_init=False)
     translator.load_state_dict(ckpt["state_dict"])
+    if "training_seed" in ckpt:
+        translator.training_seed = int(ckpt["training_seed"])
     return translator
 
 
@@ -504,6 +508,7 @@ def train_translator(
         pass
     translator.train()
     torch.manual_seed(seed)
+    translator.training_seed = int(seed)
     rng = random.Random(seed)
 
     train_list = list(train_data)
@@ -517,6 +522,7 @@ def train_translator(
         log_path,
         config={
             "method": "eiyw",
+            "seed": int(seed),
             "sharer_model": pair.sharer_spec.name,
             "receiver_model": pair.receiver_spec.name,
             "trainable_params": translator.trainable_parameters(),

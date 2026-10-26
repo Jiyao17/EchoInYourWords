@@ -458,8 +458,7 @@ def train_translator(
     torch.manual_seed(seed)
     if translator.variant == XKV_LCFX_POOLING and torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-    if translator.variant == XKV_LCFX_POOLING:
-        translator.training_seed = int(seed)
+    translator.training_seed = int(seed)
     rng = random.Random(seed)
     training = list(train_data)
     evaluation = list(eval_data) if eval_data is not None else None
@@ -478,7 +477,7 @@ def train_translator(
         log_path,
         config={
             "method": translator.variant,
-            **({"seed": seed} if translator.variant == XKV_LCFX_POOLING else {}),
+            "seed": int(seed),
             "sharer_model": pair.sharer_spec.name,
             "receiver_model": pair.receiver_spec.name,
             "trainable_params": translator.trainable_parameters(),

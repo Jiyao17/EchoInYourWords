@@ -38,7 +38,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 # Route HF caches under data/hf_cache (before transformers loads).
-from scripts._defaults import DEFAULT_RECEIVER, DEFAULT_SHARER  # noqa: E402
+from scripts._defaults import DEFAULT_RECEIVER, DEFAULT_SHARER, resolve_seed  # noqa: E402
 from scripts._hf_cache import configure_hf_cache  # noqa: E402
 
 configure_hf_cache()
@@ -81,6 +81,8 @@ def main() -> None:
     parser.add_argument("--sharer-model", default=DEFAULT_SHARER)
     parser.add_argument("--receiver-model", default=DEFAULT_RECEIVER)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--run-id", default=None)
+    parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--translator-checkpoint", type=Path, default=None)
     parser.add_argument(
         "--span-scheme",
@@ -136,6 +138,7 @@ def main() -> None:
     )
     parser.add_argument("--print-every", type=int, default=10)
     args = parser.parse_args()
+    args.seed = resolve_seed(args.seed)
 
     receiver_model = args.receiver_model
 
@@ -182,6 +185,8 @@ def main() -> None:
         ).to(pair.device)
         print("No checkpoint: using ZERO-INIT translator (== single-model floor)")
     translator.eval()
+    run_seed = int(getattr(translator, "training_seed", args.seed))
+    print(f"Run id: {args.run_id or '(unscoped)'} | seed: {run_seed}")
     print(f"Translator trainable params: {translator.trainable_parameters()}")
 
     # Persistent eval progress (long runs survive the session); flushed per record.
@@ -224,6 +229,8 @@ def main() -> None:
 
     run_metadata = {
         "method": "eiyw",
+        "run_id": args.run_id,
+        "seed": run_seed,
         "dataset": str(args.dataset),
         "sharer_model": args.sharer_model,
         "receiver_model": receiver_model,

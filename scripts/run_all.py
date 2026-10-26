@@ -26,6 +26,10 @@ import threading
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts._defaults import resolve_seed  # noqa: E402
 
 ALL_DATASETS = [
     "hotpotqa_bridge",
@@ -51,9 +55,17 @@ def build_sweep_args(args: argparse.Namespace) -> list[str]:
     forwarded = [
         "--stage",
         args.stage,
+        "--seed",
+        str(args.seed),
         "--concurrency-per-gpu",
         str(args.concurrency_per_gpu),
     ]
+    if args.run_id is not None:
+        forwarded += ["--run-id", args.run_id]
+    if args.results_root is not None:
+        forwarded += ["--results-root", str(args.results_root)]
+    if args.checkpoints_root is not None:
+        forwarded += ["--checkpoints-root", str(args.checkpoints_root)]
     for method in args.method or []:
         forwarded += ["--method", method]
     for sharer in args.sharer or []:
@@ -103,6 +115,25 @@ def main() -> None:
         default=None,
         help="Override the dataset list (default: all 6)",
     )
+    parser.add_argument("--run-id", default=None, help="Replicate identifier")
+    parser.add_argument(
+        "--results-root",
+        type=Path,
+        default=None,
+        help="Explicit result root forwarded to every dataset sweep",
+    )
+    parser.add_argument(
+        "--checkpoints-root",
+        type=Path,
+        default=None,
+        help="Explicit checkpoint root forwarded to every dataset sweep",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Experiment seed (default: a fresh random seed per invocation)",
+    )
     parser.add_argument("--stage", default="smoke", choices=["smoke", "full"])
     parser.add_argument("--method", action="append", choices=METHOD_CHOICES)
     parser.add_argument("--sharer", action="append")
@@ -122,6 +153,7 @@ def main() -> None:
     )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+    args.seed = resolve_seed(args.seed)
 
     datasets = args.datasets or ALL_DATASETS
 
@@ -134,7 +166,10 @@ def main() -> None:
         gpu = workers_gpus[i % len(workers_gpus)]
         buckets[gpu].append(dataset)
 
-    print(f"CUDA_VISIBLE_DEVICES={raw or '(unset)'} -> {len(workers_gpus)} worker(s)")
+    print(
+        f"run={args.run_id or '(unscoped)'} seed={args.seed} | "
+        f"CUDA_VISIBLE_DEVICES={raw or '(unset)'} -> {len(workers_gpus)} worker(s)"
+    )
     for gpu in workers_gpus:
         print(f"  gpu={gpu or '-'}: {buckets[gpu]}")
 

@@ -437,6 +437,8 @@ def save_fuser(
         "num_spans": num_spans,
         "span_scheme": span_scheme,
     }
+    if hasattr(fuser, "training_seed"):
+        payload["training_seed"] = fuser.training_seed
     torch.save(payload, path)
 
 
@@ -508,6 +510,8 @@ def load_fuser(
 
     fuser = LCFXFuser.from_arch_config(ckpt_arch, zero_init=False)
     fuser.load_state_dict(ckpt["state_dict"])
+    if "training_seed" in ckpt:
+        fuser.training_seed = int(ckpt["training_seed"])
     return fuser
 
 
@@ -568,6 +572,7 @@ def train_fuser(
     _freeze(pair.receiver)
     fuser.train()
     torch.manual_seed(seed)
+    fuser.training_seed = int(seed)
     rng = random.Random(seed)
 
     train_list = list(train_data)
@@ -592,6 +597,7 @@ def train_fuser(
         log_path,
         config={
             "method": "lcf_x",
+            "seed": int(seed),
             "sharer_model": pair.sharer_spec.name,
             "receiver_model": pair.receiver_spec.name,
             "trainable_params": fuser.trainable_parameters(),

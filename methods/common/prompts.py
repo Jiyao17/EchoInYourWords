@@ -8,9 +8,9 @@ Three families live here so methods don't duplicate or accidentally share them:
   - ``build_sharer_encode_text`` / ``build_receiver_prompt`` — the latent
     methods' Sharer encode text and the no-message Receiver prompt (the Sharer's
     information reaches the Receiver through the cache / soft tokens, not text).
-- **Single-model inference**: ``build_single_model_prompt`` — a *dedicated*
-  prompt for one model answering from a given context. Kept deliberately separate
-  from the method receiver prompt so editing one never disturbs the other.
+- **Historical single-model inference**: ``build_single_model_prompt`` — the
+  dedicated prompt used by older full-context runs. Current half/full Receiver
+  baselines use ``build_receiver_prompt`` for matched answer instructions.
 
 All builders are duck-typed on the example fields ``question``, ``choices``,
 ``sharer_context``, ``receiver_context``; every ``*Example`` provides them.

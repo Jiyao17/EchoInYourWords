@@ -122,6 +122,43 @@ make exp-all METHOD=t2t DATASET=hotpotqa_bridge \
   SHARER=mistralai/Ministral-8B-Instruct-2410 RECEIVER=mistralai/Ministral-8B-Instruct-2410 # one pair
 ```
 
+Repeat exactly the same selected grid with `make repeat`. `RUNS` accepts an
+inclusive range or a list; `RANGE` is an equivalent alias:
+
+```bash
+make repeat RUNS=1:5 DATASET=ropes
+make repeat RUNS=1,3,5 METHOD=xkv DATASET=ropes
+make repeat RANGE='[1,2,3]' REPEAT_TARGET=exp-all DATASET=ropes
+```
+
+Each replicate gets a fresh random seed unless `SEED=` is explicitly supplied.
+The resolved seed is propagated to every cell in that replicate, stored in its
+manifest/checkpoints and `run_metadata.json`, and printed at launch. Dataset
+construction uses the separate fixed `DATA_SEED=0` default, so changing the
+training seed never changes the examples. Replicate artifacts are isolated at
+`results/runs/run-<id>/...` and
+`data/checkpoints/runs/run-<id>/...`. Run one manually with `RUN=`, for example
+`make exp RUN=7 DATASET=ropes`; `N=7` is an alias for this originally proposed
+notation. Omitting both preserves the legacy paths.
+
+The historical unscoped tree is treated as virtual **run 0**. No migration or
+copy is required: `RUN=0`/`N=0` reads and writes the existing `results/<method>`
+and `data/checkpoints/<method>` locations. Use `RUNS=0:5` in visualization to
+include the current result together with runs 1–5. If run 0 appears in
+`make repeat RUNS=...`, it is reused and skipped; invoke `make exp RUN=0`
+explicitly only when you intend to overwrite the legacy result.
+
+For trained methods, the sweep forwards both roots explicitly to every nested
+cell. Checkpoints therefore remain isolated even across recursive/parallel
+sweeps, for example
+`data/checkpoints/runs/run-2/xkv/<dataset>/<sharer>/<receiver>/<hp>/translator.pt`.
+
+Sweep cells that run out of GPU memory automatically retry with successively
+smaller per-device batches down to batch 1, increasing gradient accumulation
+to preserve the effective batch size. CUDA/CUBLAS allocation failures are
+treated as OOMs. Non-memory failures remain recorded for an explicit
+`EXP_ARGS="--resume"` run.
+
 Or run **one exact model pair** directly (skip the sweep grid entirely),
 naming `DATASET=` plus a `SHARER=`/`RECEIVER=` pair explicitly:
 
@@ -129,13 +166,38 @@ naming `DATASET=` plus a `SHARER=`/`RECEIVER=` pair explicitly:
 make lcfx   DATASET=hotpotqa_bridge SHARER=unsloth/Llama-3.2-3B-Instruct RECEIVER=Qwen/Qwen3-0.6B  # train -> eval
 make xkv    DATASET=hotpotqa_bridge SHARER=unsloth/Llama-3.2-3B-Instruct RECEIVER=Qwen/Qwen3-0.6B  # dual-cache KV update
 make t2t    DATASET=hotpotqa_bridge SHARER=unsloth/Llama-3.2-3B-Instruct RECEIVER=Qwen/Qwen3-0.6B  # baseline (no training)
-make single DATASET=hotpotqa_bridge MODEL=Qwen/Qwen3-0.6B                                        # upper bound: one model, all evidence
+make single DATASET=hotpotqa_bridge MODEL=Qwen/Qwen3-0.6B                                        # one Receiver, half + full context
 ```
 
 `make single` follows the same "given=one, unset=all" pattern on both axes
 (`MODEL=`/`DATASET=`): omit `MODEL=` to test every primary-roster model, omit
 `DATASET=` to test every dataset, omit both to test the full model × dataset
 grid.
+
+`make single` defaults to `SINGLE_CONTEXT=both`: it evaluates the original
+Receiver evidence (`half`) and both evidence portions combined (`full`), with
+the **same Receiver prompt, chat template and greedy cache decoder** used by
+XKV/LCF-X. It performs no Sharer forward pass or translation. Each model is
+loaded once per dataset and reused across the two conditions. Full context is
+a reference, not a guaranteed upper bound.
+
+For the six ROPES baselines (Qwen3-0.6B, Gemma-3-1B and Llama-3.2-3B × two
+contexts), on one GPU:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 make single DATASET=ropes SINGLE_CONTEXT=both RUN=7 SEED=2131195937
+# Select one model/condition instead:
+CUDA_VISIBLE_DEVICES=0 make single DATASET=ropes MODEL=unsloth/gemma-3-1b-it SINGLE_CONTEXT=half RUN=7
+```
+
+Results are separate under
+`results/runs/run-7/single/ropes/<model>/half/` and `.../full/`, including
+per-example predictions, progress logs, metrics, timing and context-mode
+metadata. Without `RUN=`, the root is `results/single/`. `SINGLE_OUT=` overrides
+the model/dataset root; the runner always appends the selected condition.
+`EVAL_N=` limits each condition for a smoke check. Invalid/empty answers count
+as incorrect. Old flat full-context results retain their historical dedicated
+prompt; they are separate from these new matched-prompt evaluations.
 
 Every run is isolated automatically by **dataset + pair + method-specific
 architecture settings**. For example, LCF-X results go to
@@ -457,7 +519,7 @@ python scripts/run_lcfx.py \
 | `MAX_TRAIN` | `--max-train-examples` | (empty = all) | Cap training examples (partial run). |
 | `MAX_STEPS` | `--max-steps` | (empty = full epoch(s)) | Cap optimizer steps. |
 | `EVAL_N` | `--num-examples` | (empty = full val split) | Cap final-eval examples in `lcfx-eval`. |
-| `SEED` | `--seed` | `0` | Random seed. |
+| `SEED` | `--seed` | random | Resolved once per run and recorded; set explicitly for reproducibility. |
 | `CKPT` | `--checkpoint-out` / `--fuser-checkpoint` | `data/checkpoints/lcfx/<dataset>/<sharer>/<receiver>/sp<SPANS>/fuser.pt` | Checkpoint path (train writes it, eval reads it). |
 
 ## Run EIYW (our method)
@@ -547,7 +609,7 @@ python scripts/run_eiyw.py --dataset data/tasks/hotpotqa_bridge_val.jsonl \
 | `MAX_TRAIN` | `--max-train-examples` | (empty = all) | Cap training examples (partial run). |
 | `MAX_STEPS` | `--max-steps` | (empty = full epoch(s)) | Cap optimizer steps. |
 | `EVAL_N` | `--num-examples` | (empty = full val split) | Cap final-eval examples in `eiyw-eval`. |
-| `SEED` | `--seed` | `0` | Random seed. |
+| `SEED` | `--seed` | random | Resolved once per run and recorded; set explicitly for reproducibility. |
 | `EIYW_CKPT` | `--checkpoint-out` / `--translator-checkpoint` | `data/checkpoints/eiyw/<dataset>/<sharer>/<receiver>/sp<SPANS>_dm<EIYW_DMODEL>_k<EIYW_QPL>/translator.pt` | Checkpoint path (train writes it, eval reads it). |
 
 ## Run KVTok (baseline)
@@ -615,7 +677,7 @@ python scripts/run_kvtok.py --dataset data/tasks/hotpotqa_bridge_val.jsonl \
 | `MAX_TRAIN` | `--max-train-examples` | (empty = all) | Cap training examples (partial run). |
 | `MAX_STEPS` | `--max-steps` | (empty = full epoch(s)) | Cap optimizer steps. |
 | `EVAL_N` | `--num-examples` | (empty = full val split) | Cap final-eval examples in `kvtok-eval`. |
-| `SEED` | `--seed` | `0` | Random seed. |
+| `SEED` | `--seed` | random | Resolved once per run and recorded; set explicitly for reproducibility. |
 | `KVTOK_CKPT` | `--checkpoint-out` / `--translator-checkpoint` | `data/checkpoints/kvtok/<dataset>/<sharer>/<receiver>/sp<SPANS>_tok<KVTOK_TOKENS>_dm<KVTOK_DMODEL>_h<KVTOK_HEADS>/translator.pt` | Checkpoint path (train writes it, eval reads it). |
 
 ## Run XKV
@@ -750,7 +812,26 @@ make visual DATASET=hotpotqa_bridge ITEM=params       # trainable-parameter grid
 make visual DATASET=hotpotqa_bridge ITEM=latency      # average per-example latency grid
 make visual-all DATASET=hotpotqa_bridge               # all three views, including 8B (4x4)
 make visual ITEM=datasets                              # dataset overview (DATASET= ignored)
+make visual DATASET=hotpotqa_bridge RUNS=1:5           # mean across runs 1..5
+make visual DATASET=hotpotqa_bridge RUNS=0:5           # include existing unscoped results as run 0
+make visual DATASET=hotpotqa_bridge RANGE='[1,3,5]'    # RANGE alias; selected runs only
+make compare                                             # pairwise method differences across all datasets
+make compare RUNS=1:5                                    # compare selected-run means
 ```
+
+`make compare` writes three rows (`xkv-lcfx`, `xkv-t2t`, and `lcfx-t2t`)
+with one column per dataset, preceded by an XKV/LCF-X/T2T method-summary table.
+Each method summary reports `mean±sample SD` across run-level primary 3×3
+Sharer/Receiver-grid averages. The difference table reports the difference
+between method means and the sample SD of same-seed per-run differences.
+Free-form datasets show `EM/F1` (or `ΔEM/ΔF1`) in percentage points;
+qasc and strategyqa show `Δaccuracy`. With `RUNS=`, available model-pair cells
+are averaged within each run and those run-level averages are summarized for
+each method. Incomplete coverage is marked per method as
+`n=available results/expected results`; a difference is blank only when one
+method has no available result. The output defaults to
+`results/comparison/compare.md`, or
+`results/comparison/runs-<selected ids>/compare.md` for selected runs.
 
 `make visual` remains the primary-model 3×3 view. `make visual-all` supports
 the same `DATASET=`, `ITEM=`, `MODELS=`, and `OUT=` options, but always appends
@@ -777,7 +858,15 @@ the opt-in 8B model.
 
 Any method/checkpoint/result that hasn't been run yet is left blank rather
 than erroring, so you can call `make visual` at any point mid-sweep. Tables
-use the active LCF-X `SPANS` and XKV shape settings. XKV uses the exact active
+aggregating `RUNS=` keep the single-run table format but replace each result
+with the mean across the selected runs. The companion table reports
+completed/requested coverage and lists missing run ids.
+Aggregation refuses to combine completed results whose `run_metadata.json`
+configurations differ. Parameter reports verify that selected repetitions have
+the same parameter count rather than computing a meaningless deviation.
+Aggregated reports default to
+`results/comparison/runs-<selected ids>/<dataset>...`.
+Tables use the active LCF-X `SPANS` and XKV shape settings. XKV uses the exact active
 `XKV_DMODEL`, `XKV_BLOCKS`, `XKV_HEADS`,
 `XKV_POOL_K`/`XKV_POOL_SLOTS`, and `XKV_DROPOUT` configuration, which is also embedded in
 the table caption. The
