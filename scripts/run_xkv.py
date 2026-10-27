@@ -14,6 +14,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from scripts._defaults import DEFAULT_RECEIVER, DEFAULT_SHARER, resolve_seed  # noqa: E402
 from scripts._hf_cache import configure_hf_cache  # noqa: E402
+from scripts._transfer import (  # noqa: E402
+    add_transfer_arguments, transfer_metadata, validate_checkpoint_history,
+)
 
 configure_hf_cache()
 
@@ -102,7 +105,12 @@ def main() -> None:
         "--scoring", choices=["auto", "choice", "free_form"], default="auto"
     )
     parser.add_argument("--print-every", type=int, default=10)
+    add_transfer_arguments(parser)
     args = parser.parse_args()
+    try:
+        transfer_info = transfer_metadata(args, args.translator_checkpoint)
+    except ValueError as exc:
+        parser.error(str(exc))
     args.seed = resolve_seed(args.seed)
 
     examples = _load_examples(args.dataset, args.num_examples)
@@ -154,6 +162,7 @@ def main() -> None:
             zero_init=True,
         ).to(pair.device)
         print("No checkpoint: zero-init XKV (Receiver-only equivalence)")
+    validate_checkpoint_history(translator, transfer_info)
     translator.eval()
     run_seed = int(getattr(translator, "training_seed", args.seed))
     print(f"Run id: {args.run_id or '(unscoped)'} | seed: {run_seed}")
@@ -169,6 +178,7 @@ def main() -> None:
             "sharer_model": args.sharer_model,
             "receiver_model": args.receiver_model,
             "num_examples": len(examples),
+            **transfer_info,
         },
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -200,10 +210,13 @@ def main() -> None:
         method=args.variant,
         metadata={
             "method": args.variant,
+            "run_id": args.run_id,
+            "seed": run_seed,
             "dataset": str(args.dataset),
             "sharer_model": args.sharer_model,
             "receiver_model": args.receiver_model,
             "num_examples": len(examples),
+            "max_new_tokens": args.max_new_tokens,
             "d_model": translator.d_model,
             "d_model_spec": args.d_model,
             "num_blocks": translator.num_blocks,
@@ -221,6 +234,7 @@ def main() -> None:
             else None,
             "scoring": "free_form" if free_form else "multiple_choice",
             "dtype": args.dtype,
+            **transfer_info,
         },
     )
     print("\n=== metrics ===")

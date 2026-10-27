@@ -29,6 +29,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from scripts._defaults import DEFAULT_RECEIVER, DEFAULT_SHARER, resolve_seed  # noqa: E402
 from scripts._hf_cache import configure_hf_cache  # noqa: E402
+from scripts._transfer import (  # noqa: E402
+    add_warm_start_arguments, stamp_training_history, validate_warm_start_paths,
+)
 
 configure_hf_cache()
 
@@ -105,7 +108,12 @@ def main() -> None:
     )
     parser.add_argument("--device", default=None)
     parser.add_argument("--dtype", default="auto")
+    add_warm_start_arguments(parser)
     args = parser.parse_args()
+    try:
+        validate_warm_start_paths(args)
+    except ValueError as exc:
+        parser.error(str(exc))
     args.seed = resolve_seed(args.seed)
     print(f"Training seed: {args.seed}")
 
@@ -113,7 +121,7 @@ def main() -> None:
     import random
     import torch
 
-    from methods.lcfx import LCFXFuser, load_lcfx_pair, train_fuser
+    from methods.lcfx import LCFXFuser, load_fuser, load_lcfx_pair, train_fuser
 
     def _read_jsonl(path: Path) -> list:
         rows = []
@@ -148,13 +156,18 @@ def main() -> None:
     # Seed before constructing trainable modules. train_fuser seeds again before
     # stochastic training operations such as dropout and Gumbel gates.
     torch.manual_seed(args.seed)
-    fuser = LCFXFuser.from_specs(
-        pair.sharer_spec,
-        pair.receiver_spec,
-        bottleneck_dim=args.bottleneck_dim,
-        dropout=args.dropout,
-        zero_init=False,
-    ).to(pair.device)
+    if args.initial_checkpoint is not None:
+        fuser = load_fuser(
+            str(args.initial_checkpoint), pair, device=pair.device,
+            bottleneck_dim=args.bottleneck_dim, dropout=args.dropout,
+        ).to(pair.device)
+        print(f"Continuing fuser weights from {args.initial_checkpoint}")
+    else:
+        fuser = LCFXFuser.from_specs(
+            pair.sharer_spec, pair.receiver_spec,
+            bottleneck_dim=args.bottleneck_dim, dropout=args.dropout, zero_init=False,
+        ).to(pair.device)
+    stamp_training_history(fuser, args)
 
     train_fuser(
         pair,

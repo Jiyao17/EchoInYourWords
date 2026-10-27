@@ -58,6 +58,10 @@ help:
 	@echo "  make xkv-hetero    XKV on a heterogeneous pair (Llama -> Qwen preset)"
 	@echo "  make t2t           T2T baseline: EM/F1 on val (no training)"
 	@echo "  make single        Receiver baselines: SINGLE_CONTEXT=both (default), half, or full; MODEL=/DATASET= select axes"
+	@echo "  make transfer      Evaluate a source checkpoint: METHOD=xkv (default)/lcfx TRAIN_DATASET= INFER_DATASET= SOURCE_RUN="
+	@echo "  make transfer-sequence  HotpotQA -> MuSiQue -> StrategyQA -> QASC; evaluate ROPES each stage, stop when EM beats Receiver half context"
+	@echo "    TRANSFER_TARGETS=ropes TRANSFER_STOP_METRIC=em TRANSFER_STOP_ON_GAIN=1 (defaults); TRANSFER_STEP= limits stages"
+	@echo "  make transfer-sequence-eval  Evaluate a saved TRANSFER_STEP= on TRANSFER_TARGETS=ropes (default)"
 	@echo "  make exp           Sweep LCF-X/XKV/T2T over base model pairs, split by METHOD= then DATASET= (each: given=one, unset=all)"
 	@echo "  make repeat        Repeat REPEAT_TARGET=exp for RUNS=1:5 (also accepts RANGE=); each run gets an isolated tree and fresh seed"
 	@echo "  make exp-ablation  Sweep the three ablations; reuse frozen Full XKV v11 results"
@@ -412,6 +416,8 @@ prepare: data model
 lcfx-train: data
 	$(OFFLINE) $(PY) scripts/train_lcfx_fuser.py \
 	  --train-data $(TRAIN) \
+	  $(if $(strip $(INIT_CKPT)),--initial-checkpoint "$(INIT_CKPT)",) \
+	  --training-datasets $(or $(strip $(TRAINING_DATASETS)),$(DATASET)) \
 	  --sharer-model $(LCFX_SHARER) --receiver-model $(LCFX_RECEIVER) \
 	  --bottleneck-dim $(BOTTLENECK) --dropout $(LCFX_DROPOUT) --num-spans $(SPANS) --span-scheme $(SPAN_SCHEME) \
 	  --lr $(LR) --epochs $(EPOCHS) --batch-size $(BATCH_SIZE) --grad-accum $(GRAD_ACCUM) \
@@ -559,6 +565,8 @@ xkv-train: GRAD_ACCUM = $(if $(filter ropes,$(DATASET)),8,$(or $(GRAD_ACCUM_$(DA
 xkv-train: data
 	$(OFFLINE) $(PY) scripts/train_xkv.py \
 	  --train-data $(TRAIN) \
+	  $(if $(strip $(INIT_CKPT)),--initial-checkpoint "$(INIT_CKPT)",) \
+	  --training-datasets $(or $(strip $(TRAINING_DATASETS)),$(DATASET)) \
 	  --sharer-model $(XKV_SHARER) --receiver-model $(XKV_RECEIVER) \
 	  --variant $(XKV_VARIANT) --d-model $(XKV_DMODEL) --num-blocks $(XKV_BLOCKS) --num-heads $(XKV_HEADS) --dropout $(XKV_DROPOUT) --pool-k $(XKV_POOL_SLOTS) --pool-spans $(XKV_POOL_SPANS) \
 	  --lr $(LR) --epochs $(EPOCHS) --batch-size $(BATCH_SIZE) --grad-accum $(GRAD_ACCUM) --warmup $(WARMUP) \
@@ -603,6 +611,89 @@ t2t-eval t2t: data
 	  $(if $(EVAL_N),--num-examples $(EVAL_N),) \
 	  $(RUN_METADATA_ARGS) \
 	  --output-dir $(T2T_OUT)
+
+# ===== Transfer (source-trained checkpoint -> target validation, no training) ==
+# SOURCE_RUN selects checkpoint weights independently of the output RUN.
+# Architecture/model knobs must match source training, just as for *-eval.
+# Explicit TRANSFER_CKPT/TRANSFER_OUT support nonstandard artifact locations.
+TRAIN_DATASET ?= hotpotqa_bridge
+INFER_DATASET ?= ropes
+SOURCE_RUN ?= $(or $(strip $(RUN)),0)
+TRANSFER_METHOD = $(or $(strip $(METHOD)),xkv)
+TRANSFER_CHECKPOINTS_ROOT ?= data/checkpoints$(if $(filter-out 0,$(strip $(SOURCE_RUN))),/runs/run-$(SOURCE_RUN),)
+TRANSFER_SOURCE_SLUG = $(patsubst $(DATASET)/%,$(TRAIN_DATASET)/%,$(if $(filter xkv,$(TRANSFER_METHOD)),$(XKV_SLUG),$(LCFX_SLUG)))
+TRANSFER_CKPT ?= $(TRANSFER_CHECKPOINTS_ROOT)/$(if $(filter xkv,$(TRANSFER_METHOD)),$(XKV_VARIANT),lcfx)/$(TRANSFER_SOURCE_SLUG)/$(if $(filter xkv,$(TRANSFER_METHOD)),translator.pt,fuser.pt)
+TRANSFER_OUT ?= $(RESULTS_ROOT)/transfer/$(TRAIN_DATASET)_to_$(INFER_DATASET)/source-run-$(SOURCE_RUN)/$(if $(filter xkv,$(TRANSFER_METHOD)),$(XKV_VARIANT),lcfx)/$(patsubst $(TRAIN_DATASET)/%,%,$(TRANSFER_SOURCE_SLUG))
+TRANSFER_METADATA_ARGS = --training-dataset $(TRAIN_DATASET) --inference-dataset $(INFER_DATASET) --source-run-id $(SOURCE_RUN)
+TRANSFER_METADATA_ARGS += $(if $(strip $(TRAINING_DATASETS)),--training-datasets $(TRAINING_DATASETS),)
+
+.PHONY: transfer _transfer-check _transfer-half
+transfer: _transfer-check $(TASKS)/$(INFER_DATASET)_val.jsonl
+ifeq ($(TRANSFER_METHOD),xkv)
+	$(OFFLINE) $(PY) scripts/run_xkv.py --dataset $(TASKS)/$(INFER_DATASET)_val.jsonl \
+	  --sharer-model $(XKV_SHARER) --receiver-model $(XKV_RECEIVER) \
+	  --variant $(XKV_VARIANT) --d-model $(XKV_DMODEL) --num-blocks $(XKV_BLOCKS) --num-heads $(XKV_HEADS) --dropout $(XKV_DROPOUT) --pool-k $(XKV_POOL_SLOTS) --pool-spans $(XKV_POOL_SPANS) \
+	  --max-new-tokens $(RECV_MAX) $(if $(EVAL_N),--num-examples $(EVAL_N),) \
+	  $(RUN_METADATA_ARGS) $(TRANSFER_METADATA_ARGS) \
+	  --translator-checkpoint "$(TRANSFER_CKPT)" --output-dir "$(TRANSFER_OUT)"
+else ifeq ($(TRANSFER_METHOD),lcfx)
+	$(OFFLINE) $(PY) scripts/run_lcfx.py --dataset $(TASKS)/$(INFER_DATASET)_val.jsonl \
+	  --sharer-model $(LCFX_SHARER) --receiver-model $(LCFX_RECEIVER) \
+	  --bottleneck-dim $(BOTTLENECK) --dropout $(LCFX_DROPOUT) --num-spans $(SPANS) --span-scheme $(SPAN_SCHEME) \
+	  --max-new-tokens $(RECV_MAX) $(if $(EVAL_N),--num-examples $(EVAL_N),) \
+	  $(RUN_METADATA_ARGS) $(TRANSFER_METADATA_ARGS) \
+	  --fuser-checkpoint "$(TRANSFER_CKPT)" --output-dir "$(TRANSFER_OUT)"
+endif
+
+_transfer-check:
+	@test "$(TRANSFER_METHOD)" = xkv -o "$(TRANSFER_METHOD)" = lcfx || { echo "transfer supports METHOD=xkv or METHOD=lcfx" >&2; exit 2; }
+	@test -n "$(strip $(TRAIN_DATASET))" -a -n "$(strip $(INFER_DATASET))" || { echo "TRAIN_DATASET and INFER_DATASET must be nonempty" >&2; exit 2; }
+	@test -f "$(TRANSFER_CKPT)" || { echo "Missing source checkpoint: $(TRANSFER_CKPT). Check SOURCE_RUN, pair and architecture settings, or set TRANSFER_CKPT." >&2; exit 2; }
+
+# Inference-only half-context baseline for sequence targets. Avoid `single`'s
+# data prerequisite, which prepares both train and val even during inference.
+_transfer-half: $(TASKS)/$(INFER_DATASET)_val.jsonl
+	$(OFFLINE) $(PY) scripts/run_single_model.py --dataset $(TASKS)/$(INFER_DATASET)_val.jsonl \
+	  --model $(MODEL) --context-mode half --max-new-tokens $(RECV_MAX) \
+	  $(if $(EVAL_N),--num-examples $(EVAL_N),) $(RUN_METADATA_ARGS) --output-dir "$(SINGLE_OUT)"
+
+# Sequential transfer: stage 1 references existing weights; later stages learn
+# only the next dataset. By default, evaluate one fixed target and stop on gain.
+TRANSFER_DATASETS ?= hotpotqa_bridge musique strategyqa qasc
+TRANSFER_TARGETS ?= ropes
+TRANSFER_STOP_ON_GAIN ?= 1
+TRANSFER_STOP_METRIC ?= em
+TRANSFER_STEP ?=
+SEQUENCE_DRY_RUN ?= 0
+SEQUENCE_SOURCE_DATASET = $(firstword $(TRANSFER_DATASETS))
+SEQUENCE_SOURCE_SLUG = $(patsubst $(DATASET)/%,$(SEQUENCE_SOURCE_DATASET)/%,$(if $(filter xkv,$(TRANSFER_METHOD)),$(XKV_SLUG),$(LCFX_SLUG)))
+SEQUENCE_METHOD = $(if $(filter xkv,$(TRANSFER_METHOD)),$(XKV_VARIANT),lcfx)
+SEQUENCE_PAIR_SHAPE = $(patsubst $(SEQUENCE_SOURCE_DATASET)/%,%,$(SEQUENCE_SOURCE_SLUG))
+SEQUENCE_EMPTY :=
+SEQUENCE_SPACE := $(SEQUENCE_EMPTY) $(SEQUENCE_EMPTY)
+SEQUENCE_NAME = $(subst $(SEQUENCE_SPACE),+,$(strip $(TRANSFER_DATASETS)))
+SEQUENCE_SOURCE_CKPT ?= $(TRANSFER_CHECKPOINTS_ROOT)/$(SEQUENCE_METHOD)/$(SEQUENCE_SOURCE_SLUG)/$(if $(filter xkv,$(TRANSFER_METHOD)),translator.pt,fuser.pt)
+SEQUENCE_CKPT_ROOT ?= $(CHECKPOINTS_ROOT)/transfer-sequence/$(SEQUENCE_NAME)/source-run-$(SOURCE_RUN)/$(SEQUENCE_METHOD)/$(SEQUENCE_PAIR_SHAPE)
+SEQUENCE_OUT ?= $(RESULTS_ROOT)/transfer-sequence/$(SEQUENCE_NAME)/source-run-$(SOURCE_RUN)/$(SEQUENCE_METHOD)/$(SEQUENCE_PAIR_SHAPE)
+# Resolve architecture once; keep per-dataset training defaults unless explicitly
+# overridden. Children receive argv entries, with no shell command construction.
+SEQUENCE_ARCH_VARS = $(if $(filter xkv,$(TRANSFER_METHOD)),XKV_VARIANT XKV_DMODEL XKV_BLOCKS XKV_HEADS XKV_DROPOUT XKV_POOL_SLOTS XKV_POOL_SPANS,BOTTLENECK LCFX_DROPOUT SPANS SPAN_SCHEME)
+SEQUENCE_OVERRIDE_VARS = LR EPOCHS BATCH_SIZE GRAD_ACCUM WARMUP VAL_FRAC EVAL_MAX EVAL_EM LOG_EVERY EVAL_EVERY SAVE_EVERY MAX_TRAIN MAX_STEPS
+SEQUENCE_MAKE_ARGS = $(foreach v,PY OFFLINE TASKS DATA_SEED $(SEQUENCE_ARCH_VARS),--make-var "$(v)=$($(v))") $(foreach v,$(SEQUENCE_OVERRIDE_VARS),$(if $(filter command line environment,$(origin $(v))),--make-var "$(v)=$($(v))",))
+
+.PHONY: transfer-sequence transfer-sequence-eval
+transfer-sequence transfer-sequence-eval:
+	$(PY) scripts/run_transfer_sequence.py \
+	  --method $(TRANSFER_METHOD) --datasets $(TRANSFER_DATASETS) \
+	  --targets $(TRANSFER_TARGETS) \
+	  --source-checkpoint "$(SEQUENCE_SOURCE_CKPT)" --source-run-id $(SOURCE_RUN) \
+	  --checkpoint-root "$(SEQUENCE_CKPT_ROOT)" --output-root "$(SEQUENCE_OUT)" \
+	  --sharer-model $(if $(filter xkv,$(TRANSFER_METHOD)),$(XKV_SHARER),$(LCFX_SHARER)) \
+	  --receiver-model $(if $(filter xkv,$(TRANSFER_METHOD)),$(XKV_RECEIVER),$(LCFX_RECEIVER)) \
+	  $(RUN_METADATA_ARGS) --max-new-tokens $(RECV_MAX) $(if $(EVAL_N),--num-examples $(EVAL_N),) \
+	  $(if $(TRANSFER_STEP),--step $(TRANSFER_STEP),) $(if $(filter transfer-sequence-eval,$@),--evaluate-only,) \
+	  $(if $(filter transfer-sequence,$@),$(if $(filter 1,$(TRANSFER_STOP_ON_GAIN)),--stop-on-gain,),) --stop-metric $(TRANSFER_STOP_METRIC) \
+	  $(if $(filter 1,$(SEQUENCE_DRY_RUN)),--dry-run,) $(SEQUENCE_MAKE_ARGS)
 
 # ===== Single-model Receiver baselines (no communication) ======================
 # The same Receiver prompt/greedy decoder sees its original private context

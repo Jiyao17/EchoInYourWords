@@ -76,6 +76,55 @@ The produced JSONL is reused by every run below for a fair comparison.
 
 ## Available tests / experiments
 
+For cross-dataset transfer with an existing XKV or LCF-X checkpoint:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 make transfer METHOD=xkv \
+  TRAIN_DATASET=hotpotqa_bridge INFER_DATASET=ropes \
+  SHARER=unsloth/gemma-3-1b-it RECEIVER=unsloth/gemma-3-1b-it \
+  SOURCE_RUN=5 RUN=7 SEED=2131195937
+```
+
+`METHOD=lcfx` evaluates the corresponding LCF-X checkpoint. This runs only
+target validation inference with source-trained weights. `SOURCE_RUN` defaults
+to `RUN` (or `0` for the historical tree). `TRANSFER_CKPT=` and `TRANSFER_OUT=`
+override the resolved paths; `EVAL_N=` caps evaluation. Keep model and
+architecture settings equal to source training. Outputs are isolated under
+`results[/runs/run-<RUN>]/transfer/<TRAIN_DATASET>_to_<INFER_DATASET>/source-run-<SOURCE_RUN>/<method>/<pair>/<shape>/`;
+run metadata and the progress log record transfer provenance. See the
+[main README](../README.md) for more details.
+
+For **sequential transfer**, `make transfer-sequence` defaults to four ordered
+sources, `TRANSFER_DATASETS='hotpotqa_bridge musique strategyqa qasc'`, and
+one fixed target, `TRANSFER_TARGETS=ropes`. Stage 1 evaluates the existing
+HotpotQA checkpoint selected by `SOURCE_RUN`. If ROPES EM does not beat the
+matched half-context Receiver, each later stage warm-starts from the preceding
+checkpoint and trains only the next source, saving separate weights. The loop
+stops at the first strict EM gain or after all four source stages. Ties continue.
+The optimizer and warmup restart each stage.
+
+`TRANSFER_STOP_METRIC=f1` changes the stopping metric (default `em`); F1 and EM
+are both reported. `TRANSFER_STEP=1`, then `2`, etc. can limit progress manually.
+The target must be excluded from the entire source plan. Use
+`make transfer-sequence-eval TRANSFER_STEP=2 TRANSFER_TARGETS=ropes ...` to
+evaluate an existing stage without training. Keep the planned dataset list,
+explicit `SEED`, model pair and training/architecture settings identical across
+calls. `SEQUENCE_DRY_RUN=1` previews the commands without touching artifacts.
+Both `METHOD=xkv` and `METHOD=lcfx` work. See the
+[main README examples](../README.md) for complete commands and path overrides.
+Set `TRANSFER_STOP_ON_GAIN=0` to disable early stopping and optionally evaluate
+multiple untrained datasets selected by `TRANSFER_TARGETS`.
+
+The runner reuses completed stages and matched half-context Receiver baselines,
+rejects trained targets in explicit evaluation-only requests, and checks
+checkpoint hashes/history. Results contain per-target `comparison.json` and
+across-stage `summary.md`/`summary.json`, with EM/F1 or accuracy gains in percentage
+points. `stopping_result-ropes-em.json` records a positive gain, source exhaustion,
+or a manual step limit, together with the selected checkpoint and scores.
+Positive gains are exploratory because the target determines when to stop;
+confirm selected results on untouched data and report uncertainty/repetitions
+before claiming independently validated transfer.
+
 All runs below use the same dataset file and the same EM/F1 scoring (auto-
 selected because HotpotQA answers are free-form). The communication methods (T2T,
 LCF-X, EIYW) are compared against the single-model inference baseline.

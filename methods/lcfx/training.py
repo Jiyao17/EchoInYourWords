@@ -439,6 +439,8 @@ def save_fuser(
     }
     if hasattr(fuser, "training_seed"):
         payload["training_seed"] = fuser.training_seed
+    if hasattr(fuser, "training_history"):
+        payload["training_history"] = fuser.training_history
     torch.save(payload, path)
 
 
@@ -512,6 +514,8 @@ def load_fuser(
     fuser.load_state_dict(ckpt["state_dict"])
     if "training_seed" in ckpt:
         fuser.training_seed = int(ckpt["training_seed"])
+    if "training_history" in ckpt:
+        fuser.training_history = ckpt["training_history"]
     return fuser
 
 
@@ -613,6 +617,7 @@ def train_fuser(
             "dropout": fuser.dropout,
             "eval_em_examples": eval_em_examples,
             "checkpoint_path": checkpoint_path,
+            "training_history": getattr(fuser, "training_history", None),
             "total_steps": total_steps,
         },
     )

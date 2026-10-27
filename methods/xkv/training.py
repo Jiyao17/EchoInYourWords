@@ -339,6 +339,8 @@ def save_translator(
     }
     if hasattr(translator, "training_seed"):
         checkpoint["training_seed"] = translator.training_seed
+    if hasattr(translator, "training_history"):
+        checkpoint["training_history"] = translator.training_history
     torch.save(checkpoint, path)
 
 
@@ -424,6 +426,8 @@ def load_translator(
     translator.load_state_dict(checkpoint["state_dict"])
     if "training_seed" in checkpoint:
         translator.training_seed = checkpoint["training_seed"]
+    if "training_history" in checkpoint:
+        translator.training_history = checkpoint["training_history"]
     return translator
 
 
@@ -497,6 +501,7 @@ def train_translator(
             "receiver_pooling": translator.receiver_pooling,
             "pool_spans": translator.pool_spans,
             "checkpoint_path": checkpoint_path,
+            "training_history": getattr(translator, "training_history", None),
             "total_steps": total_steps,
         },
     )

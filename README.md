@@ -199,6 +199,120 @@ the model/dataset root; the runner always appends the selected condition.
 as incorrect. Old flat full-context results retain their historical dedicated
 prompt; they are separate from these new matched-prompt evaluations.
 
+To evaluate an existing translator on another dataset, use `make transfer`.
+`TRAIN_DATASET` selects the source checkpoint's dataset; `INFER_DATASET` selects
+the target validation split. This target performs inference only, without
+training or target fine-tuning. For the existing run-5 **Gemma-3-1B → Gemma-3-1B**
+HotpotQA checkpoints, evaluated on all 1,688 ROPES validation examples:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 make transfer METHOD=xkv \
+  TRAIN_DATASET=hotpotqa_bridge INFER_DATASET=ropes \
+  SHARER=unsloth/gemma-3-1b-it RECEIVER=unsloth/gemma-3-1b-it \
+  SOURCE_RUN=5 RUN=7 SEED=2131195937
+# Repeat with METHOD=lcfx for the matched transfer baseline.
+```
+
+`METHOD` defaults to `xkv` and also supports `lcfx`. `SOURCE_RUN` selects the
+checkpoint repetition independently of the output `RUN`; it defaults to `RUN`
+(or `0` for historical unscoped checkpoints). Model and architecture settings
+must match source training. `TRANSFER_CKPT=` overrides the checkpoint path;
+`TRANSFER_OUT=` overrides the output folder. A missing checkpoint stops the
+command before evaluation. Only the target validation file is prepared if
+absent; source data and target training data are not needed.
+
+Results go to
+`results/runs/run-7/transfer/hotpotqa_bridge_to_ropes/source-run-5/<method>/<sharer>/<receiver>/<shape>/`.
+Run metadata and the progress log identify the source dataset, target dataset
+and source repetition alongside the checkpoint path in run metadata. Use
+`EVAL_N=20` for a short check, or omit it for the full split; `RECV_MAX=` controls
+the answer budget (default 64 tokens). To test another direction, change
+`TRAIN_DATASET` and `INFER_DATASET` and select the appropriate `SOURCE_RUN`.
+
+Sequential transfer starts from that existing checkpoint and continues its
+weights on one new dataset per stage. `make transfer-sequence` supports XKV and
+LCF-X; stage 1 references the original checkpoint without training. Stages 2+
+each save a separate checkpoint after learning **only the next dataset**, with
+no replay of earlier datasets. The optimizer and LR warmup restart each stage;
+this continues learned weights rather than resuming optimizer state.
+
+The default experiment fixes **ROPES as the only target** and uses four ordered
+sources: **HotpotQA → MuSiQue → StrategyQA → QASC**. 2Wiki is excluded.
+Step 1 evaluates the saved HotpotQA checkpoint on ROPES. If its EM is not
+strictly above the matched Receiver-only half-context EM, step 2 continues those
+weights on MuSiQue and evaluates ROPES again. This repeats with StrategyQA and QASC,
+stopping immediately at the first EM gain or after all four source stages.
+An EM tie continues, even if F1 improves. F1 is always reported; use
+`TRANSFER_STOP_METRIC=f1` to choose it as the stopping metric instead.
+
+For the existing run-5 HotpotQA Gemma pair:
+
+```bash
+# Preview every operation without creating files or loading models.
+make transfer-sequence METHOD=xkv SOURCE_RUN=5 RUN=7 SEED=2131195937 \
+  SHARER=unsloth/gemma-3-1b-it RECEIVER=unsloth/gemma-3-1b-it \
+  TRANSFER_DATASETS='hotpotqa_bridge musique strategyqa qasc' \
+  TRANSFER_TARGETS=ropes SEQUENCE_DRY_RUN=1
+
+# Run until ROPES EM beats half context, or all four source stages are exhausted.
+CUDA_VISIBLE_DEVICES=0 make transfer-sequence METHOD=xkv SOURCE_RUN=5 RUN=7 SEED=2131195937 \
+  SHARER=unsloth/gemma-3-1b-it RECEIVER=unsloth/gemma-3-1b-it \
+  TRANSFER_DATASETS='hotpotqa_bridge musique strategyqa qasc' \
+  TRANSFER_TARGETS=ropes TRANSFER_STOP_ON_GAIN=1 TRANSFER_STOP_METRIC=em
+
+# Evaluate a completed stage on ROPES without training (if step 2 was reached).
+CUDA_VISIBLE_DEVICES=0 make transfer-sequence-eval METHOD=xkv SOURCE_RUN=5 RUN=7 SEED=2131195937 \
+  SHARER=unsloth/gemma-3-1b-it RECEIVER=unsloth/gemma-3-1b-it \
+  TRANSFER_DATASETS='hotpotqa_bridge musique strategyqa qasc' \
+  TRANSFER_STEP=2 TRANSFER_TARGETS=ropes
+```
+
+`TRANSFER_STEP=1` limits execution to the initial checkpoint; increase to `2`,
+`3`, or `4` to advance manually. Keep the same explicit `SEED`, source plan,
+model pair, architecture and training settings when continuing. Completed stages
+and evaluations are reused, and a previous winning stage stops subsequent runs
+before any later training. Dataset order can affect results and sequential
+training can forget earlier datasets.
+
+Stopping mode requires exactly one target, excluded from the **entire** source
+plan. For the more general multi-target experiment without automatic stopping,
+set `TRANSFER_STOP_ON_GAIN=0` and select `TRANSFER_TARGETS` explicitly. Such runs
+evaluate only targets not yet trained at the current stage. Evaluation-only
+requests explicitly naming a trained target fail.
+
+`SEQUENCE_SOURCE_CKPT=` overrides the initial checkpoint. `SEQUENCE_CKPT_ROOT=`
+and `SEQUENCE_OUT=` override the sequence checkpoint/result roots. Defaults
+include the ordered dataset plan, source run, method, model pair and architecture
+under `data/checkpoints[/runs/run-<RUN>]/transfer-sequence/` and
+`results[/runs/run-<RUN>]/transfer-sequence/`. Checkpoint manifests record each
+stage's cumulative history, parent and SHA-256 hash; new checkpoints also embed
+their training history. For historical unstamped source checkpoints, the first
+dataset in `TRANSFER_DATASETS` is the user's declaration of their training data.
+Changed sequence settings or modified checkpoints stop reuse rather than
+silently replacing a completed stage. Use a different root for a new sequence.
+
+Each evaluation runs a matched Receiver-only **half-context** baseline, reused
+across stages for the same target and decoding budget. Target evaluation prepares
+only validation data. Prediction IDs, gold answers, Receiver prompts, model,
+scoring and answer budget must match before comparison. `comparison.json` reports
+EM/F1 or accuracy, gains in percentage points, and paired wins/losses/ties;
+invalid answers count as errors. `summary.md` and `summary.json` collect all
+evaluated stages/targets under `eval-<full-or-N>-tokens-<budget>/`. `EVAL_N=20`
+is useful for smoke checks; partial and full evaluations use separate folders.
+`stopping_result-ropes-em.json` records the stopping policy, selected checkpoint,
+training history and scores, with status `positive_gain`, `sources_exhausted`, or
+`step_limit_reached` (and `continuing` while more stages remain). A small smoke
+evaluation can also stop on a gain; use the full split for the intended experiment.
+
+A reliable improvement over half context on a dataset excluded from translator
+training supports **transfer to that dataset for that model pair**. Searching
+stages or targets until one wins is exploratory: report all comparisons, and
+confirm a selected result on untouched evaluation data with uncertainty estimates
+and repeated seeds before making a stronger claim. Use source-only validation
+for training checkpoint/hyperparameter selection. The stopping result is labeled
+exploratory because ROPES scores determine the selected stage; it does not claim
+independent statistical validation.
+
 Every run is isolated automatically by **dataset + pair + method-specific
 architecture settings**. For example, LCF-X results go to
 `results/lcfx/<dataset>/<sharer>/<receiver>/sp<SPANS>/` and its checkpoint to

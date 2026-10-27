@@ -32,6 +32,9 @@ if str(REPO_ROOT) not in sys.path:
 # Route HF caches under data/hf_cache (before transformers loads).
 from scripts._defaults import DEFAULT_RECEIVER, DEFAULT_SHARER, resolve_seed  # noqa: E402
 from scripts._hf_cache import configure_hf_cache  # noqa: E402
+from scripts._transfer import (  # noqa: E402
+    add_transfer_arguments, transfer_metadata, validate_checkpoint_history,
+)
 
 configure_hf_cache()
 
@@ -120,7 +123,12 @@ def main() -> None:
         "--scoring", choices=["auto", "choice", "free_form"], default="auto"
     )
     parser.add_argument("--print-every", type=int, default=10)
+    add_transfer_arguments(parser)
     args = parser.parse_args()
+    try:
+        transfer_info = transfer_metadata(args, args.fuser_checkpoint)
+    except ValueError as exc:
+        parser.error(str(exc))
     args.seed = resolve_seed(args.seed)
 
     receiver_model = args.receiver_model
@@ -167,6 +175,7 @@ def main() -> None:
             zero_init=True,
         ).to(pair.device)
         print("No checkpoint: using ZERO-INIT fuser (== single-model floor)")
+    validate_checkpoint_history(fuser, transfer_info)
     fuser.eval()  # hard layer gates (g in {0,1}, no Gumbel noise) — paper's inference mode
     run_seed = int(getattr(fuser, "training_seed", args.seed))
     print(f"Run id: {args.run_id or '(unscoped)'} | seed: {run_seed}")
@@ -181,6 +190,7 @@ def main() -> None:
             "sharer_model": args.sharer_model,
             "receiver_model": receiver_model,
             "num_examples": len(examples),
+            **transfer_info,
         },
     )
     t0 = perf_counter()
@@ -228,6 +238,7 @@ def main() -> None:
         ),
         "scoring": "free_form" if free_form else "multiple_choice",
         "dtype": args.dtype,
+        **transfer_info,
     }
     paths = write_run_outputs(results, args.output_dir, metadata=run_metadata)
 

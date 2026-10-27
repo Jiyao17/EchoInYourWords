@@ -14,6 +14,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from scripts._defaults import DEFAULT_RECEIVER, DEFAULT_SHARER, resolve_seed  # noqa: E402
 from scripts._hf_cache import configure_hf_cache  # noqa: E402
+from scripts._transfer import (  # noqa: E402
+    add_warm_start_arguments, stamp_training_history, validate_warm_start_paths,
+)
 
 configure_hf_cache()
 
@@ -90,11 +93,16 @@ def main() -> None:
     )
     parser.add_argument("--device", default=None)
     parser.add_argument("--dtype", default="auto")
+    add_warm_start_arguments(parser)
     args = parser.parse_args()
+    try:
+        validate_warm_start_paths(args)
+    except ValueError as exc:
+        parser.error(str(exc))
     args.seed = resolve_seed(args.seed)
     print(f"Training seed: {args.seed}")
 
-    from methods.xkv import XKVTranslator, load_xkv_pair, train_translator
+    from methods.xkv import XKVTranslator, load_translator, load_xkv_pair, train_translator
 
     rows = _read_jsonl(args.train_data)
     if args.eval_data is not None:
@@ -125,9 +133,7 @@ def main() -> None:
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
-    translator = XKVTranslator.from_specs(
-        pair.sharer_spec,
-        pair.receiver_spec,
+    architecture = dict(
         d_model=args.d_model,
         num_blocks=args.num_blocks,
         num_heads=args.num_heads,
@@ -135,8 +141,17 @@ def main() -> None:
         pool_slots=args.pool_slots,
         variant=args.variant,
         pool_spans=args.pool_spans,
-        zero_init=True,
-    ).to(pair.device)
+    )
+    if args.initial_checkpoint is not None:
+        translator = load_translator(
+            str(args.initial_checkpoint), pair, device=pair.device, **architecture,
+        ).to(pair.device)
+        print(f"Continuing translator weights from {args.initial_checkpoint}")
+    else:
+        translator = XKVTranslator.from_specs(
+            pair.sharer_spec, pair.receiver_spec, zero_init=True, **architecture,
+        ).to(pair.device)
+    stamp_training_history(translator, args)
     train_translator(
         pair,
         translator,
