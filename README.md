@@ -15,6 +15,8 @@ repository for legacy/manual runs but are excluded from experiment sweeps.
 
 ## Setup
 
+- Captured Python/CUDA versions, full package inventory, and instructions for
+  rebuilding on another machine: [environment/README.md](environment/README.md).
 - All commands here (Makefile and scripts) invoke plain `python` — they don't
   reach into any `.venv/bin/python`. **Activate your own Python environment
   first** (e.g. `source .venv/bin/activate`, or your conda/pyenv equivalent) so
